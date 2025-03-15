@@ -513,7 +513,7 @@ class TranscriptionApp:
             genai.configure(api_key=api_key)
             
             # 最適なモデルを選択
-            model_name = self.processor._get_best_available_model(api_key)
+            model_name = self.processor.api_utils.get_best_available_model(api_key)
             model = genai.GenerativeModel(model_name)
             
             # プロンプトに文字起こし結果を埋め込む
@@ -524,10 +524,9 @@ class TranscriptionApp:
                 response = model.generate_content(prompt)
                 result_text = response.text
             except Exception as e:
-                update_status(f"API処理エラー: {str(e)}")
-                # エラー時はデモ結果を使用
-                result_text = self.processor._get_demo_result(prompt_key, base_name, 
-                                                            datetime.datetime.now().strftime("%Y年%m月%d日 %H:%M"))
+                error_msg = f"API処理エラー: {str(e)}"
+                update_status(error_msg)
+                raise Exception(error_msg)
             
             # 出力ファイル名
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
