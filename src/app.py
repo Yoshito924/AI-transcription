@@ -6,9 +6,9 @@ import tkinter as tk
 from tkinter import messagebox
 import threading
 
-from ui import setup_ui
-from config import Config, PromptManager
-from processor import FileProcessor
+from src.ui import setup_ui
+from src.config import Config, PromptManager
+from src.processor import FileProcessor
 
 class TranscriptionApp:
     def __init__(self, root):
@@ -16,7 +16,7 @@ class TranscriptionApp:
         self.root.title("AI文字起こしアプリ")
         
         # アプリケーションのデータディレクトリ
-        self.app_dir = os.path.dirname(os.path.abspath(__file__))
+        self.app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.output_dir = os.path.join(self.app_dir, "output")
         os.makedirs(self.output_dir, exist_ok=True)
         
