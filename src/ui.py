@@ -112,6 +112,14 @@ def setup_ui(app):
     progress = ttk.Progressbar(input_frame, orient=tk.HORIZONTAL, mode='indeterminate')
     progress.pack(fill=tk.X, padx=5, pady=5)
     
+    # ログ出力エリア
+    log_frame = ttk.LabelFrame(left_frame, text="処理ログ", padding=10)
+    log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+    
+    log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=8, width=40)
+    log_text.pack(fill=tk.BOTH, expand=True, pady=5)
+    log_text.config(state=tk.DISABLED)  # 読み取り専用に設定
+    
     # 右側フレーム (履歴とプロンプト編集)
     right_frame = ttk.Frame(main_frame)
     right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
@@ -234,7 +242,8 @@ def setup_ui(app):
         'selected_file_label': selected_file_label,
         'process_var': process_var,
         'process_combo': process_combo,
-        'process_button': process_button
+        'process_button': process_button,
+        'log_text': log_text
     }
     
     # ステータスラベルを先に設定

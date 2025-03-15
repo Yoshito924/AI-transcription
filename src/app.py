@@ -115,8 +115,35 @@ class TranscriptionApp:
         """ステータスラベルを更新（短く保つ）"""
         # ステータスメッセージは短くする（40文字まで）
         if len(message) > 40:
-            message = message[:37] + "..."
-        self.ui_elements['status_label'].config(text=message)
+            status_message = message[:37] + "..."
+        else:
+            status_message = message
+        self.ui_elements['status_label'].config(text=status_message)
+        
+        # ログにも追加
+        self.add_log(message)
+    
+    def add_log(self, message):
+        """ログエリアにメッセージを追加"""
+        if 'log_text' not in self.ui_elements:
+            return
+            
+        # 現在時刻を取得
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        log_message = f"[{timestamp}] {message}\n"
+        
+        # ログテキストエリアを編集可能に設定
+        log_text = self.ui_elements['log_text']
+        log_text.config(state=tk.NORMAL)
+        
+        # メッセージを追加
+        log_text.insert(tk.END, log_message)
+        
+        # 最新の行にスクロール
+        log_text.see(tk.END)
+        
+        # 再び読み取り専用に設定
+        log_text.config(state=tk.DISABLED)
     
     def browse_file(self, event=None):
         """ファイル選択ダイアログを表示"""
