@@ -36,13 +36,17 @@ def setup_ui(app):
     input_frame = ttk.LabelFrame(left_frame, text="ファイル入力", padding=10)
     input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
     
-    # ドラッグ＆ドロップエリア
-    drop_area = tk.Frame(input_frame, bg="#e0e0e0", bd=2, relief=tk.GROOVE)
-    drop_area.pack(fill=tk.BOTH, expand=True, pady=10)
+    # ドラッグ＆ドロップエリア - 高さを固定
+    drop_frame = ttk.Frame(input_frame)
+    drop_frame.pack(fill=tk.X, pady=10)
     
-    drop_label = tk.Label(drop_area, text="音声/動画ファイルをここにドラッグ＆ドロップ\nまたはクリックして選択", 
-                         bg="#e0e0e0", fg="#555555", font=("", 12))
-    drop_label.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+    drop_area = tk.Frame(drop_frame, bg="#e0e0e0", bd=2, relief=tk.GROOVE, height=60)
+    drop_area.pack(fill=tk.X, expand=False)
+    drop_area.pack_propagate(False)  # サイズ固定
+    
+    drop_label = tk.Label(drop_area, text="クリックしてファイルを選択", 
+                         bg="#e0e0e0", fg="#555555", font=("", 11))
+    drop_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
     drop_area.bind("<Button-1>", app.browse_file)
     
     # ドラッグ＆ドロップ機能の設定
@@ -53,18 +57,15 @@ def setup_ui(app):
         # ルートウィンドウをTkinterDnDに対応させる
         if not isinstance(root, TkinterDnD.Tk):
             print("警告: ドラッグ＆ドロップを有効にするには、ルートウィンドウをTkinterDnD.Tkとして作成する必要があります")
-            app.ui_elements['status_label'].config(text="ドラッグ＆ドロップが無効です。Tkinterdnd2をインストールしてください。")
         else:
             # ドラッグ＆ドロップの設定
             drop_area.drop_target_register(DND_FILES)
             drop_area.dnd_bind('<<Drop>>', lambda e: app.load_file(e.data.strip('{}').replace('\\', '/')))
-            drop_label.config(text="音声/動画ファイルをここにドラッグ＆ドロップ\nまたはクリックして選択\n(D&D有効)")
+            drop_label.config(text="クリックまたはドラッグ＆ドロップでファイル選択")
     except ImportError:
         print("警告: tkinterdnd2が見つかりません。ドラッグ＆ドロップ機能は無効です。")
-        app.ui_elements['status_label'].config(text="ドラッグ＆ドロップが無効です。Tkinterdnd2をインストールしてください。")
     except Exception as e:
         print(f"ドラッグ＆ドロップの設定中にエラーが発生しました: {str(e)}")
-        app.ui_elements['status_label'].config(text=f"ドラッグ＆ドロップエラー: {str(e)}")
     
     # 選択されたファイル表示
     file_label = ttk.Label(input_frame, text="ファイル: 未選択")
