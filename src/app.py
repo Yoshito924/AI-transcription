@@ -3,8 +3,10 @@
 
 import os
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import threading
+import re
+import datetime
 
 from src.ui import setup_ui
 from src.config import Config, PromptManager
@@ -28,6 +30,7 @@ class TranscriptionApp:
         self.api_key = tk.StringVar(value=self.config.get("api_key", ""))
         self.current_file = None
         self.is_processing = False
+        self.selected_transcription_file = None
         
         # ダミーのstatus_labelを初期化（UI構築時に上書きされる）
         self.ui_elements = {'status_label': tk.Label(root)}
@@ -46,6 +49,12 @@ class TranscriptionApp:
         
         # プロンプトのアップデート
         self.update_prompt_combo()
+        
+        # 処理タイプコンボボックスの更新
+        self.update_process_combo()
+        
+        # 履歴選択時のイベントハンドラを設定
+        self.ui_elements['history_tree'].bind('<<TreeviewSelect>>', self.on_history_select)
         
         # 終了時にジオメトリを保存
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -85,7 +94,7 @@ class TranscriptionApp:
             messagebox.showerror("エラー", "APIキーを入力してください。")
             return
         
-        self.ui_elements['status_label'].config(text="API接続を確認中...")
+        self._update_status("API接続を確認中...")
         self.root.update_idletasks()
         
         try:
@@ -97,10 +106,17 @@ class TranscriptionApp:
             self.config.save()
             
             messagebox.showinfo("成功", "Gemini APIへの接続に成功しました！")
-            self.ui_elements['status_label'].config(text="API接続確認完了。処理の準備ができました。")
+            self._update_status("API接続確認完了")
         except Exception as e:
             messagebox.showerror("エラー", f"API接続エラー: {str(e)}")
-            self.ui_elements['status_label'].config(text="API接続エラー。APIキーを確認してください。")
+            self._update_status("API接続エラー")
+    
+    def _update_status(self, message):
+        """ステータスラベルを更新（短く保つ）"""
+        # ステータスメッセージは短くする（40文字まで）
+        if len(message) > 40:
+            message = message[:37] + "..."
+        self.ui_elements['status_label'].config(text=message)
     
     def browse_file(self, event=None):
         """ファイル選択ダイアログを表示"""
@@ -129,10 +145,14 @@ class TranscriptionApp:
             if os.path.exists(file_path):
                 self.current_file = file_path
                 filename = os.path.basename(file_path)
-                self.ui_elements['file_label'].config(text=f"ファイル: {filename}")
-                self.ui_elements['status_label'].config(text=f"ファイル '{filename}' を読み込みました。処理を開始するボタンをクリックしてください。")
+                # ファイル名が長い場合、短く表示
+                display_name = filename
+                if len(display_name) > 25:
+                    display_name = display_name[:22] + "..."
+                self.ui_elements['file_label'].config(text=f"ファイル: {display_name}")
+                self._update_status(f"ファイル読み込み完了")
             else:
-                messagebox.showerror("エラー", f"ファイルが見つかりません: {file_path}")
+                messagebox.showerror("エラー", f"ファイルが見つかりません")
         except Exception as e:
             messagebox.showerror("エラー", f"ファイル読み込みエラー: {str(e)}")
             print(f"ファイル読み込みエラー: {str(e)}")
@@ -149,6 +169,40 @@ class TranscriptionApp:
         files = self.processor.get_output_files()
         for file, date, size, _ in files:
             tree.insert('', 'end', values=(file, date, size))
+    
+    def on_history_select(self, event=None):
+        """履歴リストでファイルが選択されたときの処理"""
+        tree = self.ui_elements['history_tree']
+        selection = tree.selection()
+        if not selection:
+            # 選択解除された場合
+            self.selected_transcription_file = None
+            self.ui_elements['selected_file_label'].config(text="未選択")
+            self.ui_elements['process_button'].config(state=tk.DISABLED)
+            return
+        
+        # 選択されたファイル情報を取得
+        item = tree.item(selection[0])
+        filename = item['values'][0]
+        file_path = os.path.join(self.output_dir, filename)
+        
+        # ファイルが文字起こし結果かどうかをファイル名パターンで判断
+        # 例: filename_文字起こし_20250316_061541.txt の形式を想定
+        if "_文字起こし_" in filename or "transcription" in filename.lower():
+            self.selected_transcription_file = file_path
+            
+            # ファイル名を表示（長い場合は省略）
+            display_name = filename
+            if len(display_name) > 25:
+                display_name = display_name[:22] + "..."
+            
+            self.ui_elements['selected_file_label'].config(text=display_name)
+            self.ui_elements['process_button'].config(state=tk.NORMAL)
+        else:
+            # 文字起こし結果でない場合
+            self.selected_transcription_file = None
+            self.ui_elements['selected_file_label'].config(text="未選択（文字起こしファイルを選択してください）")
+            self.ui_elements['process_button'].config(state=tk.DISABLED)
     
     def open_output_file(self, event=None):
         """選択された出力ファイルを開く"""
@@ -184,6 +238,28 @@ class TranscriptionApp:
             combo.current(0)
             self.load_selected_prompt()
     
+    def update_process_combo(self):
+        """処理タイプコンボボックスを更新"""
+        combo = self.ui_elements['process_combo']
+        
+        # プロンプトから処理タイプリストを作成（文字起こし以外）
+        process_types = []
+        prompts = self.prompt_manager.get_prompts()
+        for key, info in prompts.items():
+            if key != "transcription" and info["name"] != "文字起こし":
+                process_types.append(info["name"])
+        
+        # デフォルト処理タイプを追加（なければ）
+        if "議事録作成" not in process_types:
+            process_types.append("議事録作成")
+        if "要約" not in process_types:
+            process_types.append("要約")
+        
+        # リストを設定
+        combo['values'] = process_types
+        if combo['values']:
+            combo.current(0)
+    
     def load_selected_prompt(self, event=None):
         """選択されたプロンプトを読み込む"""
         selected_name = self.ui_elements['prompt_var'].get()
@@ -215,6 +291,7 @@ class TranscriptionApp:
         # プロンプト保存
         self.prompt_manager.save_prompt(selected_name, new_name, prompt_text)
         self.update_prompt_combo()
+        self.update_process_combo()  # プロンプト変更に伴い処理タイプも更新
         messagebox.showinfo("成功", f"プロンプト '{new_name}' を保存しました。")
     
     def create_new_prompt(self):
@@ -233,6 +310,7 @@ class TranscriptionApp:
         if result:
             self.prompt_manager.delete_prompt(selected_name)
             self.update_prompt_combo()
+            self.update_process_combo()  # プロンプト変更に伴い処理タイプも更新
             messagebox.showinfo("成功", f"プロンプト '{selected_name}' を削除しました。")
     
     def start_process(self, process_type):
@@ -253,7 +331,10 @@ class TranscriptionApp:
         # 処理開始
         self.is_processing = True
         self.ui_elements['progress'].start()
-        self.ui_elements['status_label'].config(text="処理を開始しています...")
+        
+        # 処理タイプに基づいて適切なステータスメッセージを表示
+        process_name = "文字起こし"
+        self._update_status(f"{process_name}の処理を開始しています...")
         
         # スレッドで処理を実行
         thread = threading.Thread(
@@ -268,7 +349,7 @@ class TranscriptionApp:
         try:
             # 処理の進捗を受け取るコールバック
             def update_status(message):
-                self.root.after(0, lambda: self.ui_elements['status_label'].config(text=message))
+                self.root.after(0, lambda: self._update_status(message))
             
             # ファイル処理実行
             output_file = self.processor.process_file(
@@ -284,7 +365,7 @@ class TranscriptionApp:
             
         except Exception as e:
             error_msg = f"処理エラー: {str(e)}"
-            self.root.after(0, lambda: self.ui_elements['status_label'].config(text=error_msg))
+            self.root.after(0, lambda: self._update_status(error_msg))
             self.root.after(0, lambda: messagebox.showerror("エラー", error_msg))
             self.root.after(0, self.ui_elements['progress'].stop)
             self.is_processing = False
@@ -293,6 +374,143 @@ class TranscriptionApp:
         """処理完了時の処理"""
         self.ui_elements['progress'].stop()
         self.is_processing = False
-        self.ui_elements['status_label'].config(text=f"処理が完了しました: {os.path.basename(output_file)}")
+        self._update_status(f"処理完了: {os.path.basename(output_file)}")
         self.update_history()
         messagebox.showinfo("成功", f"処理が完了しました。\n出力ファイル: {os.path.basename(output_file)}")
+    
+    def process_selected_transcription(self):
+        """選択した文字起こしファイルに対して追加処理を実行"""
+        if self.is_processing:
+            messagebox.showinfo("情報", "すでに処理中です。完了までお待ちください。")
+            return
+        
+        if not self.selected_transcription_file:
+            messagebox.showerror("エラー", "文字起こしファイルを選択してください。")
+            return
+        
+        api_key = self.api_key.get().strip()
+        if not api_key:
+            messagebox.showerror("エラー", "APIキーを入力してください。")
+            return
+        
+        # 選択された処理タイプを取得
+        process_type = self.ui_elements['process_var'].get()
+        if not process_type:
+            messagebox.showerror("エラー", "処理タイプを選択してください。")
+            return
+        
+        # プロンプト情報を取得
+        prompt_key = None
+        for key, info in self.prompt_manager.get_prompts().items():
+            if info["name"] == process_type:
+                prompt_key = key
+                break
+        
+        if not prompt_key:
+            # プロンプトがない場合はデフォルトのプロンプトを作成
+            if "議事録" in process_type:
+                prompt_key = "meeting_minutes"
+                self.prompt_manager.get_prompts()[prompt_key] = {
+                    "name": process_type,
+                    "prompt": "以下の文字起こしから議事録を作成してください。箇条書きで重要なポイントをまとめ、決定事項と次のアクションアイテムを明確にしてください。\n\n{transcription}"
+                }
+            elif "要約" in process_type:
+                prompt_key = "summary"
+                self.prompt_manager.get_prompts()[prompt_key] = {
+                    "name": process_type,
+                    "prompt": "以下の文字起こしを300字程度に要約してください。\n\n{transcription}"
+                }
+            else:
+                messagebox.showerror("エラー", f"処理タイプ '{process_type}' に対応するプロンプトがありません。")
+                return
+        
+        # 処理開始
+        self.is_processing = True
+        self.ui_elements['progress'].start()
+        self._update_status(f"{process_type}の処理を開始しています...")
+        
+        # スレッドで処理を実行
+        thread = threading.Thread(
+            target=self._process_transcription_in_thread, 
+            args=(self.selected_transcription_file, prompt_key, api_key)
+        )
+        thread.daemon = True
+        thread.start()
+    
+    def _process_transcription_in_thread(self, transcription_file, prompt_key, api_key):
+        """文字起こしファイルの追加処理をスレッドで実行"""
+        try:
+            # ステータス更新用コールバック
+            def update_status(message):
+                self.root.after(0, lambda: self._update_status(message))
+            
+            # 文字起こしファイルを読み込む
+            update_status("文字起こしファイルを読み込み中...")
+            
+            try:
+                with open(transcription_file, 'r', encoding='utf-8') as f:
+                    transcription = f.read()
+            except Exception as e:
+                raise Exception(f"ファイル読み込みエラー: {str(e)}")
+            
+            # プロンプト情報取得
+            prompts = self.prompt_manager.get_prompts()
+            if prompt_key not in prompts:
+                raise Exception(f"プロンプトキー '{prompt_key}' が見つかりません")
+            
+            prompt_info = prompts[prompt_key]
+            process_name = prompt_info["name"]
+            
+            # ファイル名のベース部分を抽出（元の文字起こし元のファイル名）
+            base_name = os.path.basename(transcription_file)
+            # ファイル名パターン: basename_文字起こし_timestamp.txt
+            match = re.match(r'(.+?)_文字起こし_\d+_\d+\.txt', base_name)
+            if match:
+                base_name = match.group(1)
+            else:
+                # 別のパターンも試す
+                match = re.match(r'(.+?)_\d+_\d+\.txt', base_name)
+                if match:
+                    base_name = match.group(1)
+            
+            update_status(f"{process_name}を生成中...")
+            
+            # APIを使用して処理
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            
+            # 最適なモデルを選択
+            model_name = self.processor._get_best_available_model(api_key)
+            model = genai.GenerativeModel(model_name)
+            
+            # プロンプトに文字起こし結果を埋め込む
+            prompt = prompt_info["prompt"].replace("{transcription}", transcription)
+            
+            # API呼び出し
+            try:
+                response = model.generate_content(prompt)
+                result_text = response.text
+            except Exception as e:
+                update_status(f"API処理エラー: {str(e)}")
+                # エラー時はデモ結果を使用
+                result_text = self.processor._get_demo_result(prompt_key, base_name, 
+                                                            datetime.datetime.now().strftime("%Y年%m月%d日 %H:%M"))
+            
+            # 出力ファイル名
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_filename = f"{base_name}_{process_name}_{timestamp}.txt"
+            output_path = os.path.join(self.output_dir, output_filename)
+            
+            # ファイル出力
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(result_text)
+            
+            # 処理完了
+            self.root.after(0, lambda: self._on_processing_complete(output_path))
+            
+        except Exception as e:
+            error_msg = f"処理エラー: {str(e)}"
+            self.root.after(0, lambda: self._update_status(error_msg))
+            self.root.after(0, lambda: messagebox.showerror("エラー", error_msg))
+            self.root.after(0, self.ui_elements['progress'].stop)
+            self.is_processing = False

@@ -36,18 +36,29 @@ def setup_ui(app):
     input_frame = ttk.LabelFrame(left_frame, text="ファイル入力", padding=10)
     input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
     
-    # ドラッグ＆ドロップエリア - 高さを固定
-    drop_frame = ttk.Frame(input_frame)
-    drop_frame.pack(fill=tk.X, pady=10)
+    # ファイル入力エリア
+    file_input_frame = ttk.Frame(input_frame)
+    file_input_frame.pack(fill=tk.X, pady=5)
     
-    drop_area = tk.Frame(drop_frame, bg="#e0e0e0", bd=2, relief=tk.GROOVE, height=60)
+    # ドラッグ＆ドロップエリア（高さ固定）と選択ボタン
+    drop_frame = ttk.Frame(input_frame)
+    drop_frame.pack(fill=tk.X, pady=5)
+    
+    drop_area = tk.Frame(drop_frame, bg="#e0e0e0", bd=2, relief=tk.GROOVE, height=40)
     drop_area.pack(fill=tk.X, expand=False)
     drop_area.pack_propagate(False)  # サイズ固定
     
-    drop_label = tk.Label(drop_area, text="クリックしてファイルを選択", 
-                         bg="#e0e0e0", fg="#555555", font=("", 11))
-    drop_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+    # ファイル選択ボタンのスタイルを目立たせる
+    drop_label = tk.Label(drop_area, text="ここをクリックしてファイルを選択 または ファイルをドラッグ＆ドロップ", 
+                        bg="#e0e0e0", fg="#0066CC", font=("", 10, "bold"), cursor="hand2")
+    drop_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=0)
     drop_area.bind("<Button-1>", app.browse_file)
+    drop_label.bind("<Button-1>", app.browse_file)
+    
+    # 明示的なファイル選択ボタン
+    file_button_frame = ttk.Frame(input_frame)
+    file_button_frame.pack(fill=tk.X, pady=5)
+    ttk.Button(file_button_frame, text="ファイルを選択", command=app.browse_file).pack(side=tk.LEFT, padx=5)
     
     # ドラッグ＆ドロップ機能の設定
     try:
@@ -61,7 +72,6 @@ def setup_ui(app):
             # ドラッグ＆ドロップの設定
             drop_area.drop_target_register(DND_FILES)
             drop_area.dnd_bind('<<Drop>>', lambda e: app.load_file(e.data.strip('{}').replace('\\', '/')))
-            drop_label.config(text="クリックまたはドラッグ＆ドロップでファイル選択")
     except ImportError:
         print("警告: tkinterdnd2が見つかりません。ドラッグ＆ドロップ機能は無効です。")
     except Exception as e:
@@ -71,24 +81,32 @@ def setup_ui(app):
     file_label = ttk.Label(input_frame, text="ファイル: 未選択")
     file_label.pack(fill=tk.X, padx=5, pady=5)
     
-    # 処理ボタンフレーム
-    button_frame = ttk.Frame(input_frame)
-    button_frame.pack(fill=tk.X, pady=10)
+    # ステータスラベル（高さ固定）
+    status_frame = ttk.Frame(input_frame, height=20)
+    status_frame.pack(fill=tk.X, padx=5, pady=5)
+    status_frame.pack_propagate(False)
     
-    ttk.Button(button_frame, text="文字起こしのみ", 
-               command=lambda: app.start_process("transcription")).pack(side=tk.LEFT, padx=5)
-    ttk.Button(button_frame, text="文字起こし→議事録", 
-               command=lambda: app.start_process("meeting_minutes")).pack(side=tk.LEFT, padx=5)
-    ttk.Button(button_frame, text="文字起こし→要約", 
-               command=lambda: app.start_process("summary")).pack(side=tk.LEFT, padx=5)
+    status_label = ttk.Label(status_frame, text="待機中...", font=("", 9, "italic"))
+    status_label.pack(fill=tk.X, expand=True)
+    
+    # 文字起こしボタン - 単独表示
+    transcription_button_frame = ttk.Frame(input_frame)
+    transcription_button_frame.pack(fill=tk.X, pady=5)
+    
+    ttk.Button(
+        transcription_button_frame, 
+        text="音声を文字起こし", 
+        command=lambda: app.start_process("transcription"),
+        style="Accent.TButton"
+    ).pack(side=tk.LEFT, padx=5, pady=5)
+    
+    # ボタンのスタイル設定
+    style = ttk.Style()
+    style.configure("Accent.TButton", font=("", 10, "bold"))
     
     # プログレスバー
-    progress = ttk.Progressbar(input_frame, orient=tk.HORIZONTAL, length=100, mode='indeterminate')
+    progress = ttk.Progressbar(input_frame, orient=tk.HORIZONTAL, mode='indeterminate')
     progress.pack(fill=tk.X, padx=5, pady=5)
-    
-    # ステータスラベル
-    status_label = ttk.Label(input_frame, text="待機中...", font=("", 10, "italic"))
-    status_label.pack(fill=tk.X, padx=5, pady=5)
     
     # 右側フレーム (履歴とプロンプト編集)
     right_frame = ttk.Frame(main_frame)
@@ -127,6 +145,39 @@ def setup_ui(app):
     ttk.Button(history_buttons, text="更新", command=app.update_history).pack(side=tk.LEFT, padx=5)
     ttk.Button(history_buttons, text="ファイルを開く", command=app.open_output_file).pack(side=tk.LEFT, padx=5)
     ttk.Button(history_buttons, text="出力フォルダを開く", command=app.open_output_folder).pack(side=tk.LEFT, padx=5)
+    
+    # 選択した文字起こしに対する追加処理フレーム
+    postprocess_frame = ttk.LabelFrame(history_frame, text="選択した文字起こしの追加処理", padding=10)
+    postprocess_frame.pack(fill=tk.X, pady=5)
+    
+    # 選択ファイル表示
+    selected_file_frame = ttk.Frame(postprocess_frame)
+    selected_file_frame.pack(fill=tk.X, pady=5)
+    
+    ttk.Label(selected_file_frame, text="選択ファイル:").pack(side=tk.LEFT, padx=(0, 5))
+    selected_file_label = ttk.Label(selected_file_frame, text="未選択")
+    selected_file_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    
+    # 処理プロンプト選択
+    process_select_frame = ttk.Frame(postprocess_frame)
+    process_select_frame.pack(fill=tk.X, pady=5)
+    
+    ttk.Label(process_select_frame, text="処理タイプ:").pack(side=tk.LEFT, padx=(0, 5))
+    process_var = tk.StringVar()
+    process_combo = ttk.Combobox(process_select_frame, textvariable=process_var, state="readonly")
+    process_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    
+    # 追加処理実行ボタン
+    process_button_frame = ttk.Frame(postprocess_frame)
+    process_button_frame.pack(fill=tk.X, pady=5)
+    
+    process_button = ttk.Button(
+        process_button_frame, 
+        text="追加処理を実行", 
+        command=app.process_selected_transcription,
+        state=tk.DISABLED
+    )
+    process_button.pack(side=tk.LEFT, padx=5)
     
     # プロンプト編集フレーム
     prompt_frame = ttk.LabelFrame(right_frame, text="プロンプト編集", padding=10)
@@ -175,7 +226,11 @@ def setup_ui(app):
         'prompt_var': prompt_var,
         'prompt_combo': prompt_combo,
         'prompt_name_var': prompt_name_var,
-        'prompt_text': prompt_text
+        'prompt_text': prompt_text,
+        'selected_file_label': selected_file_label,
+        'process_var': process_var,
+        'process_combo': process_combo,
+        'process_button': process_button
     }
     
     # ステータスラベルを先に設定
