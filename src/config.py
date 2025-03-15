@@ -8,7 +8,9 @@ class Config:
     """アプリケーション設定の管理クラス"""
     
     def __init__(self, app_dir):
-        self.config_file = os.path.join(app_dir, "config.json")
+        # config.jsonのパスを変更
+        config_dir = os.path.join(app_dir, "config")
+        self.config_file = os.path.join(config_dir, "config.json")
         self.config = self.load()
         
         # デフォルト設定
@@ -37,6 +39,9 @@ class Config:
     
     def save(self):
         """設定ファイルを保存する"""
+        # configディレクトリがなければ作成
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+        
         with open(self.config_file, 'w', encoding='utf-8') as f:
             json.dump(self.config, f, ensure_ascii=False, indent=2)
     
@@ -85,7 +90,9 @@ class PromptManager:
     """プロンプト設定の管理クラス"""
     
     def __init__(self, app_dir):
-        self.prompt_file = os.path.join(app_dir, "prompts.json")
+        # prompts.jsonのパスを変更
+        data_dir = os.path.join(app_dir, "data")
+        self.prompt_file = os.path.join(data_dir, "prompts.json")
         self.prompts = self.load()
     
     def load(self):
@@ -100,6 +107,9 @@ class PromptManager:
     
     def save(self):
         """プロンプトファイルを保存する"""
+        # dataディレクトリがなければ作成
+        os.makedirs(os.path.dirname(self.prompt_file), exist_ok=True)
+        
         with open(self.prompt_file, 'w', encoding='utf-8') as f:
             json.dump(self.prompts, f, ensure_ascii=False, indent=2)
     

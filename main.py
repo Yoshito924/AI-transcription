@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import tkinter as tk
-from src.app import TranscriptionApp
 import os
 import subprocess
+import tkinter as tk
+from src.app import TranscriptionApp
 
 def check_ffmpeg():
     """FFmpegがインストールされているか確認"""
@@ -30,8 +30,16 @@ def main():
     output_dir = os.path.join(app_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
     
+    # TkinterDnDを使用
+    try:
+        from tkinterdnd2 import TkinterDnD
+        root = TkinterDnD.Tk()
+        print("ドラッグ＆ドロップ機能を有効化しました")
+    except ImportError:
+        print("警告: tkinterdnd2が見つかりません。ドラッグ＆ドロップ機能は無効です。")
+        root = tk.Tk()
+    
     # アプリケーション起動
-    root = tk.Tk()
     app = TranscriptionApp(root)
     root.mainloop()
 

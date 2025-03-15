@@ -3,6 +3,8 @@
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext
+import sys
+import os
 
 def setup_ui(app):
     """UIの構築"""
@@ -43,14 +45,26 @@ def setup_ui(app):
     drop_label.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
     drop_area.bind("<Button-1>", app.browse_file)
     
-    # ドラッグ＆ドロップ機能の設定を試みる
+    # ドラッグ＆ドロップ機能の設定
     try:
-        # TkinterDnDライブラリがある場合のみ
-        drop_area.drop_target_register("*")
-        drop_area.dnd_bind("<<Drop>>", lambda e: app.load_file(e.data))
-    except:
-        # ライブラリがない場合は静かに失敗
-        pass
+        # TkinterDnDライブラリをインポート試行
+        from tkinterdnd2 import DND_FILES, TkinterDnD
+        
+        # ルートウィンドウをTkinterDnDに対応させる
+        if not isinstance(root, TkinterDnD.Tk):
+            print("警告: ドラッグ＆ドロップを有効にするには、ルートウィンドウをTkinterDnD.Tkとして作成する必要があります")
+            app.ui_elements['status_label'].config(text="ドラッグ＆ドロップが無効です。Tkinterdnd2をインストールしてください。")
+        else:
+            # ドラッグ＆ドロップの設定
+            drop_area.drop_target_register(DND_FILES)
+            drop_area.dnd_bind('<<Drop>>', lambda e: app.load_file(e.data.strip('{}').replace('\\', '/')))
+            drop_label.config(text="音声/動画ファイルをここにドラッグ＆ドロップ\nまたはクリックして選択\n(D&D有効)")
+    except ImportError:
+        print("警告: tkinterdnd2が見つかりません。ドラッグ＆ドロップ機能は無効です。")
+        app.ui_elements['status_label'].config(text="ドラッグ＆ドロップが無効です。Tkinterdnd2をインストールしてください。")
+    except Exception as e:
+        print(f"ドラッグ＆ドロップの設定中にエラーが発生しました: {str(e)}")
+        app.ui_elements['status_label'].config(text=f"ドラッグ＆ドロップエラー: {str(e)}")
     
     # 選択されたファイル表示
     file_label = ttk.Label(input_frame, text="ファイル: 未選択")
@@ -150,7 +164,7 @@ def setup_ui(app):
     ttk.Button(prompt_buttons, text="削除", command=app.delete_current_prompt).pack(side=tk.LEFT, padx=5)
     
     # UIコンポーネントを返す
-    return {
+    ui_elements = {
         'api_entry': api_entry,
         'drop_area': drop_area,
         'file_label': file_label,
@@ -162,3 +176,8 @@ def setup_ui(app):
         'prompt_name_var': prompt_name_var,
         'prompt_text': prompt_text
     }
+    
+    # ステータスラベルを先に設定
+    app.ui_elements = {'status_label': status_label}
+    
+    return ui_elements
