@@ -44,14 +44,18 @@ def setup_ui(app):
     drop_frame = ttk.Frame(input_frame)
     drop_frame.pack(fill=tk.X, pady=5)
     
-    drop_area = tk.Frame(drop_frame, bg="#e0e0e0", bd=2, relief=tk.GROOVE, height=40)
+    # 高さを60に変更（元は40）
+    drop_area = tk.Frame(drop_frame, bg="#e0e0e0", bd=2, relief=tk.GROOVE, height=60)
     drop_area.pack(fill=tk.X, expand=False)
     drop_area.pack_propagate(False)  # サイズ固定
     
-    # ファイル選択ボタンのスタイルを目立たせる
-    drop_label = tk.Label(drop_area, text="ここをクリックしてファイルを選択 または ファイルをドラッグ＆ドロップ", 
-                        bg="#e0e0e0", fg="#0066CC", font=("", 10, "bold"), cursor="hand2")
-    drop_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=0)
+    # ファイル選択ボタンのスタイルを目立たせる - テキストを2行に変更
+    drop_label = tk.Label(drop_area, 
+                        text="ここをクリックしてファイルを選択\nまたは ファイルをドラッグ＆ドロップ", 
+                        bg="#e0e0e0", fg="#0066CC", 
+                        font=("", 10, "bold"), 
+                        cursor="hand2")
+    drop_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
     drop_area.bind("<Button-1>", app.browse_file)
     drop_label.bind("<Button-1>", app.browse_file)
     

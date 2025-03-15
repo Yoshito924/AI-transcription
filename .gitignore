@@ -35,5 +35,5 @@ data/*
 config
 config.json
 prompts.json
-/output/
+output/*
 *.log
