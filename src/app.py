@@ -467,12 +467,18 @@ class TranscriptionApp:
     def _process_transcription_in_thread(self, transcription_file, prompt_key, api_key):
         """文字起こしファイルの追加処理をスレッドで実行"""
         try:
+            # 開始時間を記録
+            start_time = datetime.datetime.now()
+            
             # ステータス更新用コールバック
             def update_status(message):
                 self.root.after(0, lambda: self._update_status(message))
             
+            # 文字起こしファイルのサイズを取得
+            file_size_kb = os.path.getsize(transcription_file) / 1024
+            
             # 文字起こしファイルを読み込む
-            update_status("文字起こしファイルを読み込み中...")
+            update_status(f"文字起こしファイル（{file_size_kb:.1f}KB）を読み込み中...")
             
             try:
                 with open(transcription_file, 'r', encoding='utf-8') as f:
@@ -532,7 +538,25 @@ class TranscriptionApp:
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(result_text)
             
-            # 処理完了
+            # 処理完了時間を記録
+            end_time = datetime.datetime.now()
+            process_time = end_time - start_time
+            process_seconds = process_time.total_seconds()
+            
+            # 処理時間を分:秒形式に
+            process_time_str = f"{int(process_seconds // 60)}分{int(process_seconds % 60)}秒"
+            
+            # 詳細なログメッセージ
+            log_message = (
+                f"処理完了: {os.path.basename(output_path)}\n"
+                f"- 元ファイルサイズ: {file_size_kb:.1f}KB\n"
+                f"- 処理時間: {process_time_str}\n"
+                f"- 使用モデル: {model_name}"
+            )
+            
+            update_status(log_message)
+            
+            # 処理完了通知
             self.root.after(0, lambda: self._on_processing_complete(output_path))
             
         except Exception as e:

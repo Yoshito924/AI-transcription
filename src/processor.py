@@ -204,14 +204,39 @@ class FileProcessor:
                 os.remove(output_path)  # エラー時は一時ファイルを削除
             return None
     
+    def _format_duration(self, seconds):
+        """秒数を時:分:秒形式に変換"""
+        if seconds is None:
+            return "不明"
+        
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        
+        if hours > 0:
+            return f"{hours}時間{minutes}分{secs}秒"
+        else:
+            return f"{minutes}分{secs}秒"
+    
     def process_file(self, input_file, process_type, api_key, prompts, status_callback=None):
         """ファイルを処理し、結果を返す"""
+        # 開始時間を記録
+        start_time = datetime.datetime.now()
+        
         # ステータス更新ユーティリティ
         def update_status(message):
             print(message)  # コンソール出力
             if status_callback:
                 status_callback(message)
         
+        # 元のファイルサイズを取得
+        original_size_mb = os.path.getsize(input_file) / (1024 * 1024)
+        
+        # 音声の長さを取得
+        audio_duration_sec = self._get_audio_duration(input_file)
+        duration_str = self._format_duration(audio_duration_sec) if audio_duration_sec else "不明"
+        
+        update_status(f"処理開始: ファイルサイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
         update_status("音声ファイルを変換中...")
         
         # 一時ファイル作成
@@ -337,7 +362,24 @@ class FileProcessor:
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(final_text)
             
-            update_status(f"処理が完了しました: {output_filename}")
+            # 処理完了時間を記録
+            end_time = datetime.datetime.now()
+            process_time = end_time - start_time
+            process_seconds = process_time.total_seconds()
+            
+            # 処理時間を分:秒形式に
+            process_time_str = f"{int(process_seconds // 60)}分{int(process_seconds % 60)}秒"
+            
+            # 詳細なログメッセージ
+            log_message = (
+                f"処理完了: {output_filename}\n"
+                f"- 元ファイルサイズ: {original_size_mb:.2f}MB\n"
+                f"- 音声の長さ: {duration_str}\n"
+                f"- 処理時間: {process_time_str}\n"
+                f"- 使用モデル: {model_name}"
+            )
+            
+            update_status(log_message)
             
             return output_path
             
