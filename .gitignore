@@ -31,6 +31,8 @@ ENV/
 *.swo
 
 # アプリケーション固有
+data/*
+config
 config.json
 prompts.json
 /output/
