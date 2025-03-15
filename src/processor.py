@@ -106,8 +106,8 @@ class FileProcessor:
                     elif needs_split_by_duration:
                         update_status(f"音声の長さが長いため、ファイルを分割して処理します")
                     
-                    # 音声ファイルを分割（10分ごと）
-                    segment_files = self.audio_processor.split_audio(compressed_path, 600, update_status)
+                    # 音声ファイルを分割（10分ごと、10秒のオーバーラップ）
+                    segment_files = self.audio_processor.split_audio(compressed_path, 600, update_status, overlap_sec=10)
                     if not segment_files:
                         raise Exception("音声ファイルの分割に失敗しました")
                     
@@ -149,9 +149,16 @@ class FileProcessor:
                             
                             # 文字起こしを実行
                             import google.generativeai as genai
-                            model = genai.GenerativeModel(self.api_utils.get_best_available_model(api_key))
+                            segment_model_name = self.api_utils.get_best_available_model(api_key)
+                            model = genai.GenerativeModel(segment_model_name)
                             response = model.generate_content(parts)
                             segment_transcription = response.text
+                            
+                            # 使用したモデル名を記録（後でログ出力用）
+                            if 'used_models' not in locals():
+                                used_models = []
+                            if segment_model_name not in used_models:
+                                used_models.append(segment_model_name)
                             
                             if not segment_transcription or segment_transcription.strip() == "":
                                 raise Exception(f"セグメント {i+1} の文字起こし結果が空でした")
@@ -188,11 +195,21 @@ class FileProcessor:
                     
                     # 以降の処理をスキップするためのフラグ
                     is_segmented = True
+                    
+                    # 詳細なログ出力
+                    update_status(f"詳細ログ: 分割処理完了。セグメント数={len(segment_files)}, 合計文字数={len(transcription)}")
+                    
+                    # 各セグメントの文字数をログに出力
+                    segment_lengths = []
+                    for i, segment_text in enumerate(all_transcriptions):
+                        segment_lengths.append(len(segment_text))
+                        update_status(f"詳細ログ: セグメント {i+1} の文字数={len(segment_text)}")
+                    
+                    update_status(f"詳細ログ: 全セグメントの合計文字数={sum(segment_lengths)}")
                 else:
                     is_segmented = False
             
             # 分割処理を行わなかった場合は通常の文字起こし処理
-            is_segmented = False
             if 'is_segmented' not in locals() or not is_segmented:
                 # Gemini APIによる文字起こし
                 import google.generativeai as genai
@@ -232,6 +249,9 @@ class FileProcessor:
                     
                     if not transcription or transcription.strip() == "":
                         raise Exception("文字起こし結果が空でした")
+                    
+                    # 詳細なログ出力
+                    update_status(f"詳細ログ: 通常処理の文字起こし完了。文字数={len(transcription)}")
                     
                 except Exception as audio_err:
                     update_status(f"文字起こしエラー: {str(audio_err)}")
@@ -273,13 +293,25 @@ class FileProcessor:
                 process_name = prompts[process_type]["name"]
             else:
                 process_name = "文字起こし"
+            
+            # 分割処理されたかどうかを出力ファイル名に反映
+            if 'is_segmented' in locals() and is_segmented:
+                output_filename = f"{base_name}_{process_name}_分割処理_{timestamp}.txt"
+            else:
+                output_filename = f"{base_name}_{process_name}_{timestamp}.txt"
                 
-            output_filename = f"{base_name}_{process_name}_{timestamp}.txt"
             output_path = os.path.join(self.output_dir, output_filename)
+            
+            # 詳細なログ出力
+            update_status(f"詳細ログ: 最終出力の文字数={len(final_text)}")
             
             # ファイル出力
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(final_text)
+                
+            # ファイルサイズをログに出力
+            output_size_kb = os.path.getsize(output_path) / 1024
+            update_status(f"詳細ログ: 出力ファイルサイズ={output_size_kb:.2f}KB")
             
             # 処理完了時間を記録
             end_time = datetime.datetime.now()
@@ -290,13 +322,33 @@ class FileProcessor:
             process_time_str = f"{int(process_seconds // 60)}分{int(process_seconds % 60)}秒"
             
             # 詳細なログメッセージ
-            log_message = (
-                f"処理完了: {output_filename}\n"
-                f"- 元ファイルサイズ: {original_size_mb:.2f}MB\n"
-                f"- 音声の長さ: {duration_str}\n"
-                f"- 処理時間: {process_time_str}\n"
-                f"- 使用モデル: {model_name}"
-            )
+            if 'is_segmented' in locals() and is_segmented and 'used_models' in locals():
+                # 分割処理の場合は使用したモデルのリストを表示
+                models_str = ", ".join(used_models)
+                log_message = (
+                    f"処理完了: {output_filename}\n"
+                    f"- 元ファイルサイズ: {original_size_mb:.2f}MB\n"
+                    f"- 音声の長さ: {duration_str}\n"
+                    f"- 処理時間: {process_time_str}\n"
+                    f"- 使用モデル: {models_str} (分割処理)"
+                )
+            elif 'model_name' in locals():
+                # 通常処理の場合
+                log_message = (
+                    f"処理完了: {output_filename}\n"
+                    f"- 元ファイルサイズ: {original_size_mb:.2f}MB\n"
+                    f"- 音声の長さ: {duration_str}\n"
+                    f"- 処理時間: {process_time_str}\n"
+                    f"- 使用モデル: {model_name}"
+                )
+            else:
+                # モデル名が不明の場合
+                log_message = (
+                    f"処理完了: {output_filename}\n"
+                    f"- 元ファイルサイズ: {original_size_mb:.2f}MB\n"
+                    f"- 音声の長さ: {duration_str}\n"
+                    f"- 処理時間: {process_time_str}"
+                )
             
             update_status(log_message)
             

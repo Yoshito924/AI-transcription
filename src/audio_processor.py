@@ -34,8 +34,15 @@ class AudioProcessor:
             print(f"エラー: 音声長さの取得中に例外が発生しました: {str(e)}")
             return None
     
-    def split_audio(self, input_file_path, segment_duration_sec=600, callback=None):
-        """音声ファイルを指定された時間（デフォルト10分）ごとに分割する"""
+    def split_audio(self, input_file_path, segment_duration_sec=600, callback=None, overlap_sec=10):
+        """音声ファイルを指定された時間（デフォルト10分）ごとに分割する
+        
+        Args:
+            input_file_path: 入力音声ファイルのパス
+            segment_duration_sec: 各セグメントの基本長さ（秒）
+            callback: 状態更新用コールバック関数
+            overlap_sec: セグメント間のオーバーラップ時間（秒）
+        """
         def update_status(message):
             print(message)
             if callback:
@@ -59,7 +66,7 @@ class AudioProcessor:
             update_status("ファイルが短いため分割は不要です")
             return [input_file_path]
         
-        update_status(f"音声ファイルを {num_segments} 個のセグメントに分割します（各 {segment_duration_sec // 60} 分）")
+        update_status(f"音声ファイルを {num_segments} 個のセグメントに分割します（各 {segment_duration_sec // 60} 分、オーバーラップ {overlap_sec} 秒）")
         
         # 分割ファイルのリスト
         segment_files = []
@@ -69,8 +76,26 @@ class AudioProcessor:
             with tempfile.TemporaryDirectory() as temp_dir:
                 # 各セグメントを作成
                 for i in range(num_segments):
-                    # セグメントの開始時間（秒）
-                    start_time = i * segment_duration_sec
+                    # セグメントの開始時間と長さを計算（オーバーラップを考慮）
+                    if i == 0:
+                        # 最初のセグメント
+                        start_time = 0
+                        segment_length = segment_duration_sec + overlap_sec
+                        # 音声の長さを超えないように調整
+                        if segment_length > audio_duration_sec:
+                            segment_length = audio_duration_sec
+                    else:
+                        # 2番目以降のセグメント
+                        start_time = i * segment_duration_sec - overlap_sec
+                        
+                        # 最後のセグメントの場合、残りの時間すべてを使用
+                        if i == num_segments - 1:
+                            segment_length = audio_duration_sec - start_time
+                        else:
+                            segment_length = segment_duration_sec + (overlap_sec * 2)
+                            # 音声の長さを超えないように調整
+                            if start_time + segment_length > audio_duration_sec:
+                                segment_length = audio_duration_sec - start_time
                     
                     # 出力ファイル名
                     output_path = os.path.join(temp_dir, f"segment_{i:03d}.mp3")
@@ -82,13 +107,13 @@ class AudioProcessor:
                         '-y',  # 既存ファイルを上書き
                         '-i', input_file_path,
                         '-ss', str(start_time),  # 開始時間
-                        '-t', str(segment_duration_sec),  # セグメント長さ
+                        '-t', str(segment_length),  # セグメント長さ
                         '-c:a', 'libmp3lame',  # MP3エンコーダを使用
                         '-b:a', '128k',  # ビットレート
                         output_path
                     ]
                     
-                    update_status(f"セグメント {i+1}/{num_segments} を作成中...")
+                    update_status(f"セグメント {i+1}/{num_segments} を作成中... (開始: {self.format_duration(start_time)}, 長さ: {self.format_duration(segment_length)})")
                     
                     # コマンドを実行
                     process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
