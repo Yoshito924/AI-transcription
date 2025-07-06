@@ -6,11 +6,25 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .constants import (
+    MAX_AUDIO_SIZE_MB, 
+    DEFAULT_AUDIO_BITRATE, 
+    DEFAULT_SAMPLE_RATE, 
+    DEFAULT_CHANNELS,
+    MIN_BITRATE,
+    MAX_BITRATE,
+    MAX_COMPRESSION_ATTEMPTS,
+    OVERLAP_SECONDS,
+    SEGMENT_DURATION_SEC
+)
+from .exceptions import AudioProcessingError
+from .utils import format_duration
+
 class AudioProcessor:
     """音声ファイルの処理を行うクラス"""
     
-    def __init__(self, max_audio_size_mb=20):
-        self.max_audio_size_mb = max_audio_size_mb  # Geminiの推奨上限サイズ
+    def __init__(self, max_audio_size_mb=MAX_AUDIO_SIZE_MB):
+        self.max_audio_size_mb = max_audio_size_mb
     
     def get_audio_duration(self, file_path):
         """FFmpegを使用して音声ファイルの長さを秒単位で取得"""
@@ -34,7 +48,7 @@ class AudioProcessor:
             print(f"エラー: 音声長さの取得中に例外が発生しました: {str(e)}")
             return None
     
-    def split_audio(self, input_file_path, segment_duration_sec=600, callback=None, overlap_sec=10):
+    def split_audio(self, input_file_path, segment_duration_sec=SEGMENT_DURATION_SEC, callback=None, overlap_sec=OVERLAP_SECONDS):
         """音声ファイルを指定された時間（デフォルト10分）ごとに分割する
         
         Args:
@@ -56,8 +70,7 @@ class AudioProcessor:
         # 音声の長さを取得
         audio_duration_sec = self.get_audio_duration(input_file_path)
         if audio_duration_sec is None or audio_duration_sec <= 0:
-            update_status("エラー: 音声ファイルの長さを取得できませんでした")
-            return None
+            raise AudioProcessingError("音声ファイルの長さを取得できませんでした")
         
         # 分割数を計算（切り上げ）
         num_segments = int((audio_duration_sec + segment_duration_sec - 1) // segment_duration_sec)
@@ -113,7 +126,7 @@ class AudioProcessor:
                         output_path
                     ]
                     
-                    update_status(f"セグメント {i+1}/{num_segments} を作成中... (開始: {self.format_duration(start_time)}, 長さ: {self.format_duration(segment_length)})")
+                    update_status(f"セグメント {i+1}/{num_segments} を作成中... (開始: {format_duration(start_time)}, 長さ: {format_duration(segment_length)})")
                     
                     # コマンドを実行
                     process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -144,7 +157,7 @@ class AudioProcessor:
             update_status(f"エラー: 音声分割中に例外が発生しました: {str(e)}")
             return None
     
-    def compress_audio(self, input_file_path, target_size_mb=20, callback=None, max_attempts=5):
+    def compress_audio(self, input_file_path, target_size_mb=MAX_AUDIO_SIZE_MB, callback=None, max_attempts=MAX_COMPRESSION_ATTEMPTS):
         """FFmpegを使用して音声ファイルを圧縮する。目標サイズに達するまで繰り返し圧縮を試みる"""
         def update_status(message):
             print(message)
@@ -166,8 +179,8 @@ class AudioProcessor:
             return None
         
         # 最低品質を確保
-        min_bitrate = 32  # 最低32kbpsまで許容（圧縮を繰り返す場合）
-        max_bitrate = 256  # 最大256kbpsに制限
+        min_bitrate = MIN_BITRATE  # 最低32kbpsまで許容（圧縮を繰り返す場合）
+        max_bitrate = MAX_BITRATE  # 最大256kbpsに制限
         
         # 現在の入力ファイル（初回は元のファイル、以降は前回の圧縮結果）
         current_input = input_file_path
@@ -285,16 +298,37 @@ class AudioProcessor:
         
         return current_input
     
-    def format_duration(self, seconds):
-        """秒数を時:分:秒形式に変換"""
-        if seconds is None:
-            return "不明"
+    def convert_audio(self, input_file, output_format='mp3', 
+                     bitrate=DEFAULT_AUDIO_BITRATE, 
+                     sample_rate=DEFAULT_SAMPLE_RATE, 
+                     channels=DEFAULT_CHANNELS):
+        """音声/動画ファイルを指定したフォーマットに変換する"""
+        with tempfile.NamedTemporaryFile(suffix=f'.{output_format}', delete=False) as temp_file:
+            output_path = temp_file.name
         
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
+        try:
+            # FFmpegで変換
+            cmd = [
+                'ffmpeg', '-y', '-i', input_file, 
+                '-vn',                         # 映像を除去
+                '-ar', str(sample_rate),       # サンプルレート
+                '-ac', str(channels),          # チャンネル数
+                '-b:a', bitrate,               # ビットレート
+                output_path
+            ]
+            
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.decode('utf-8', errors='replace')
+                raise AudioProcessingError(f"音声変換エラー: {error_msg}")
+            
+            return output_path
         
-        if hours > 0:
-            return f"{hours}時間{minutes}分{secs}秒"
-        else:
-            return f"{minutes}分{secs}秒"
+        except Exception as e:
+            # エラー時は一時ファイルを削除
+            try:
+                os.unlink(output_path)
+            except:
+                pass
+            raise AudioProcessingError(f"音声変換に失敗しました: {str(e)}")

@@ -4,19 +4,28 @@
 import os
 import json
 
+from .constants import (
+    DEFAULT_WINDOW_WIDTH, 
+    DEFAULT_WINDOW_HEIGHT, 
+    CONFIG_DIR, 
+    DATA_DIR, 
+    CONFIG_FILE, 
+    PROMPT_FILE
+)
+from .exceptions import ConfigurationError
+
 class Config:
     """アプリケーション設定の管理クラス"""
     
     def __init__(self, app_dir):
-        # config.jsonのパスを変更
-        config_dir = os.path.join(app_dir, "config")
-        self.config_file = os.path.join(config_dir, "config.json")
+        config_dir = os.path.join(app_dir, CONFIG_DIR)
+        self.config_file = os.path.join(config_dir, CONFIG_FILE)
         self.config = self.load()
         
         # デフォルト設定
         self.defaults = {
-            "window_width": 1000,
-            "window_height": 800,
+            "window_width": DEFAULT_WINDOW_WIDTH,
+            "window_height": DEFAULT_WINDOW_HEIGHT,
             "window_x": None,
             "window_y": None,
             "api_key": ""
@@ -71,8 +80,8 @@ class Config:
     
     def apply_window_geometry(self, root):
         """保存されたジオメトリ情報をウィンドウに適用"""
-        width = self.get("window_width", 1000)
-        height = self.get("window_height", 800)
+        width = self.get("window_width", DEFAULT_WINDOW_WIDTH)
+        height = self.get("window_height", DEFAULT_WINDOW_HEIGHT)
         
         geometry = f"{width}x{height}"
         
@@ -90,9 +99,8 @@ class PromptManager:
     """プロンプト設定の管理クラス"""
     
     def __init__(self, app_dir):
-        # prompts.jsonのパスを変更
-        data_dir = os.path.join(app_dir, "data")
-        self.prompt_file = os.path.join(data_dir, "prompts.json")
+        data_dir = os.path.join(app_dir, DATA_DIR)
+        self.prompt_file = os.path.join(data_dir, PROMPT_FILE)
         self.prompts = self.load()
     
     def load(self):
@@ -122,11 +130,53 @@ class PromptManager:
             },
             "meeting_minutes": {
                 "name": "議事録作成",
-                "prompt": "以下の文字起こしから議事録を作成してください。箇条書きで重要なポイントをまとめ、決定事項と次のアクションアイテムを明確にしてください。\n\n{transcription}"
+                "prompt": """以下の文字起こしから議事録を作成してください。
+
+以下の形式で整理してください：
+## 会議の概要
+- 日時、参加者、目的
+
+## 主要な議題と内容
+- 議題ごとに箇条書きで整理
+
+## 決定事項
+- 明確に決定された事項をリストアップ
+
+## アクションアイテム
+- 誰が何をいつまでに行うかを明記
+
+## その他
+- 次回会議の予定など
+
+{transcription}"""
             },
             "summary": {
                 "name": "要約",
-                "prompt": "以下の文字起こしを300字程度に要約してください。\n\n{transcription}"
+                "prompt": """以下の文字起こしを簡潔に要約してください。
+
+要約のポイント：
+- 重要な内容を300字程度でまとめる
+- 主要なトピックと結論を含める
+- 客観的で分かりやすい表現を使用する
+
+{transcription}"""
+            },
+            "detailed_summary": {
+                "name": "詳細要約",
+                "prompt": """以下の文字起こしを詳細に要約してください。
+
+## 主要トピック
+内容の中心となるテーマを整理
+
+## 重要なポイント
+- 話し合われた主要な内容
+- 提示された意見や提案
+- 結論や合意事項
+
+## 詳細な内容
+具体的な議論の流れと詳細を記載
+
+{transcription}"""
             }
         }
     

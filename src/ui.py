@@ -1,252 +1,472 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""
+シンプルなUIレイアウトの実装
+文字起こし機能に特化した直感的なインターフェース
+"""
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 import sys
 import os
 
+from .ui_styles import ModernTheme, ModernWidgets, ICONS
+from .constants import (
+    DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
+    MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
+    DRAG_DROP_AREA_HEIGHT, CARD_PADDING, SECTION_SPACING
+)
+
+
 def setup_ui(app):
-    """UIの構築"""
+    """シンプルなUIの構築"""
     root = app.root
     
-    # メインフレーム
-    main_frame = ttk.Frame(root, padding=10)
-    main_frame.pack(fill=tk.BOTH, expand=True)
+    # テーマとウィジェットの初期化
+    theme = ModernTheme()
+    widgets = ModernWidgets(theme)
+    style = theme.apply_theme(root)
     
-    # 左側フレーム (APIキー設定と操作パネル)
-    left_frame = ttk.Frame(main_frame)
-    left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+    # ウィンドウの基本設定
+    root.title("🎤 AI文字起こし - 音声を瞬時にテキスト化")
+    root.geometry(f"{DEFAULT_WINDOW_WIDTH}x{DEFAULT_WINDOW_HEIGHT}")
+    root.minsize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+    root.configure(bg=theme.colors['background'])
     
-    # API設定フレーム
-    api_frame = ttk.LabelFrame(left_frame, text="Gemini API設定", padding=10)
-    api_frame.pack(fill=tk.X, pady=(0, 10))
+    # メインコンテナ
+    main_container = tk.Frame(root, bg=theme.colors['background'])
+    main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
     
-    ttk.Label(api_frame, text="APIキー:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-    api_entry = ttk.Entry(api_frame, textvariable=app.api_key, width=40, show="*")
-    api_entry.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=5)
+    # 上部：API設定と使用量を横並び
+    top_container = tk.Frame(main_container, bg=theme.colors['background'])
+    top_container.pack(fill=tk.X, pady=(0, 15))
     
-    api_button_frame = ttk.Frame(api_frame)
-    api_button_frame.grid(row=0, column=2, padx=5, pady=5)
+    # API設定セクション（左側、コンパクト）
+    api_section = create_api_section(top_container, app, theme, widgets)
+    api_section.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
     
-    ttk.Button(api_button_frame, text="表示", command=app.toggle_api_key_visibility).pack(side=tk.LEFT, padx=(0, 5))
-    ttk.Button(api_button_frame, text="接続確認", command=app.check_api_connection).pack(side=tk.LEFT)
+    # 使用量表示セクション（右側、コンパクト）
+    usage_section = create_usage_section(top_container, app, theme, widgets)
+    usage_section.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
     
-    # 入力フレーム
-    input_frame = ttk.LabelFrame(left_frame, text="ファイル入力", padding=10)
-    input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+    # ファイル入力セクション
+    file_section = create_file_section(main_container, app, theme, widgets)
+    file_section.pack(fill=tk.X, pady=(0, 15))
     
-    # ファイル入力エリア
-    file_input_frame = ttk.Frame(input_frame)
-    file_input_frame.pack(fill=tk.X, pady=5)
+    # 処理履歴とログを横並びに
+    bottom_container = tk.Frame(main_container, bg=theme.colors['background'])
+    bottom_container.pack(fill=tk.BOTH, expand=True)
     
-    # ドラッグ＆ドロップエリア（高さ固定）と選択ボタン
-    drop_frame = ttk.Frame(input_frame)
-    drop_frame.pack(fill=tk.X, pady=5)
+    # 左側：処理履歴
+    history_section = create_history_section(bottom_container, app, theme, widgets)
+    history_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
     
-    # 高さを60に変更（元は40）
-    drop_area = tk.Frame(drop_frame, bg="#e0e0e0", bd=2, relief=tk.GROOVE, height=60)
-    drop_area.pack(fill=tk.X, expand=False)
-    drop_area.pack_propagate(False)  # サイズ固定
+    # 右側：処理ログ
+    log_section = create_log_section(bottom_container, app, theme, widgets)
+    log_section.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
     
-    # ファイル選択ボタンのスタイルを目立たせる - テキストを2行に変更
-    drop_label = tk.Label(drop_area, 
-                        text="ここをクリックしてファイルを選択\nまたは ファイルをドラッグ＆ドロップ", 
-                        bg="#e0e0e0", fg="#0066CC", 
-                        font=("", 10, "bold"), 
-                        cursor="hand2")
-    drop_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+    # UI要素を収集
+    ui_elements = collect_ui_elements(
+        api_section, file_section, usage_section, history_section, log_section
+    )
+    
+    return ui_elements
+
+
+def create_api_section(parent, app, theme, widgets):
+    """API設定セクション（コンパクト版）"""
+    card = widgets.create_card_frame(parent)
+    
+    # ヘッダー
+    header_frame = tk.Frame(card, bg=theme.colors['surface'])
+    header_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(CARD_PADDING, 5))
+    
+    header_label = tk.Label(
+        header_frame,
+        text=f"{ICONS['key']} API設定",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface']
+    )
+    header_label.pack(side=tk.LEFT)
+    
+    # API接続状態
+    api_status = tk.Label(
+        header_frame,
+        text="● 未接続",
+        font=theme.fonts['caption'],
+        fg=theme.colors['error'],
+        bg=theme.colors['surface']
+    )
+    api_status.pack(side=tk.RIGHT)
+    
+    # API入力フレーム
+    input_frame = tk.Frame(card, bg=theme.colors['surface'])
+    input_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 5))
+    
+    api_entry = ttk.Entry(
+        input_frame,
+        textvariable=app.api_key,
+        show="*",
+        style='Modern.TEntry',
+        width=30
+    )
+    api_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+    
+    # ボタン（小さく）
+    toggle_btn = widgets.create_button(
+        input_frame, "表示", 'Secondary',
+        command=app.toggle_api_key_visibility
+    )
+    toggle_btn.pack(side=tk.LEFT, padx=(0, 3))
+    
+    connect_btn = widgets.create_button(
+        input_frame, "接続", 'Primary',
+        command=app.check_api_connection
+    )
+    connect_btn.pack(side=tk.LEFT)
+    
+    # モデル情報（1行で）
+    model_frame = tk.Frame(card, bg=theme.colors['surface'])
+    model_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, CARD_PADDING))
+    
+    model_label_text = tk.Label(
+        model_frame,
+        text="モデル:",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    )
+    model_label_text.pack(side=tk.LEFT, padx=(0, 5))
+    
+    model_name = tk.Label(
+        model_frame,
+        text="未接続",
+        font=theme.fonts['caption'],
+        fg=theme.colors['primary'],
+        bg=theme.colors['surface']
+    )
+    model_name.pack(side=tk.LEFT)
+    
+    card.api_entry = api_entry
+    card.api_status = api_status
+    card.model_label = model_name
+    
+    return card
+
+
+def create_file_section(parent, app, theme, widgets):
+    """ファイル入力セクションの作成"""
+    card = widgets.create_card_frame(parent)
+    
+    # ヘッダー
+    header = tk.Label(
+        card,
+        text=f"{ICONS['upload']} ファイル選択",
+        font=theme.fonts['subheading'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface']
+    )
+    header.pack(anchor='w', padx=CARD_PADDING, pady=(CARD_PADDING, 10))
+    
+    # ドラッグ&ドロップエリア
+    drop_area, drop_label = widgets.create_drag_drop_area(
+        card,
+        f"{ICONS['upload']} ここをクリックして音声/動画ファイルを選択\nまたはファイルをドラッグ&ドロップ",
+        height=100
+    )
+    drop_area.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    
+    # ドラッグ&ドロップの設定
     drop_area.bind("<Button-1>", app.browse_file)
     drop_label.bind("<Button-1>", app.browse_file)
+    setup_drag_drop(drop_area, drop_label, app)
     
-    # 明示的なファイル選択ボタン
-    file_button_frame = ttk.Frame(input_frame)
-    file_button_frame.pack(fill=tk.X, pady=5)
-    ttk.Button(file_button_frame, text="ファイルを選択", command=app.browse_file).pack(side=tk.LEFT, padx=5)
+    # ファイル情報
+    file_info_frame = tk.Frame(card, bg=theme.colors['surface'])
+    file_info_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
     
-    # ドラッグ＆ドロップ機能の設定
-    try:
-        # TkinterDnDライブラリをインポート試行
-        from tkinterdnd2 import DND_FILES, TkinterDnD
-        
-        # ルートウィンドウをTkinterDnDに対応させる
-        if not isinstance(root, TkinterDnD.Tk):
-            print("警告: ドラッグ＆ドロップを有効にするには、ルートウィンドウをTkinterDnD.Tkとして作成する必要があります")
-        else:
-            # ドラッグ＆ドロップの設定
-            drop_area.drop_target_register(DND_FILES)
-            drop_area.dnd_bind('<<Drop>>', lambda e: app.load_file(e.data.strip('{}').replace('\\', '/')))
-    except ImportError:
-        print("警告: tkinterdnd2が見つかりません。ドラッグ＆ドロップ機能は無効です。")
-    except Exception as e:
-        print(f"ドラッグ＆ドロップの設定中にエラーが発生しました: {str(e)}")
+    file_label = tk.Label(
+        file_info_frame,
+        text="選択ファイル: なし",
+        font=theme.fonts['body'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    )
+    file_label.pack(side=tk.LEFT)
     
-    # 選択されたファイル表示
-    file_label = ttk.Label(input_frame, text="ファイル: 未選択")
-    file_label.pack(fill=tk.X, padx=5, pady=5)
+    # ステータス表示とプログレスバーを1行に
+    status_frame = tk.Frame(card, bg=theme.colors['surface'])
+    status_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 8))
     
-    # ステータスラベル（高さ固定）
-    status_frame = ttk.Frame(input_frame, height=20)
-    status_frame.pack(fill=tk.X, padx=5, pady=5)
-    status_frame.pack_propagate(False)
+    status_label = tk.Label(
+        status_frame,
+        text="準備完了",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    )
+    status_label.pack(side=tk.LEFT)
     
-    status_label = ttk.Label(status_frame, text="待機中...", font=("", 9, "italic"))
-    status_label.pack(fill=tk.X, expand=True)
+    # プログレスバー（小さく）
+    progress = ttk.Progressbar(
+        status_frame,
+        orient=tk.HORIZONTAL,
+        mode='indeterminate',
+        style='Modern.Horizontal.TProgressbar',
+        length=100
+    )
+    progress.pack(side=tk.RIGHT)
     
-    # 文字起こしボタン - 単独表示
-    transcription_button_frame = ttk.Frame(input_frame)
-    transcription_button_frame.pack(fill=tk.X, pady=5)
+    # 文字起こしボタン（大きく目立つように）
+    button_frame = tk.Frame(card, bg=theme.colors['surface'])
+    button_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, CARD_PADDING))
     
-    ttk.Button(
-        transcription_button_frame, 
-        text="音声を文字起こし", 
-        command=lambda: app.start_process("transcription"),
-        style="Accent.TButton"
-    ).pack(side=tk.LEFT, padx=5, pady=5)
+    transcribe_btn = widgets.create_icon_button(
+        button_frame,
+        "音声を文字起こし開始",
+        ICONS['microphone'],
+        'Large.Primary',
+        command=lambda: app.start_process("transcription")
+    )
+    transcribe_btn.pack(expand=True)
     
-    # ボタンのスタイル設定
-    style = ttk.Style()
-    style.configure("Accent.TButton", font=("", 10, "bold"))
+    card.drop_area = drop_area
+    card.file_label = file_label
+    card.status_label = status_label
+    card.progress = progress
     
-    # プログレスバー
-    progress = ttk.Progressbar(input_frame, orient=tk.HORIZONTAL, mode='indeterminate')
-    progress.pack(fill=tk.X, padx=5, pady=5)
+    return card
+
+
+def create_history_section(parent, app, theme, widgets):
+    """処理履歴セクションの作成"""
+    card = widgets.create_card_frame(parent)
     
-    # ログ出力エリア
-    log_frame = ttk.LabelFrame(left_frame, text="処理ログ", padding=10)
-    log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+    # ヘッダー
+    header_frame = tk.Frame(card, bg=theme.colors['surface'])
+    header_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(CARD_PADDING, 10))
     
-    log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=8, width=40)
-    log_text.pack(fill=tk.BOTH, expand=True, pady=5)
-    log_text.config(state=tk.DISABLED)  # 読み取り専用に設定
+    header_label = tk.Label(
+        header_frame,
+        text=f"{ICONS['clock']} 処理履歴",
+        font=theme.fonts['subheading'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface']
+    )
+    header_label.pack(side=tk.LEFT)
     
-    # 右側フレーム (履歴とプロンプト編集)
-    right_frame = ttk.Frame(main_frame)
-    right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+    # 更新ボタン
+    refresh_btn = widgets.create_button(
+        header_frame, "更新", 'Secondary',
+        command=app.update_history
+    )
+    refresh_btn.pack(side=tk.RIGHT, padx=(0, 5))
     
-    # 履歴フレーム
-    history_frame = ttk.LabelFrame(right_frame, text="処理履歴", padding=10)
-    history_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-    
-    # 履歴リスト
-    history_frame_inner = ttk.Frame(history_frame)
-    history_frame_inner.pack(fill=tk.BOTH, expand=True)
+    # 履歴ツリー
+    tree_frame = tk.Frame(card, bg=theme.colors['surface'])
+    tree_frame.pack(fill=tk.BOTH, expand=True, padx=CARD_PADDING, pady=(0, 10))
     
     columns = ('filename', 'date', 'size')
-    history_tree = ttk.Treeview(history_frame_inner, columns=columns, show='headings')
+    history_tree = ttk.Treeview(
+        tree_frame,
+        columns=columns,
+        show='headings',
+        style='Modern.Treeview',
+        height=8
+    )
+    
     history_tree.heading('filename', text='ファイル名')
     history_tree.heading('date', text='日時')
     history_tree.heading('size', text='サイズ')
     
-    history_tree.column('filename', width=150)
-    history_tree.column('date', width=120)
+    history_tree.column('filename', width=200)
+    history_tree.column('date', width=150)
     history_tree.column('size', width=80)
     
     history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     
-    scrollbar = ttk.Scrollbar(history_frame_inner, orient=tk.VERTICAL, command=history_tree.yview)
+    scrollbar = ttk.Scrollbar(
+        tree_frame,
+        orient=tk.VERTICAL,
+        command=history_tree.yview,
+        style='Modern.Vertical.TScrollbar'
+    )
     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     history_tree.configure(yscrollcommand=scrollbar.set)
     
+    # ダブルクリックでファイルを開く
     history_tree.bind('<Double-1>', app.open_output_file)
     
-    # 履歴操作ボタン
-    history_buttons = ttk.Frame(history_frame)
-    history_buttons.pack(fill=tk.X, pady=5)
+    # 操作ボタン
+    button_frame = tk.Frame(card, bg=theme.colors['surface'])
+    button_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, CARD_PADDING))
     
-    ttk.Button(history_buttons, text="更新", command=app.update_history).pack(side=tk.LEFT, padx=5)
-    ttk.Button(history_buttons, text="ファイルを開く", command=app.open_output_file).pack(side=tk.LEFT, padx=5)
-    ttk.Button(history_buttons, text="出力フォルダを開く", command=app.open_output_folder).pack(side=tk.LEFT, padx=5)
-    
-    # 選択した文字起こしに対する追加処理フレーム
-    postprocess_frame = ttk.LabelFrame(history_frame, text="選択した文字起こしの追加処理", padding=10)
-    postprocess_frame.pack(fill=tk.X, pady=5)
-    
-    # 選択ファイル表示
-    selected_file_frame = ttk.Frame(postprocess_frame)
-    selected_file_frame.pack(fill=tk.X, pady=5)
-    
-    ttk.Label(selected_file_frame, text="選択ファイル:").pack(side=tk.LEFT, padx=(0, 5))
-    selected_file_label = ttk.Label(selected_file_frame, text="未選択")
-    selected_file_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-    
-    # 処理プロンプト選択
-    process_select_frame = ttk.Frame(postprocess_frame)
-    process_select_frame.pack(fill=tk.X, pady=5)
-    
-    ttk.Label(process_select_frame, text="処理タイプ:").pack(side=tk.LEFT, padx=(0, 5))
-    process_var = tk.StringVar()
-    process_combo = ttk.Combobox(process_select_frame, textvariable=process_var, state="readonly")
-    process_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
-    
-    # 追加処理実行ボタン
-    process_button_frame = ttk.Frame(postprocess_frame)
-    process_button_frame.pack(fill=tk.X, pady=5)
-    
-    process_button = ttk.Button(
-        process_button_frame, 
-        text="追加処理を実行", 
-        command=app.process_selected_transcription,
-        state=tk.DISABLED
+    open_btn = widgets.create_icon_button(
+        button_frame, "ファイルを開く", ICONS['open'], 'Secondary',
+        command=app.open_output_file
     )
-    process_button.pack(side=tk.LEFT, padx=5)
+    open_btn.pack(side=tk.LEFT, padx=(0, 5))
     
-    # プロンプト編集フレーム
-    prompt_frame = ttk.LabelFrame(right_frame, text="プロンプト編集", padding=10)
-    prompt_frame.pack(fill=tk.BOTH, expand=True)
+    folder_btn = widgets.create_icon_button(
+        button_frame, "出力フォルダを開く", ICONS['folder'], 'Secondary',
+        command=app.open_output_folder
+    )
+    folder_btn.pack(side=tk.LEFT)
     
-    # プロンプト選択
-    prompt_select_frame = ttk.Frame(prompt_frame)
-    prompt_select_frame.pack(fill=tk.X, pady=(0, 5))
+    card.history_tree = history_tree
     
-    ttk.Label(prompt_select_frame, text="プロンプト:").pack(side=tk.LEFT, padx=(0, 5))
+    return card
+
+
+def create_usage_section(parent, app, theme, widgets):
+    """使用量表示セクション（コンパクト版）"""
+    card = widgets.create_card_frame(parent)
     
-    prompt_var = tk.StringVar()
-    prompt_combo = ttk.Combobox(prompt_select_frame, textvariable=prompt_var, state="readonly")
-    prompt_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
-    prompt_combo.bind("<<ComboboxSelected>>", app.load_selected_prompt)
+    # ヘッダー
+    header_frame = tk.Frame(card, bg=theme.colors['surface'])
+    header_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(CARD_PADDING, 5))
     
-    # プロンプト名編集
-    prompt_name_frame = ttk.Frame(prompt_frame)
-    prompt_name_frame.pack(fill=tk.X, pady=5)
+    header_label = tk.Label(
+        header_frame,
+        text=f"{ICONS['info']} 今月使用量（概算）",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface']
+    )
+    header_label.pack(side=tk.LEFT)
     
-    ttk.Label(prompt_name_frame, text="名前:").pack(side=tk.LEFT, padx=(0, 5))
-    prompt_name_var = tk.StringVar()
-    prompt_name_entry = ttk.Entry(prompt_name_frame, textvariable=prompt_name_var)
-    prompt_name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    # 更新ボタン
+    refresh_btn = widgets.create_button(
+        header_frame, "更新", 'Secondary',
+        command=app.update_usage_display
+    )
+    refresh_btn.pack(side=tk.RIGHT)
     
-    # プロンプト編集エリア
-    prompt_text = scrolledtext.ScrolledText(prompt_frame, wrap=tk.WORD, height=10)
-    prompt_text.pack(fill=tk.BOTH, expand=True, pady=5)
+    # 使用量情報を縦に2行で表示
+    stats_frame = tk.Frame(card, bg=theme.colors['surface'])
+    stats_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 5))
     
-    # プロンプト操作ボタン
-    prompt_buttons = ttk.Frame(prompt_frame)
-    prompt_buttons.pack(fill=tk.X, pady=5)
+    # 1行目：処理回数とトークン数
+    row1_frame = tk.Frame(stats_frame, bg=theme.colors['surface'])
+    row1_frame.pack(fill=tk.X, pady=(0, 3))
     
-    ttk.Button(prompt_buttons, text="保存", command=app.save_current_prompt).pack(side=tk.LEFT, padx=5)
-    ttk.Button(prompt_buttons, text="新規作成", command=app.create_new_prompt).pack(side=tk.LEFT, padx=5)
-    ttk.Button(prompt_buttons, text="削除", command=app.delete_current_prompt).pack(side=tk.LEFT, padx=5)
+    sessions_text = tk.Label(
+        row1_frame,
+        text="回数: 0回",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface']
+    )
+    sessions_text.pack(side=tk.LEFT)
     
-    # UIコンポーネントを返す
-    ui_elements = {
-        'api_entry': api_entry,
-        'drop_area': drop_area,
-        'file_label': file_label,
-        'progress': progress,
-        'status_label': status_label,
-        'history_tree': history_tree,
-        'prompt_var': prompt_var,
-        'prompt_combo': prompt_combo,
-        'prompt_name_var': prompt_name_var,
-        'prompt_text': prompt_text,
-        'selected_file_label': selected_file_label,
-        'process_var': process_var,
-        'process_combo': process_combo,
-        'process_button': process_button,
-        'log_text': log_text
+    tokens_text = tk.Label(
+        row1_frame,
+        text="トークン: 0",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface']
+    )
+    tokens_text.pack(side=tk.RIGHT)
+    
+    # 2行目：料金
+    row2_frame = tk.Frame(stats_frame, bg=theme.colors['surface'])
+    row2_frame.pack(fill=tk.X, pady=(0, CARD_PADDING))
+    
+    cost_usd_text = tk.Label(
+        row2_frame,
+        text="$0.00",
+        font=theme.fonts['caption'],
+        fg=theme.colors['success'],
+        bg=theme.colors['surface']
+    )
+    cost_usd_text.pack(side=tk.LEFT)
+    
+    cost_jpy_text = tk.Label(
+        row2_frame,
+        text="¥0",
+        font=theme.fonts['caption'],
+        fg=theme.colors['success'],
+        bg=theme.colors['surface']
+    )
+    cost_jpy_text.pack(side=tk.RIGHT)
+    
+    # UI要素をカードに保存
+    card.sessions_value = sessions_text
+    card.tokens_value = tokens_text
+    card.cost_usd_value = cost_usd_text
+    card.cost_jpy_value = cost_jpy_text
+    
+    return card
+
+
+def create_log_section(parent, app, theme, widgets):
+    """処理ログセクションの作成"""
+    card = widgets.create_card_frame(parent)
+    
+    # ヘッダー
+    header = tk.Label(
+        card,
+        text=f"{ICONS['text']} 処理ログ",
+        font=theme.fonts['subheading'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface']
+    )
+    header.pack(anchor='w', padx=CARD_PADDING, pady=(CARD_PADDING, 10))
+    
+    # ログテキスト
+    log_text = scrolledtext.ScrolledText(
+        card,
+        wrap=tk.WORD,
+        font=theme.fonts['monospace'],
+        bg=theme.colors['surface'],
+        fg=theme.colors['text_primary'],
+        insertbackground=theme.colors['primary'],
+        selectbackground=theme.colors['primary'],
+        selectforeground=theme.colors['text_on_primary'],
+        relief='flat',
+        borderwidth=0,
+        height=10
+    )
+    log_text.pack(fill=tk.BOTH, expand=True, padx=CARD_PADDING, pady=(0, CARD_PADDING))
+    log_text.config(state=tk.DISABLED)
+    
+    card.log_text = log_text
+    
+    return card
+
+
+def setup_drag_drop(drop_area, drop_label, app):
+    """ドラッグ&ドロップ機能の設定"""
+    try:
+        from tkinterdnd2 import DND_FILES, TkinterDnD
+        
+        if isinstance(app.root, TkinterDnD.Tk):
+            drop_area.drop_target_register(DND_FILES)
+            drop_area.dnd_bind('<<Drop>>', lambda e: app.load_file(e.data.strip('{}').replace('\\', '/')))
+        else:
+            print("警告: ドラッグ&ドロップを有効にするには、ルートウィンドウをTkinterDnD.Tkとして作成する必要があります")
+    except ImportError:
+        print("警告: tkinterdnd2が見つかりません。ドラッグ&ドロップ機能は無効です。")
+    except Exception as e:
+        print(f"ドラッグ&ドロップの設定中にエラーが発生しました: {str(e)}")
+
+
+def collect_ui_elements(api_section, file_section, usage_section, history_section, log_section):
+    """UI要素を収集して辞書として返す"""
+    return {
+        'api_entry': api_section.api_entry,
+        'api_status': api_section.api_status,
+        'model_label': api_section.model_label,
+        'drop_area': file_section.drop_area,
+        'file_label': file_section.file_label,
+        'status_label': file_section.status_label,
+        'progress': file_section.progress,
+        'usage_sessions': usage_section.sessions_value,
+        'usage_tokens': usage_section.tokens_value,
+        'usage_cost_usd': usage_section.cost_usd_value,
+        'usage_cost_jpy': usage_section.cost_jpy_value,
+        'history_tree': history_section.history_tree,
+        'log_text': log_section.log_text
     }
-    
-    # ステータスラベルを先に設定
-    app.ui_elements = {'status_label': status_label}
-    
-    return ui_elements
