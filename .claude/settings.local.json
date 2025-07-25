@@ -6,7 +6,9 @@
       "Bash(grep:*)",
       "Bash(rg:*)",
       "Bash(rm:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Bash(pip install:*)",
+      "Bash(ffmpeg:*)"
     ],
     "deny": []
   }

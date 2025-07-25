@@ -3,6 +3,7 @@
 
 import os
 import re
+import json
 import datetime
 import google.generativeai as genai
 
@@ -24,6 +25,7 @@ from .audio_processor import AudioProcessor
 from .api_utils import ApiUtils
 from .text_merger import EnhancedTextMerger
 from .utils import get_timestamp, format_duration, calculate_gemini_cost, format_token_usage
+from .logger import logger
 
 class FileProcessor:
     """音声/動画ファイルの処理を行うクラス"""
@@ -63,7 +65,7 @@ class FileProcessor:
         start_time = datetime.datetime.now()
         
         def update_status(message):
-            print(message)
+            logger.info(message)
             if status_callback:
                 status_callback(message)
         
@@ -87,6 +89,7 @@ class FileProcessor:
             return output_path
             
         except Exception as e:
+            logger.error(f"処理エラー: {str(e)}", exc_info=True)
             update_status(f"処理エラー: {str(e)}")
             raise FileProcessingError(f"ファイル処理に失敗しました: {str(e)}")
     
@@ -97,6 +100,7 @@ class FileProcessor:
         audio_duration_sec = self.audio_processor.get_audio_duration(input_file)
         duration_str = format_duration(audio_duration_sec) if audio_duration_sec else "不明"
         
+        logger.info(f"音声ファイル準備開始: {os.path.basename(input_file)}, サイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
         update_status(f"処理開始: ファイルサイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
         
         # 音声変換
@@ -133,8 +137,10 @@ class FileProcessor:
         )
         
         if needs_split:
+            logger.info(f"ファイル分割処理を実行: サイズ={file_size_mb:.2f}MB, 長さ={audio_duration_sec}s")
             return self._perform_segmented_transcription(audio_path, api_key, update_status, preferred_model)
         else:
+            logger.info(f"単一ファイル処理を実行: サイズ={file_size_mb:.2f}MB")
             return self._perform_single_transcription(audio_path, api_key, update_status, preferred_model)
     
     def _perform_single_transcription(self, audio_path, api_key, update_status, preferred_model=None):
@@ -201,6 +207,7 @@ class FileProcessor:
         segment_transcriptions = []
         segment_info = []
         segment_costs = []
+        segment_errors = []  # エラー情報を記録
         
         try:
             for i, segment_file in enumerate(segment_files):
@@ -220,6 +227,13 @@ class FileProcessor:
                 
                 segment_transcriptions.append(segment_transcription)
                 
+                # エラーチェックと記録
+                if "処理エラー" in segment_transcription:
+                    segment_errors.append({
+                        'segment_index': i+1,
+                        'error_text': segment_transcription
+                    })
+                
                 # セグメント情報を記録（将来の拡張用）
                 segment_info.append({
                     'segment_index': i,
@@ -230,6 +244,28 @@ class FileProcessor:
         finally:
             # セグメントファイルをクリーンアップ
             self._cleanup_segments(segment_files, audio_path)
+            
+            # エラーサマリーを記録
+            if segment_errors:
+                error_summary = {
+                    'total_segments': len(segment_files),
+                    'failed_segments': len(segment_errors),
+                    'success_segments': len(segment_files) - len(segment_errors),
+                    'errors': segment_errors
+                }
+                logger.warning(f"セグメント処理エラーサマリー: {json.dumps(error_summary, ensure_ascii=False)}")
+                
+                # エラーサマリーをファイルに保存
+                error_summary_path = os.path.join(
+                    os.path.dirname(audio_path),
+                    f"transcription_errors_{get_timestamp()}.json"
+                )
+                try:
+                    with open(error_summary_path, 'w', encoding='utf-8') as f:
+                        json.dump(error_summary, f, ensure_ascii=False, indent=2)
+                    logger.info(f"エラーサマリーを保存: {error_summary_path}")
+                except Exception as e:
+                    logger.error(f"エラーサマリーの保存に失敗: {str(e)}")
         
         # セグメントごとのコスト情報を集計
         if segment_costs:
@@ -313,7 +349,43 @@ class FileProcessor:
             return response.text.strip(), segment_cost_info
             
         except Exception as e:
-            return f"[セグメント {segment_num} 処理エラー: {str(e)}]", None
+            # エラーの詳細情報を記録
+            error_details = {
+                'segment_num': segment_num,
+                'total_segments': total_segments,
+                'segment_file': segment_file,
+                'error_type': type(e).__name__,
+                'error_message': str(e),
+                'model': model_name
+            }
+            
+            # エラーの種類によって詳細メッセージを作成
+            if 'rate limit' in str(e).lower() or '429' in str(e):
+                error_msg = f"APIレート制限エラー"
+            elif 'timeout' in str(e).lower():
+                error_msg = f"タイムアウトエラー"
+            elif 'network' in str(e).lower() or 'connection' in str(e).lower():
+                error_msg = f"ネットワークエラー"
+            elif 'authentication' in str(e).lower() or '401' in str(e) or '403' in str(e):
+                error_msg = f"認証エラー"
+            else:
+                error_msg = f"{type(e).__name__}"
+            
+            # エラー情報をファイルに保存（デバッグ用）
+            error_log_path = os.path.join(
+                os.path.dirname(segment_file), 
+                f"segment_{segment_num}_error.log"
+            )
+            try:
+                with open(error_log_path, 'w', encoding='utf-8') as f:
+                    import json
+                    json.dump(error_details, f, ensure_ascii=False, indent=2)
+            except:
+                pass
+            
+            logger.error(f"セグメント {segment_num} 処理エラー: {error_msg} - {str(e)}")
+            logger.debug(f"エラー詳細: {json.dumps(error_details, ensure_ascii=False)}")
+            return f"[セグメント {segment_num} 処理エラー: {error_msg} - {str(e)}]", None
     
     def _cleanup_segments(self, segment_files, original_audio_path):
         """セグメントファイルをクリーンアップ"""
@@ -399,7 +471,7 @@ class FileProcessor:
         start_time = datetime.datetime.now()
         
         def update_status(message):
-            print(message)
+            logger.info(message)
             if status_callback:
                 status_callback(message)
         
