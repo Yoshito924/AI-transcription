@@ -74,8 +74,16 @@ class TranscriptionApp:
         # ウィンドウのジオメトリを保存
         self.config.save_window_geometry(self.root)
         
-        # APIキーを保存
+        # 設定を保存
         self.config.set("api_key", self.api_key.get())
+        
+        # エンジン選択とWhisperモデル選択を保存
+        if hasattr(self, 'ui_elements'):
+            if 'engine_var' in self.ui_elements:
+                self.config.set("transcription_engine", self.ui_elements['engine_var'].get())
+            if 'whisper_model_var' in self.ui_elements:
+                self.config.set("whisper_model", self.ui_elements['whisper_model_var'].get())
+        
         self.config.save()
         
         # アプリケーションを終了
@@ -91,32 +99,66 @@ class TranscriptionApp:
     
     def check_api_connection(self):
         """API接続を確認"""
-        api_key = self.api_key.get().strip()
-        if not api_key:
-            messagebox.showerror("エラー", "APIキーを入力してください。")
-            return
+        # エンジンの確認
+        engine = self.ui_elements.get('engine_var', None)
+        engine_value = engine.get() if engine else 'gemini'
         
-        self.controller.update_status("API接続を確認中...")
-        self.root.update_idletasks()
-        
-        try:
-            result = self.processor.test_api_connection(api_key)
+        if engine_value == 'whisper':
+            # Whisperモードの場合は利用可能性を確認
+            self.controller.update_status("Whisper利用可能性を確認中...")
+            self.root.update_idletasks()
             
-            # 使用モデルを表示
-            if 'model_label' in self.ui_elements:
-                self.ui_elements['model_label'].config(text=result)
+            try:
+                is_available, message = self.processor.whisper_service.test_whisper_availability()
+                
+                if is_available:
+                    device_info = self.processor.whisper_service.get_device_info()
+                    if 'model_label' in self.ui_elements:
+                        self.ui_elements['model_label'].config(text=f"Whisper ({device_info})")
+                    
+                    messagebox.showinfo("成功", f"Whisperが利用可能です！\n{message}")
+                    self.controller.update_status(f"Whisper利用可能: {device_info}")
+                else:
+                    raise Exception(message)
+                    
+            except Exception as e:
+                messagebox.showerror("エラー", f"Whisperエラー: {str(e)}")
+                self.controller.update_status("Whisperエラー")
+                if 'model_label' in self.ui_elements:
+                    self.ui_elements['model_label'].config(text="Whisperエラー")
+        else:
+            # Geminiモードの場合は従来通り
+            api_key = self.api_key.get().strip()
+            if not api_key:
+                messagebox.showerror("エラー", "APIキーを入力してください。")
+                return
             
-            # 設定を保存
-            self.config.set("api_key", api_key)
-            self.config.save()
+            self.controller.update_status("API接続を確認中...")
+            self.root.update_idletasks()
             
-            messagebox.showinfo("成功", f"Gemini APIへの接続に成功しました！\n使用モデル: {result}")
-            self.controller.update_status(f"API接続確認完了 - モデル: {result}")
-        except Exception as e:
-            messagebox.showerror("エラー", f"API接続エラー: {str(e)}")
-            self.controller.update_status("API接続エラー")
-            if 'model_label' in self.ui_elements:
-                self.ui_elements['model_label'].config(text="接続エラー")
+            try:
+                result = self.processor.test_api_connection(api_key)
+                
+                # 使用モデルを表示
+                if 'model_label' in self.ui_elements:
+                    self.ui_elements['model_label'].config(text=result)
+                
+                # 設定を保存
+                self.config.set("api_key", api_key)
+                # エンジン設定も同時に保存
+                if 'engine_var' in self.ui_elements:
+                    self.config.set("transcription_engine", self.ui_elements['engine_var'].get())
+                if 'whisper_model_var' in self.ui_elements:
+                    self.config.set("whisper_model", self.ui_elements['whisper_model_var'].get())
+                self.config.save()
+                
+                messagebox.showinfo("成功", f"Gemini APIへの接続に成功しました！\n使用モデル: {result}")
+                self.controller.update_status(f"API接続確認完了 - モデル: {result}")
+            except Exception as e:
+                messagebox.showerror("エラー", f"API接続エラー: {str(e)}")
+                self.controller.update_status("API接続エラー")
+                if 'model_label' in self.ui_elements:
+                    self.ui_elements['model_label'].config(text="接続エラー")
     
     def browse_file(self, event=None):
         """ファイル選択ダイアログを表示"""

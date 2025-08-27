@@ -23,6 +23,7 @@ from .exceptions import (
 )
 from .audio_processor import AudioProcessor
 from .api_utils import ApiUtils
+from .whisper_service import WhisperService
 from .text_merger import EnhancedTextMerger
 from .utils import get_timestamp, format_duration, calculate_gemini_cost, format_token_usage
 from .logger import logger
@@ -34,6 +35,7 @@ class FileProcessor:
         self.output_dir = output_dir
         self.audio_processor = AudioProcessor()
         self.api_utils = ApiUtils()
+        self.whisper_service = WhisperService()
         self.text_merger = EnhancedTextMerger(
             overlap_threshold=SEGMENT_MERGE_CONFIG['overlap_threshold'],
             min_overlap_words=SEGMENT_MERGE_CONFIG['min_overlap_words'],
@@ -60,7 +62,8 @@ class FileProcessor:
         files.sort(key=lambda x: x[3], reverse=True)
         return files
     
-    def process_file(self, input_file, process_type, api_key, prompts, status_callback=None, preferred_model=None):
+    def process_file(self, input_file, process_type, api_key, prompts, status_callback=None, 
+                    preferred_model=None, engine='gemini', whisper_model='base'):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
         
@@ -73,8 +76,11 @@ class FileProcessor:
             # 音声ファイルの準備
             audio_path = self._prepare_audio_file(input_file, update_status)
             
-            # 文字起こし実行
-            transcription = self._perform_transcription(audio_path, api_key, update_status, preferred_model)
+            # 文字起こし実行（エンジンに応じて分岐）
+            if engine == 'whisper':
+                transcription = self._perform_whisper_transcription(audio_path, update_status, whisper_model)
+            else:
+                transcription = self._perform_transcription(audio_path, api_key, update_status, preferred_model)
             
             # 追加処理（必要な場合）
             final_text = self._perform_additional_processing(
@@ -142,6 +148,22 @@ class FileProcessor:
         else:
             logger.info(f"単一ファイル処理を実行: サイズ={file_size_mb:.2f}MB")
             return self._perform_single_transcription(audio_path, api_key, update_status, preferred_model)
+    
+    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='base'):
+        """Whisperを使用した文字起こしを実行"""
+        # ファイルサイズと長さをチェック
+        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
+        
+        # Whisperは大きいファイルも処理できるが、長時間の音声は分割した方が安定
+        needs_split = audio_duration_sec and audio_duration_sec > MAX_AUDIO_DURATION_SEC
+        
+        if needs_split:
+            logger.info(f"Whisper分割処理を実行: 長さ={audio_duration_sec}s")
+            return self._perform_whisper_segmented_transcription(audio_path, update_status, whisper_model)
+        else:
+            logger.info(f"Whisper単一ファイル処理を実行: サイズ={file_size_mb:.2f}MB")
+            return self._perform_whisper_single_transcription(audio_path, update_status, whisper_model)
     
     def _perform_single_transcription(self, audio_path, api_key, update_status, preferred_model=None):
         """単一ファイルの文字起こし"""
@@ -387,6 +409,89 @@ class FileProcessor:
             logger.debug(f"エラー詳細: {json.dumps(error_details, ensure_ascii=False)}")
             return f"[セグメント {segment_num} 処理エラー: {error_msg} - {str(e)}]", None
     
+    def _perform_whisper_single_transcription(self, audio_path, update_status, whisper_model='base'):
+        """Whisperを使用した単一ファイルの文字起こし"""
+        update_status(f"Whisperで文字起こし中... (モデル: {whisper_model})")
+        
+        try:
+            # Whisperで文字起こし
+            text, metadata = self.whisper_service.transcribe(
+                audio_path, 
+                model_name=whisper_model,
+                language='ja'
+            )
+            
+            # メタデータ情報を表示
+            duration = metadata.get('duration', 0)
+            segments = metadata.get('segments', 0)
+            device = metadata.get('device', 'CPU')
+            
+            update_status(
+                f"Whisper文字起こし完了: "
+                f"長さ={format_duration(duration)}, "
+                f"セグメント数={segments}, "
+                f"デバイス={device}"
+            )
+            
+            return text
+            
+        except Exception as e:
+            logger.error(f"Whisper文字起こしエラー: {str(e)}")
+            raise TranscriptionError(f"Whisper文字起こしに失敗しました: {str(e)}")
+    
+    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model='base'):
+        """Whisperを使用した分割ファイルの文字起こし"""
+        update_status(f"音声が長いため、分割してWhisperで処理します (モデル: {whisper_model})")
+        
+        # 音声を分割
+        segment_files = self.audio_processor.split_audio(audio_path, callback=update_status)
+        if not segment_files:
+            raise AudioProcessingError("音声ファイルの分割に失敗しました")
+        
+        update_status(f"{len(segment_files)}個のセグメントに分割しました")
+        
+        segment_transcriptions = []
+        segment_info = []
+        
+        try:
+            for i, segment_file in enumerate(segment_files):
+                update_status(f"セグメント {i+1}/{len(segment_files)} をWhisperで処理中")
+                
+                # Whisperでセグメントを文字起こし
+                text, metadata = self.whisper_service.transcribe_segment(
+                    segment_file, 
+                    segment_num=i+1,
+                    total_segments=len(segment_files),
+                    model_name=whisper_model,
+                    language='ja'
+                )
+                
+                segment_transcriptions.append(text)
+                
+                # セグメント情報を記録
+                segment_info.append({
+                    'segment_index': i,
+                    'total_segments': len(segment_files),
+                    'file_path': segment_file,
+                    'metadata': metadata
+                })
+        
+        finally:
+            # セグメントファイルをクリーンアップ
+            self._cleanup_segments(segment_files, audio_path)
+        
+        # スマート統合を実行
+        if SEGMENT_MERGE_CONFIG['enable_smart_merge']:
+            update_status("セグメントを統合中...")
+            merged_text = self.text_merger.merge_segments_with_context(
+                segment_transcriptions, segment_info
+            )
+            update_status("セグメント統合完了")
+            return merged_text
+        else:
+            # 従来の方法で結合
+            return "\n\n".join(segment_transcriptions)
+    
     def _cleanup_segments(self, segment_files, original_audio_path):
         """セグメントファイルをクリーンアップ"""
         for segment_file in segment_files:
@@ -403,6 +508,10 @@ class FileProcessor:
         
         if process_type not in prompts:
             raise FileProcessingError(f"指定された処理タイプ '{process_type}' はプロンプト設定に存在しません")
+        
+        # 追加処理はGeminiが必要
+        if not api_key:
+            raise ApiConnectionError("追加処理（要約・議事録作成など）にはGemini APIキーが必要です")
         
         process_name = prompts[process_type]["name"]
         genai.configure(api_key=api_key)

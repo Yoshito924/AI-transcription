@@ -30,9 +30,11 @@ class UsageTracker:
         }
     }
     
-    def __init__(self, data_dir: str):
-        self.data_dir = data_dir
-        self.usage_file = os.path.join(data_dir, 'usage_data.json')
+    def __init__(self, app_dir: str):
+        # dataフォルダに保存（個人データなのでgitignore対象）
+        self.data_dir = os.path.join(app_dir, 'data')
+        os.makedirs(self.data_dir, exist_ok=True)
+        self.usage_file = os.path.join(self.data_dir, 'usage_data.json')
         self.usage_data = self._load_usage_data()
     
     def _load_usage_data(self) -> Dict:

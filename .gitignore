@@ -31,9 +31,21 @@ ENV/
 *.swo
 
 # アプリケーション固有
-data/*
-config
+# 個人データとプライベート設定
+data/
+!data/.gitkeep
+config/
+!config/.gitkeep
+output/
+!output/.gitkeep
+
+# ユーザー固有のファイル
+usage_data.json
 config.json
 prompts.json
-output/*
 *.log
+
+# 一時ファイル
+temp/
+tmp/
+*.tmp

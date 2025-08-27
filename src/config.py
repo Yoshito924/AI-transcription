@@ -28,7 +28,9 @@ class Config:
             "window_height": DEFAULT_WINDOW_HEIGHT,
             "window_x": None,
             "window_y": None,
-            "api_key": ""
+            "api_key": "",
+            "transcription_engine": "gemini",  # "gemini" または "whisper"
+            "whisper_model": "base"  # "tiny", "base", "small", "medium", "large", "turbo"
         }
         
         # デフォルト値で埋める

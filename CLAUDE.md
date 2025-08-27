@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Japanese AI-powered transcription application that uses Google Gemini API to convert audio/video files to text with additional processing capabilities (meeting minutes, summarization, etc.).
+This is a Japanese AI-powered transcription application that supports two transcription engines:
+- **Google Gemini API**: Cloud-based, high-accuracy transcription with advanced processing capabilities
+- **OpenAI Whisper**: Local, free, offline transcription with multi-language support
 
 ## Development Commands
 
@@ -30,7 +32,10 @@ The application follows a clean, modular architecture with proper separation of 
 - **Application Layer**: `src/app.py` - Main application class, UI coordination
 - **Controller Layer**: `src/controllers.py` - Business logic, processing coordination  
 - **Service Layer**: `src/processor.py` - File processing orchestration
-- **Data Layer**: `src/audio_processor.py` - Audio manipulation, `src/api_utils.py` - API interactions
+- **Data Layer**: 
+  - `src/audio_processor.py` - Audio manipulation
+  - `src/api_utils.py` - Gemini API interactions
+  - `src/whisper_service.py` - Whisper transcription service
 
 ### Configuration & Utilities
 - **Constants**: `src/constants.py` - All application constants and configuration values
@@ -68,9 +73,15 @@ The application follows a clean, modular architecture with proper separation of 
 - **Error Handling**: Custom exceptions with proper error propagation
 - **Threading**: Background processing with proper UI updates via callbacks
 - **File Processing**: Modular pipeline with clear method separation
-- **API Integration**: Smart model selection with preference for flash models and optimized generation config
+- **API Integration**: 
+  - Gemini: Smart model selection with preference for flash models and optimized generation config
+  - Whisper: Local transcription with GPU/CPU detection and multiple model size options
 - **Text Merging**: Advanced text merger (`src/text_merger.py`) for intelligent segment combination
 - **Cross-platform**: Proper file path handling and utility functions
+- **Dual Engine Support**:
+  - User can select between Gemini (cloud) and Whisper (local) from UI
+  - Whisper models: tiny, base, small, medium, large
+  - Automatic GPU detection for faster Whisper processing
 
 ### AI Generation Configuration
 - **Temperature**: 0.1 (low temperature for stable, consistent outputs)

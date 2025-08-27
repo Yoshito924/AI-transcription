@@ -170,6 +170,110 @@ def create_file_section(parent, app, theme, widgets):
     )
     header.pack(anchor='w', padx=CARD_PADDING, pady=(CARD_PADDING, 10))
     
+    # エンジン選択フレーム
+    engine_frame = tk.Frame(card, bg=theme.colors['surface'])
+    engine_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    
+    engine_label = tk.Label(
+        engine_frame,
+        text="文字起こしエンジン:",
+        font=theme.fonts['body'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    )
+    engine_label.pack(side=tk.LEFT, padx=(0, 10))
+    
+    # エンジン選択ラジオボタン（設定から初期値を取得）
+    saved_engine = app.config.get("transcription_engine", "gemini")
+    engine_var = tk.StringVar(value=saved_engine)
+    
+    gemini_radio = ttk.Radiobutton(
+        engine_frame,
+        text="Gemini (クラウド/高精度)",
+        variable=engine_var,
+        value="gemini",
+        style='Modern.TRadiobutton'
+    )
+    gemini_radio.pack(side=tk.LEFT, padx=(0, 15))
+    
+    whisper_radio = ttk.Radiobutton(
+        engine_frame,
+        text="Whisper (ローカル/無料)",
+        variable=engine_var,
+        value="whisper",
+        style='Modern.TRadiobutton'
+    )
+    whisper_radio.pack(side=tk.LEFT)
+    
+    # Whisperモデル選択（Whisperが選択された時のみ有効）
+    whisper_model_frame = tk.Frame(card, bg=theme.colors['surface'])
+    whisper_model_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    
+    whisper_model_label = tk.Label(
+        whisper_model_frame,
+        text="Whisperモデル:",
+        font=theme.fonts['body'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    )
+    whisper_model_label.pack(side=tk.LEFT, padx=(0, 10))
+    
+    # Whisperモデル選択（設定から初期値を取得）
+    saved_whisper_model = app.config.get("whisper_model", "base")
+    whisper_model_var = tk.StringVar(value=saved_whisper_model)
+    whisper_model_combo = ttk.Combobox(
+        whisper_model_frame,
+        textvariable=whisper_model_var,
+        values=['tiny', 'base', 'small', 'medium', 'large', 'turbo'],
+        state='readonly',
+        width=15,
+        style='Modern.TCombobox'
+    )
+    whisper_model_combo.pack(side=tk.LEFT, padx=(0, 10))
+    
+    # モデル説明
+    whisper_model_info = tk.Label(
+        whisper_model_frame,
+        text="バランス型（推奨）",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    )
+    whisper_model_info.pack(side=tk.LEFT)
+    
+    # エンジン変更時の処理
+    def on_engine_change():
+        is_whisper = engine_var.get() == "whisper"
+        whisper_model_combo.config(state='readonly' if is_whisper else 'disabled')
+        whisper_model_label.config(fg=theme.colors['text_secondary'] if is_whisper else theme.colors['text_disabled'])
+        whisper_model_info.config(fg=theme.colors['text_secondary'] if is_whisper else theme.colors['text_disabled'])
+        
+        # 設定を保存
+        app.config.set("transcription_engine", engine_var.get())
+        app.config.save()
+    
+    # モデル変更時の説明更新
+    def on_model_change(event=None):
+        model_descriptions = {
+            'tiny': '最小・最速（低精度）',
+            'base': 'バランス型（推奨）',
+            'small': '中程度の精度',
+            'medium': '高精度',
+            'large': '最高精度（処理時間が長い）',
+            'turbo': '高速版（large-v3最適化）'
+        }
+        whisper_model_info.config(text=model_descriptions.get(whisper_model_var.get(), ''))
+        
+        # 設定を保存
+        app.config.set("whisper_model", whisper_model_var.get())
+        app.config.save()
+    
+    engine_var.trace('w', lambda *args: on_engine_change())
+    whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
+    
+    # 初期状態の設定
+    on_engine_change()
+    
     # ドラッグ&ドロップエリア
     drop_area, drop_label = widgets.create_drag_drop_area(
         card,
@@ -236,6 +340,9 @@ def create_file_section(parent, app, theme, widgets):
     card.file_label = file_label
     card.status_label = status_label
     card.progress = progress
+    card.engine_var = engine_var
+    card.whisper_model_var = whisper_model_var
+    card.whisper_model_combo = whisper_model_combo
     
     return card
 
@@ -463,6 +570,9 @@ def collect_ui_elements(api_section, file_section, usage_section, history_sectio
         'file_label': file_section.file_label,
         'status_label': file_section.status_label,
         'progress': file_section.progress,
+        'engine_var': file_section.engine_var,
+        'whisper_model_var': file_section.whisper_model_var,
+        'whisper_model_combo': file_section.whisper_model_combo,
         'usage_sessions': usage_section.sessions_value,
         'usage_tokens': usage_section.tokens_value,
         'usage_cost_usd': usage_section.cost_usd_value,

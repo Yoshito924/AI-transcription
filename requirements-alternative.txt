@@ -1,0 +1,5 @@
+google-generativeai>=0.3.0
+tkinterdnd2>=0.3.0
+# 軽量なWhisper実装（Python 3.13対応）
+faster-whisper>=0.10.0
+numpy
