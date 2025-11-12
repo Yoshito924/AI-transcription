@@ -27,7 +27,11 @@ from .api_utils import ApiUtils
 from .whisper_service import WhisperService
 from .text_merger import EnhancedTextMerger
 from .audio_cache import AudioCacheManager
-from .utils import get_timestamp, format_duration, calculate_gemini_cost, format_token_usage
+from .utils import (
+    get_timestamp, format_duration, calculate_gemini_cost, format_token_usage,
+    get_file_size_mb, get_file_size_kb, format_process_time,
+    extract_usage_metadata, process_usage_metadata
+)
 from .logger import logger
 
 class FileProcessor:
@@ -188,7 +192,7 @@ class FileProcessor:
             (audio_path, segment_files, from_cache) のタプル
         """
         # 元のファイル情報を取得
-        original_size_mb = os.path.getsize(input_file) / (1024 * 1024)
+        original_size_mb = get_file_size_mb(input_file)
         audio_duration_sec = self.audio_processor.get_audio_duration(input_file)
         duration_str = format_duration(audio_duration_sec) if audio_duration_sec else "不明"
 
@@ -212,7 +216,7 @@ class FileProcessor:
         audio_path = self.audio_processor.convert_audio(input_file)
 
         # 長時間音声や大容量ファイルは分割が必要かチェック
-        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        file_size_mb = get_file_size_mb(audio_path)
         needs_split = (
             file_size_mb > MAX_AUDIO_SIZE_MB or
             (audio_duration_sec and audio_duration_sec > MAX_AUDIO_DURATION_SEC)
@@ -257,7 +261,7 @@ class FileProcessor:
             )
 
         # ファイルサイズと長さを再チェック
-        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        file_size_mb = get_file_size_mb(audio_path)
         audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
 
         needs_split = (
@@ -282,7 +286,7 @@ class FileProcessor:
             )
 
         # ファイルサイズと長さをチェック
-        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        file_size_mb = get_file_size_mb(audio_path)
         audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
 
         # Whisperは大きいファイルも処理できるが、長時間の音声は分割した方が安定
@@ -340,18 +344,12 @@ class FileProcessor:
             raise TranscriptionError("文字起こし結果が空でした")
 
         # トークン使用量と料金を計算・表示
-        if hasattr(response, 'usage_metadata') and response.usage_metadata:
-            usage = response.usage_metadata
-            input_tokens = getattr(usage, 'prompt_token_count', 0)
-            output_tokens = getattr(usage, 'candidates_token_count', 0)
-
-            # 音声入力のため is_audio_input=True、Gemini 1.5の場合は秒数も渡す
-            cost_info = calculate_gemini_cost(
-                model_name, input_tokens, output_tokens,
-                is_audio_input=True, audio_duration_seconds=audio_duration_sec
-            )
-            usage_text = format_token_usage(cost_info)
-            update_status(f"トークン使用量: {usage_text}")
+        process_usage_metadata(
+            response, model_name,
+            is_audio_input=True,
+            audio_duration_seconds=audio_duration_sec,
+            update_status=update_status
+        )
 
         return response.text
     
@@ -541,12 +539,9 @@ class FileProcessor:
                 raise TranscriptionError(f"セグメント {segment_num} の文字起こし結果が空でした")
 
             # トークン使用量を記録（セグメント処理では表示は控えめに）
+            input_tokens, output_tokens = extract_usage_metadata(response)
             segment_cost_info = None
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                usage = response.usage_metadata
-                input_tokens = getattr(usage, 'prompt_token_count', 0)
-                output_tokens = getattr(usage, 'candidates_token_count', 0)
-                # Gemini 1.5の場合は秒数も渡す
+            if input_tokens is not None and output_tokens is not None:
                 segment_cost_info = calculate_gemini_cost(
                     model_name, input_tokens, output_tokens,
                     is_audio_input=True, audio_duration_seconds=segment_duration_sec
@@ -769,15 +764,14 @@ class FileProcessor:
             raise TranscriptionError(f"{process_name}の生成に失敗しました")
         
         # トークン使用量と料金を計算・表示（テキスト処理）
-        if hasattr(response, 'usage_metadata') and response.usage_metadata:
-            usage = response.usage_metadata
-            input_tokens = getattr(usage, 'prompt_token_count', 0)
-            output_tokens = getattr(usage, 'candidates_token_count', 0)
-            
-            # テキスト処理のため is_audio_input=False
-            cost_info = calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_input=False)
-            usage_text = format_token_usage(cost_info)
-            update_status(f"{process_name}トークン使用量: {usage_text}")
+        def update_usage_status(message):
+            update_status(f"{process_name}{message}")
+        
+        process_usage_metadata(
+            response, model_name,
+            is_audio_input=False,
+            update_status=update_usage_status
+        )
         
         return response.text
     
@@ -800,11 +794,8 @@ class FileProcessor:
         
         # 処理完了のログ
         end_time = datetime.datetime.now()
-        process_time = end_time - start_time
-        process_seconds = process_time.total_seconds()
-        process_time_str = f"{int(process_seconds // 60)}分{int(process_seconds % 60)}秒"
-        
-        output_size_kb = os.path.getsize(output_path) / 1024
+        process_time_str = format_process_time(start_time, end_time)
+        output_size_kb = get_file_size_kb(output_path)
         update_status(
             f"処理完了: {output_filename}\n"
             f"- 処理時間: {process_time_str}\n"
@@ -824,7 +815,7 @@ class FileProcessor:
         
         try:
             # 文字起こしファイルを読み込み
-            file_size_kb = os.path.getsize(transcription_file) / 1024
+            file_size_kb = get_file_size_kb(transcription_file)
             update_status(f"文字起こしファイル（{file_size_kb:.1f}KB）を読み込み中...")
             
             with open(transcription_file, 'r', encoding='utf-8') as f:
@@ -879,11 +870,8 @@ class FileProcessor:
             
             # 処理完了のログ
             end_time = datetime.datetime.now()
-            process_time = end_time - start_time
-            process_seconds = process_time.total_seconds()
-            process_time_str = f"{int(process_seconds // 60)}分{int(process_seconds % 60)}秒"
-            
-            output_size_kb = os.path.getsize(output_path) / 1024
+            process_time_str = format_process_time(start_time, end_time)
+            output_size_kb = get_file_size_kb(output_path)
             update_status(
                 f"処理完了: {os.path.basename(output_path)}\n"
                 f"- 元ファイルサイズ: {file_size_kb:.1f}KB\n"

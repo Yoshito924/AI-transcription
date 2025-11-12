@@ -18,7 +18,7 @@ from .constants import (
     SEGMENT_DURATION_SEC
 )
 from .exceptions import AudioProcessingError
-from .utils import format_duration
+from .utils import format_duration, get_file_size_mb
 
 class AudioProcessor:
     """音声ファイルの処理を行うクラス"""
@@ -182,7 +182,7 @@ class AudioProcessor:
             return None
         
         # 入力ファイルサイズを取得
-        input_size_mb = os.path.getsize(input_file_path) / (1024 * 1024)
+        input_size_mb = get_file_size_mb(input_file_path)
         
         # 音声の長さを取得
         audio_duration_sec = self.get_audio_duration(input_file_path)
@@ -264,7 +264,7 @@ class AudioProcessor:
                     return None
                 
                 # 圧縮結果を確認
-                output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                output_size_mb = get_file_size_mb(output_path)
                 compression_ratio = ((current_size_mb - output_size_mb) / current_size_mb * 100)
                 update_status(f"圧縮結果: 新サイズ={output_size_mb:.2f}MB (圧縮率={compression_ratio:.2f}%)")
                 

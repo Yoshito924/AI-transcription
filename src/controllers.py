@@ -12,15 +12,16 @@ import datetime
 from tkinter import messagebox
 
 from .constants import (
-    STATUS_MESSAGE_MAX_LENGTH, 
+    STATUS_MESSAGE_MAX_LENGTH,
     FILE_NAME_DISPLAY_MAX_LENGTH
 )
 from .exceptions import (
-    TranscriptionError, 
-    AudioProcessingError, 
-    ApiConnectionError, 
+    TranscriptionError,
+    AudioProcessingError,
+    ApiConnectionError,
     FileProcessingError
 )
+from .utils import get_file_size_mb
 
 
 class TranscriptionController:
@@ -100,8 +101,7 @@ class TranscriptionController:
                 self.update_status("ファイル読み込み完了")
                 
                 # ファイルサイズをチェック
-                file_size = os.path.getsize(file_path)
-                size_mb = file_size / (1024 * 1024)
+                size_mb = get_file_size_mb(file_path)
                 self.add_log(f"ファイルサイズ: {size_mb:.1f} MB")
             else:
                 raise FileProcessingError("ファイルが見つかりません")
@@ -215,7 +215,7 @@ class TranscriptionController:
         # Geminiの場合のみ使用量を記録
         if engine_value == 'gemini':
             try:
-                file_size_mb = os.path.getsize(self.current_file) / (1024 * 1024) if self.current_file else 0
+                file_size_mb = get_file_size_mb(self.current_file) if self.current_file else 0.0
                 filename = os.path.basename(self.current_file) if self.current_file else "unknown"
 
                 # 音声時間とファイルサイズから概算トークン数を推定
@@ -246,7 +246,7 @@ class TranscriptionController:
 
             # ファイルサイズ情報を記録
             try:
-                file_size_mb = os.path.getsize(self.current_file) / (1024 * 1024) if self.current_file else 0
+                file_size_mb = get_file_size_mb(self.current_file) if self.current_file else 0.0
                 self.add_log(f"処理ファイルサイズ: {file_size_mb:.2f}MB")
             except Exception as e:
                 print(f"ファイルサイズ取得エラー: {e}")

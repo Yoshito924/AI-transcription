@@ -234,3 +234,98 @@ def format_token_usage(cost_info):
         yen_display = f"（約{yen_cost:.3f}円）"
     
     return f"{token_display} / {cost_display} {yen_display}"
+
+
+def get_file_size_mb(file_path):
+    """ファイルサイズをMBで取得する
+    
+    Args:
+        file_path: ファイルパス
+        
+    Returns:
+        float: ファイルサイズ（MB）
+    """
+    if not file_path or not os.path.exists(file_path):
+        return 0.0
+    return os.path.getsize(file_path) / (1024 * 1024)
+
+
+def get_file_size_kb(file_path):
+    """ファイルサイズをKBで取得する
+    
+    Args:
+        file_path: ファイルパス
+        
+    Returns:
+        float: ファイルサイズ（KB）
+    """
+    if not file_path or not os.path.exists(file_path):
+        return 0.0
+    return os.path.getsize(file_path) / 1024
+
+
+def format_process_time(start_time, end_time):
+    """処理時間をフォーマットする
+    
+    Args:
+        start_time: 開始時刻（datetime）
+        end_time: 終了時刻（datetime）
+        
+    Returns:
+        str: フォーマットされた処理時間（例: "5分30秒"）
+    """
+    process_time = end_time - start_time
+    process_seconds = process_time.total_seconds()
+    minutes = int(process_seconds // 60)
+    seconds = int(process_seconds % 60)
+    return f"{minutes}分{seconds}秒"
+
+
+def extract_usage_metadata(response):
+    """レスポンスからトークン使用量を抽出する
+    
+    Args:
+        response: Gemini APIのレスポンス
+        
+    Returns:
+        tuple: (input_tokens, output_tokens) または (None, None)
+    """
+    if not hasattr(response, 'usage_metadata') or not response.usage_metadata:
+        return None, None
+    
+    usage = response.usage_metadata
+    input_tokens = getattr(usage, 'prompt_token_count', 0)
+    output_tokens = getattr(usage, 'candidates_token_count', 0)
+    return input_tokens, output_tokens
+
+
+def process_usage_metadata(response, model_name, is_audio_input=False, 
+                           audio_duration_seconds=None, update_status=None):
+    """トークン使用量を処理して表示する
+    
+    Args:
+        response: Gemini APIのレスポンス
+        model_name: モデル名
+        is_audio_input: 音声入力かどうか
+        audio_duration_seconds: 音声の長さ（秒）
+        update_status: ステータス更新用コールバック関数
+        
+    Returns:
+        dict: コスト情報（トークン使用量がない場合はNone）
+    """
+    input_tokens, output_tokens = extract_usage_metadata(response)
+    
+    if input_tokens is None or output_tokens is None:
+        return None
+    
+    cost_info = calculate_gemini_cost(
+        model_name, input_tokens, output_tokens,
+        is_audio_input=is_audio_input,
+        audio_duration_seconds=audio_duration_seconds
+    )
+    
+    if update_status:
+        usage_text = format_token_usage(cost_info)
+        update_status(f"トークン使用量: {usage_text}")
+    
+    return cost_info
