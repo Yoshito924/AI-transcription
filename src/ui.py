@@ -203,7 +203,16 @@ def create_file_section(parent, app, theme, widgets):
         value="whisper",
         style='Modern.TRadiobutton'
     )
-    whisper_radio.pack(side=tk.LEFT)
+    whisper_radio.pack(side=tk.LEFT, padx=(0, 15))
+    
+    whisper_api_radio = ttk.Radiobutton(
+        engine_frame,
+        text="Whisper API (クラウド/高精度)",
+        variable=engine_var,
+        value="whisper-api",
+        style='Modern.TRadiobutton'
+    )
+    whisper_api_radio.pack(side=tk.LEFT)
     
     # Whisperモデル選択（Whisperが選択された時のみ有効）
     whisper_model_frame = tk.Frame(card, bg=theme.colors['surface'])

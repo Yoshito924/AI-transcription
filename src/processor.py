@@ -25,6 +25,7 @@ from .exceptions import (
 from .audio_processor import AudioProcessor
 from .api_utils import ApiUtils
 from .whisper_service import WhisperService
+from .whisper_api_service import WhisperApiService
 from .text_merger import EnhancedTextMerger
 from .audio_cache import AudioCacheManager
 from .utils import (
@@ -42,6 +43,7 @@ class FileProcessor:
         self.audio_processor = AudioProcessor()
         self.api_utils = ApiUtils()
         self.whisper_service = WhisperService()
+        self.whisper_api_service = None  # APIキーが設定されたときに初期化
         self.text_merger = EnhancedTextMerger(
             overlap_threshold=SEGMENT_MERGE_CONFIG['overlap_threshold'],
             min_overlap_words=SEGMENT_MERGE_CONFIG['min_overlap_words'],
@@ -161,7 +163,11 @@ class FileProcessor:
                 transcription = self._perform_whisper_transcription(
                     audio_path, update_status, whisper_model, cached_segments
                 )
-            else:
+            elif engine == 'whisper-api':
+                transcription = self._perform_whisper_api_transcription(
+                    audio_path, api_key, update_status, cached_segments
+                )
+            else:  # gemini
                 transcription = self._perform_transcription(
                     audio_path, api_key, update_status, preferred_model, cached_segments
                 )
@@ -298,6 +304,44 @@ class FileProcessor:
         else:
             logger.info(f"Whisper単一ファイル処理を実行: サイズ={file_size_mb:.2f}MB")
             return self._perform_whisper_single_transcription(audio_path, update_status, whisper_model)
+    
+    def _perform_whisper_api_transcription(self, audio_path, api_key, update_status, cached_segments=None):
+        """OpenAI Whisper APIを使用した文字起こしを実行"""
+        # Whisper APIサービスの初期化
+        if not self.whisper_api_service or self.whisper_api_service.api_key != api_key:
+            self.whisper_api_service = WhisperApiService(api_key=api_key)
+        
+        # ファイルサイズをチェック（Whisper APIは25MB以下）
+        file_size_mb = get_file_size_mb(audio_path)
+        audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
+        
+        if file_size_mb > 25:
+            raise AudioProcessingError(
+                f"ファイルサイズが大きすぎます（{file_size_mb:.2f}MB）。"
+                "Whisper APIは25MB以下のファイルをサポートしています。"
+                "ファイルを分割するか、ローカルのWhisperを使用してください。"
+            )
+        
+        logger.info(f"Whisper API文字起こし開始: サイズ={file_size_mb:.2f}MB, 長さ={format_duration(audio_duration_sec)}")
+        update_status(f"Whisper APIで文字起こし中...")
+        
+        try:
+            text, metadata = self.whisper_api_service.transcribe(audio_path, language='ja')
+            
+            # 料金情報を表示
+            if audio_duration_sec:
+                cost_info = self.whisper_api_service.estimate_cost(audio_duration_sec)
+                update_status(
+                    f"Whisper API文字起こし完了\n"
+                    f"- 料金: ${cost_info['cost_usd']:.4f} (約{cost_info['cost_jpy']:.2f}円)\n"
+                    f"- 音声長さ: {format_duration(audio_duration_sec)}"
+                )
+            
+            return text
+            
+        except Exception as e:
+            logger.error(f"Whisper API文字起こしエラー: {str(e)}")
+            raise TranscriptionError(f"Whisper API文字起こしに失敗しました: {str(e)}")
     
     def _perform_single_transcription(self, audio_path, api_key, update_status, preferred_model=None):
         """単一ファイルの文字起こし"""

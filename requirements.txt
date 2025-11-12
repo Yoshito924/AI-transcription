@@ -9,3 +9,5 @@ torch>=2.0.0
 torchaudio>=2.0.0
 # Whisper（最新版または開発版）
 openai-whisper
+# OpenAI Whisper API
+openai>=1.0.0

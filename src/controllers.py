@@ -125,10 +125,11 @@ class TranscriptionController:
         engine = self.ui_elements.get('engine_var', None)
         engine_value = engine.get() if engine else 'gemini'
         
-        # Geminiの場合はAPIキーが必要
+        # GeminiまたはWhisper APIの場合はAPIキーが必要
         api_key = self.ui_elements['api_key_var'].get().strip()
-        if engine_value == 'gemini' and not api_key:
-            messagebox.showerror("エラー", "GeminiモードではAPIキーを入力してください。")
+        if engine_value in ['gemini', 'whisper-api'] and not api_key:
+            engine_name = "Gemini" if engine_value == 'gemini' else "Whisper API"
+            messagebox.showerror("エラー", f"{engine_name}モードではAPIキーを入力してください。")
             return
         
         # 固定プロンプト（文字起こし専用）
@@ -179,6 +180,8 @@ class TranscriptionController:
             # エンジンに応じた開始メッセージを表示
             if engine_value == 'whisper':
                 self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Whisper処理開始 (モデル: {whisper_model}) ━━━"))
+            elif engine_value == 'whisper-api':
+                self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Whisper API処理開始 ━━━"))
             else:
                 self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Gemini処理開始 ━━━"))
 
@@ -212,7 +215,7 @@ class TranscriptionController:
         engine = self.ui_elements.get('engine_var', None)
         engine_value = engine.get() if engine else 'gemini'
 
-        # Geminiの場合のみ使用量を記録
+        # GeminiまたはWhisper APIの場合のみ使用量を記録
         if engine_value == 'gemini':
             try:
                 file_size_mb = get_file_size_mb(self.current_file) if self.current_file else 0.0
@@ -238,8 +241,11 @@ class TranscriptionController:
                     self.update_usage_callback()
             except Exception as e:
                 print(f"使用量記録エラー: {e}")
+        elif engine_value == 'whisper-api':
+            # Whisper APIの場合
+            self.add_log(f"━━━ Whisper API処理完了 ━━━")
         else:
-            # Whisperの場合
+            # Whisper（ローカル）の場合
             whisper_model_var = self.ui_elements.get('whisper_model_var', None)
             whisper_model = whisper_model_var.get() if whisper_model_var else 'base'
             self.add_log(f"━━━ Whisper処理完了 (モデル: {whisper_model}, 無料) ━━━")
@@ -260,6 +266,8 @@ class TranscriptionController:
             whisper_model_var = self.ui_elements.get('whisper_model_var', None)
             whisper_model = whisper_model_var.get() if whisper_model_var else 'base'
             messagebox.showinfo("成功", f"Whisperによる文字起こしが完了しました。\nモデル: {whisper_model} (ローカル/無料)\n出力ファイル: {os.path.basename(output_file)}")
+        elif engine_value == 'whisper-api':
+            messagebox.showinfo("成功", f"Whisper APIによる文字起こしが完了しました。\n出力ファイル: {os.path.basename(output_file)}")
         else:
             messagebox.showinfo("成功", f"Geminiによる文字起こしが完了しました。\n出力ファイル: {os.path.basename(output_file)}")
     

@@ -126,6 +126,31 @@ class TranscriptionApp:
                 self.controller.update_status("Whisperエラー")
                 if 'model_label' in self.ui_elements:
                     self.ui_elements['model_label'].config(text="Whisperエラー")
+        elif engine_value == 'whisper-api':
+            # Whisper APIモードの場合はAPI接続を確認
+            api_key = self.api_key.get().strip()
+            if not api_key:
+                messagebox.showerror("エラー", "Whisper APIモードではAPIキーを入力してください。")
+                return
+            
+            self.controller.update_status("Whisper API接続を確認中...")
+            self.root.update_idletasks()
+            
+            try:
+                from .whisper_api_service import WhisperApiService
+                service = WhisperApiService(api_key=api_key)
+                
+                # 簡単なテスト（実際にはファイルが必要なので、サービスが初期化できればOK）
+                if 'model_label' in self.ui_elements:
+                    self.ui_elements['model_label'].config(text="Whisper API")
+                
+                messagebox.showinfo("成功", "Whisper APIへの接続準備が完了しました！")
+                self.controller.update_status("Whisper API接続準備完了")
+            except Exception as e:
+                messagebox.showerror("エラー", f"Whisper APIエラー: {str(e)}")
+                self.controller.update_status("Whisper APIエラー")
+                if 'model_label' in self.ui_elements:
+                    self.ui_elements['model_label'].config(text="Whisper APIエラー")
         else:
             # Geminiモードの場合は従来通り
             api_key = self.api_key.get().strip()
