@@ -6,8 +6,13 @@
 """
 
 # 音声処理関連の定数
-MAX_AUDIO_SIZE_MB = 20  # Geminiの推奨上限サイズ
-MAX_AUDIO_DURATION_SEC = 1200  # 20分（1200秒）
+MAX_AUDIO_SIZE_MB = 20  # Geminiの推奨上限サイズ（リクエストの合計サイズが20MBを超える場合はFiles APIを使用）
+MAX_AUDIO_DURATION_SEC = 34200  # 9.5時間（34,200秒）- Gemini APIの最大音声長
+# 参考: https://ai.google.dev/gemini-api/docs/audio?hl=ja
+# - 1つのプロンプトでサポートされる音声データの最大長は9.5時間
+# - 音声の1秒は32トークンとして表される（1分間の音声は1,920トークン）
+AUDIO_TOKENS_PER_SECOND = 32  # 音声1秒あたりのトークン数
+AUDIO_TOKENS_PER_MINUTE = 1920  # 音声1分あたりのトークン数（32 * 60）
 DEFAULT_AUDIO_BITRATE = '128k'
 DEFAULT_SAMPLE_RATE = '44100'
 DEFAULT_CHANNELS = 2
@@ -15,8 +20,19 @@ OVERLAP_SECONDS = 10  # セグメント間のオーバーラップ時間
 SEGMENT_DURATION_SEC = 600  # 10分
 
 # ファイル処理関連
-SUPPORTED_AUDIO_FORMATS = ['mp3', 'wav', 'mp4', 'avi', 'mov', 'm4a', 'flac', 'ogg']
+# 参考: https://ai.google.dev/gemini-api/docs/audio?hl=ja
+# Geminiがサポートする音声形式: WAV, MP3, AIFF, AAC, OGG Vorbis, FLAC
+SUPPORTED_AUDIO_FORMATS = ['mp3', 'wav', 'mp4', 'avi', 'mov', 'm4a', 'flac', 'ogg', 'aiff', 'aac']
 AUDIO_MIME_TYPE = 'audio/mpeg'
+# Gemini APIでサポートされる音声MIMEタイプ
+GEMINI_SUPPORTED_AUDIO_MIME_TYPES = {
+    'wav': 'audio/wav',
+    'mp3': 'audio/mp3',
+    'aiff': 'audio/aiff',
+    'aac': 'audio/aac',
+    'ogg': 'audio/ogg',
+    'flac': 'audio/flac'
+}
 
 # UI関連の定数
 DEFAULT_WINDOW_WIDTH = 1200
@@ -33,8 +49,19 @@ DRAG_DROP_AREA_HEIGHT = 120
 CARD_PADDING = 20
 SECTION_SPACING = 16
 
-# API関連
-PREFERRED_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+# API関連（優先順位: 安定版 → 最新プレビュー → 高速 → コスト重視 → 従来型）
+# 2025年11月時点の推奨: gemini-2.5-flashが安定版として推奨
+PREFERRED_MODELS = [
+    "gemini-2.5-flash",                  # 2.5 Flash安定版（推奨）
+    "gemini-2.5-flash-preview-09-2025",  # 2025年9月最新プレビュー版
+    "gemini-2.5-flash-preview-08-2025",  # 2025年8月プレビュー版
+    "gemini-2.5-flash-lite",             # Flash Lite 2.5
+    "gemini-2.0-flash-lite",             # 最軽量・最速
+    "gemini-2.0-flash",                  # Flash 2.0
+    "gemini-1.5-flash",                  # Flash 1.5（後方互換性）
+    "gemini-1.5-pro",                    # Pro 1.5
+    "gemini-pro"                         # 従来版
+]
 MIN_BITRATE = 32  # 最低品質確保のための最小ビットレート
 MAX_BITRATE = 256  # 最大ビットレート
 MAX_COMPRESSION_ATTEMPTS = 5
@@ -66,51 +93,71 @@ CONFIG_FILE = "config.json"
 PROMPT_FILE = "prompts.json"
 
 # Gemini API料金設定（100万トークンあたりの米ドル）
+# 注意: 音声入力の場合、モデルによって計算方法が異なる
+# - Gemini 2.x系: トークン数ベース（100万トークンあたり）
+# - Gemini 1.5系: 秒数ベース（音声1秒あたり0.002ドル）
+# 参考: https://ai.google.dev/gemini-api/docs/pricing?hl=ja
 GEMINI_PRICING = {
     "gemini-2.5-flash": {
-        "input_text": 0.15,
-        "input_audio": 1.00,
-        "input_audio_batch": 0.50,  # バッチAPI使用時
-        "output": 2.50,
-        "output_batch": 1.25,  # バッチAPI使用時
+        "input_text": 0.15,  # プロンプト200Kトークン以下（標準）
+        "input_text_over_200k": 0.30,  # プロンプト200Kトークン超
+        "input_audio": 0.15,  # 100万トークンあたり（音声入力もトークンベース）
+        "input_audio_batch": 0.075,  # バッチAPI使用時（50%割引）
+        "output": 2.50,  # プロンプト200Kトークン以下（標準）
+        "output_over_200k": 5.00,  # プロンプト200Kトークン超
+        "output_batch": 1.25,  # バッチAPI使用時（50%割引）
+        "pricing_type": "token_based",
         "recommended_use": "大量文字起こし（バッチ処理推奨）"
     },
     "gemini-2.0-flash-lite": {
         "input_text": 0.075,
-        "input_audio": 0.075,  # 最安値
+        "input_audio": 0.075,  # 100万トークンあたり（最安値）
+        "input_audio_batch": 0.0375,  # バッチAPI使用時（50%割引）
         "output": 0.30,
+        "output_batch": 0.15,  # バッチAPI使用時（50%割引）
+        "pricing_type": "token_based",
         "recommended_use": "コスト重視・大量処理"
     },
     "gemini-2.5-flash-lite": {
         "input_text": 0.15,
-        "input_audio": 0.50,
+        "input_audio": 0.15,  # 100万トークンあたり（音声入力もトークンベース）
+        "input_audio_batch": 0.075,  # バッチAPI使用時（50%割引）
         "output": 0.40,
+        "output_batch": 0.20,  # バッチAPI使用時（50%割引）
+        "pricing_type": "token_based",
         "recommended_use": "Flash Liteシリーズ最新版"
     },
     "gemini-2.0-flash": {
         "input_text": 0.10,
-        "input_audio": 0.70,
+        "input_audio": 0.10,  # 100万トークンあたり（音声入力もトークンベース）
+        "input_audio_batch": 0.05,  # バッチAPI使用時（50%割引）
         "output": 0.40,
+        "output_batch": 0.20,  # バッチAPI使用時（50%割引）
+        "pricing_type": "token_based",
         "recommended_use": "バランス型"
     },
     "gemini-1.5-flash": {
         "input_text_128k": 0.075,
         "input_text_over_128k": 0.15,
-        "input_audio_per_second": 0.002,
+        "input_audio_per_second": 0.002,  # 音声1秒あたり（秒数ベース）
         "output_128k": 0.30,
         "output_over_128k": 0.60,
+        "pricing_type": "mixed",  # テキストはトークンベース、音声は秒数ベース
         "recommended_use": "従来型"
     },
     "gemini-1.5-pro": {
         "input_text_128k": 1.25,
         "input_text_over_128k": 2.50,
+        "input_audio_per_second": 0.002,  # 音声1秒あたり（秒数ベース）
         "output_128k": 5.00,
         "output_over_128k": 10.00,
+        "pricing_type": "mixed",
         "recommended_use": "高品質処理"
     },
     "gemini-2.5-flash-live": {
-        "input_audio": 3.00,  # リアルタイム処理
+        "input_audio": 3.00,  # 100万トークンあたり（リアルタイム処理）
         "output": 2.00,
+        "pricing_type": "token_based",
         "recommended_use": "リアルタイム処理専用"
     }
 }

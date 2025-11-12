@@ -44,11 +44,14 @@ class WhisperService:
     def __init__(self):
         if WHISPER_BACKEND is None:
             raise AudioProcessingError("Whisperライブラリが見つかりません。openai-whisper または faster-whisper をインストールしてください。")
-        
+
         self.backend = WHISPER_BACKEND
         self.model = None
         self.current_model_name = None
-        
+
+        # Whisperキャッシュディレクトリを設定（書き込み可能な場所を確保）
+        self._setup_cache_directory()
+
         # デバイス検出（torchの可用性を確認）
         try:
             if self.backend == "openai-whisper":
@@ -62,8 +65,41 @@ class WhisperService:
             # torchが利用できない場合はCPUにフォールバック
             self.device = "cpu"
             logger.warning("PyTorchが見つからないため、CPUモードで動作します")
-        
+
         logger.info(f"WhisperService初期化: backend={self.backend}, デバイス={self.device}")
+
+    def _setup_cache_directory(self):
+        """Whisperのキャッシュディレクトリを設定"""
+        try:
+            # ユーザーホームディレクトリに.whisperキャッシュを作成
+            home_dir = os.path.expanduser("~")
+            cache_dir = os.path.join(home_dir, ".cache", "whisper")
+
+            # ディレクトリが存在しない場合は作成
+            if not os.path.exists(cache_dir):
+                os.makedirs(cache_dir, exist_ok=True)
+                logger.info(f"Whisperキャッシュディレクトリを作成: {cache_dir}")
+
+            # 環境変数を設定（Whisperがこれを使用する）
+            os.environ['XDG_CACHE_HOME'] = os.path.join(home_dir, ".cache")
+
+            # 書き込みテスト
+            test_file = os.path.join(cache_dir, ".write_test")
+            try:
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+                logger.debug(f"キャッシュディレクトリの書き込み確認完了: {cache_dir}")
+            except Exception as e:
+                logger.warning(f"キャッシュディレクトリへの書き込みに問題: {str(e)}")
+                # 一時ディレクトリにフォールバック
+                temp_cache = os.path.join(tempfile.gettempdir(), "whisper_cache")
+                os.makedirs(temp_cache, exist_ok=True)
+                os.environ['XDG_CACHE_HOME'] = tempfile.gettempdir()
+                logger.info(f"一時ディレクトリをキャッシュに使用: {temp_cache}")
+
+        except Exception as e:
+            logger.warning(f"キャッシュディレクトリの設定に失敗: {str(e)}")
     
     def get_available_models(self):
         """利用可能なモデルのリストを取得"""
@@ -143,7 +179,7 @@ class WhisperService:
             options = {
                 'language': language,
                 'task': 'transcribe',  # transcribeは元の言語のまま、translateは英語に翻訳
-                'verbose': False,
+                'verbose': None,  # Noneでtqdmを完全に無効化
                 'fp16': self.device == 'cuda',  # GPUの場合はFP16を使用
             }
             
@@ -190,7 +226,7 @@ class WhisperService:
             options = {
                 'language': language,
                 'task': 'transcribe',
-                'verbose': False,
+                'verbose': None,  # Noneでtqdmを完全に無効化
                 'fp16': self.device == 'cuda',
             }
             options.update(kwargs)
@@ -253,7 +289,7 @@ class WhisperService:
             options = {
                 'language': language,
                 'task': 'transcribe',
-                'verbose': False,
+                'verbose': None,  # Noneでtqdmを完全に無効化
                 'fp16': self.device == 'cuda',
                 'initial_prompt': initial_prompt,  # コンテキストヒント
             }
@@ -282,10 +318,42 @@ class WhisperService:
             return text, metadata
             
         except Exception as e:
-            error_msg = f"セグメント {segment_num} 処理エラー: {str(e)}"
-            logger.error(error_msg)
+            # エラーの種類を判別
+            error_type = type(e).__name__
+            error_str = str(e)
+
+            # より詳細なエラー情報を記録
+            error_details = {
+                'segment_num': segment_num,
+                'total_segments': total_segments,
+                'error_type': error_type,
+                'error_message': error_str,
+                'segment_file': segment_file
+            }
+
+            # エラーの種類に応じた分類
+            if 'NoneType' in error_str and 'write' in error_str:
+                error_category = "ファイル書き込みエラー"
+                logger.error(f"セグメント {segment_num}: {error_category} - キャッシュディレクトリへのアクセス問題の可能性")
+            elif 'CUDA' in error_str or 'GPU' in error_str:
+                error_category = "GPUエラー"
+                logger.error(f"セグメント {segment_num}: {error_category} - GPUメモリ不足の可能性")
+            elif 'memory' in error_str.lower():
+                error_category = "メモリエラー"
+                logger.error(f"セグメント {segment_num}: {error_category} - システムメモリ不足")
+            elif 'timeout' in error_str.lower():
+                error_category = "タイムアウトエラー"
+                logger.error(f"セグメント {segment_num}: {error_category}")
+            else:
+                error_category = error_type
+                logger.error(f"セグメント {segment_num}: {error_category} - {error_str}")
+
+            # スタックトレースを詳細ログに記録
+            logger.debug(f"セグメント {segment_num} エラー詳細:", exc_info=True)
+
             # エラーでも続行できるようにエラーメッセージを返す
-            return f"[{error_msg}]", {'error': str(e), 'segment_num': segment_num}
+            error_msg = f"セグメント {segment_num} 処理エラー: {error_category}"
+            return f"[{error_msg}]", error_details
     
     def test_whisper_availability(self) -> Tuple[bool, str]:
         """Whisperの利用可能性をテスト"""

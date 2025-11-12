@@ -168,14 +168,20 @@ class TranscriptionController:
             # プログレスコールバック
             def progress_callback(msg):
                 self.ui_elements['root'].after(0, lambda: self.update_status(msg))
-            
+
             # エンジンとモデルの取得
             engine = self.ui_elements.get('engine_var', None)
             engine_value = engine.get() if engine else 'gemini'
-            
+
             whisper_model_var = self.ui_elements.get('whisper_model_var', None)
             whisper_model = whisper_model_var.get() if whisper_model_var else 'base'
-            
+
+            # エンジンに応じた開始メッセージを表示
+            if engine_value == 'whisper':
+                self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Whisper処理開始 (モデル: {whisper_model}) ━━━"))
+            else:
+                self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Gemini処理開始 ━━━"))
+
             output_file = self.processor.process_file(
                 self.current_file,
                 process_type,
@@ -201,31 +207,32 @@ class TranscriptionController:
         self.ui_elements['progress'].stop()
         self.is_processing = False
         self.update_status(f"処理完了: {os.path.basename(output_file)}")
-        
+
         # エンジンの確認
         engine = self.ui_elements.get('engine_var', None)
         engine_value = engine.get() if engine else 'gemini'
-        
+
         # Geminiの場合のみ使用量を記録
         if engine_value == 'gemini':
             try:
                 file_size_mb = os.path.getsize(self.current_file) / (1024 * 1024) if self.current_file else 0
                 filename = os.path.basename(self.current_file) if self.current_file else "unknown"
-                
+
                 # 音声時間とファイルサイズから概算トークン数を推定
                 estimated_input_tokens = int(file_size_mb * 1000)  # 概算値
                 estimated_output_tokens = int(estimated_input_tokens * 0.1)  # 出力は入力の10%程度
-                
+
                 cost = self.usage_tracker.record_usage(
-                    model="gemini-1.5-flash",  # デフォルトモデル
+                    model="gemini-2.5-flash",  # デフォルトモデル（2025年11月推奨）
                     input_tokens=estimated_input_tokens,
                     output_tokens=estimated_output_tokens,
                     file_name=filename,
                     file_size_mb=file_size_mb
                 )
-                
+
                 self.add_log(f"使用料金: ${cost:.4f} (概算)")
-                
+                self.add_log(f"━━━ Gemini処理完了 ━━━")
+
                 # 使用量表示を更新
                 if hasattr(self, 'update_usage_callback') and self.update_usage_callback:
                     self.update_usage_callback()
@@ -235,19 +242,19 @@ class TranscriptionController:
             # Whisperの場合
             whisper_model_var = self.ui_elements.get('whisper_model_var', None)
             whisper_model = whisper_model_var.get() if whisper_model_var else 'base'
-            self.add_log(f"Whisper処理完了 (モデル: {whisper_model}, 無料)")
-            
+            self.add_log(f"━━━ Whisper処理完了 (モデル: {whisper_model}, 無料) ━━━")
+
             # ファイルサイズ情報を記録
             try:
                 file_size_mb = os.path.getsize(self.current_file) / (1024 * 1024) if self.current_file else 0
                 self.add_log(f"処理ファイルサイズ: {file_size_mb:.2f}MB")
             except Exception as e:
                 print(f"ファイルサイズ取得エラー: {e}")
-        
+
         # 履歴更新のコールバックがある場合は呼び出し
         if hasattr(self, 'update_history_callback') and self.update_history_callback:
             self.update_history_callback()
-        
+
         # エンジンに応じたメッセージを表示
         if engine_value == 'whisper':
             whisper_model_var = self.ui_elements.get('whisper_model_var', None)

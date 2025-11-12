@@ -140,15 +140,27 @@ class AudioProcessor:
                 permanent_segments = []
                 for i, segment_file in enumerate(segment_files):
                     if os.path.exists(segment_file):
-                        # 新しい一時ファイルを作成
-                        with tempfile.NamedTemporaryFile(suffix=f'_segment_{i:03d}.mp3', delete=False) as temp_file:
-                            perm_path = temp_file.name
-                        
-                        # ファイルをコピー
-                        with open(segment_file, 'rb') as src, open(perm_path, 'wb') as dst:
-                            dst.write(src.read())
-                        
-                        permanent_segments.append(perm_path)
+                        try:
+                            # 新しい一時ファイルを作成
+                            with tempfile.NamedTemporaryFile(suffix=f'_segment_{i:03d}.mp3', delete=False) as temp_file:
+                                perm_path = temp_file.name
+
+                            # perm_pathが正しく作成されたことを確認
+                            if not perm_path:
+                                update_status(f"エラー: セグメント {i+1} の一時ファイル作成に失敗しました")
+                                continue
+
+                            # ファイルをコピー
+                            with open(segment_file, 'rb') as src:
+                                data = src.read()
+                                if data:
+                                    with open(perm_path, 'wb') as dst:
+                                        dst.write(data)
+                                    permanent_segments.append(perm_path)
+                                else:
+                                    update_status(f"警告: セグメント {i+1} のデータが空です")
+                        except Exception as e:
+                            update_status(f"エラー: セグメント {i+1} のコピー中に例外が発生: {str(e)}")
                 
                 update_status(f"音声ファイルを {len(permanent_segments)} 個のセグメントに分割しました")
                 return permanent_segments

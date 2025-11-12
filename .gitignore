@@ -49,3 +49,19 @@ prompts.json
 temp/
 tmp/
 *.tmp
+
+# ログファイル
+logs/
+*.log
+
+# エラーログ
+*_error.log
+transcription_errors_*.json
+
+# Whisperキャッシュ
+.cache/
+
+# OS固有
+.DS_Store
+Thumbs.db
+desktop.ini

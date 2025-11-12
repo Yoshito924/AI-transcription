@@ -8,7 +8,9 @@
       "Bash(rm:*)",
       "Bash(mv:*)",
       "Bash(pip install:*)",
-      "Bash(ffmpeg:*)"
+      "Bash(ffmpeg:*)",
+      "Bash(dir /s /b \"L:\\Dropbox\\programs\\Python_tools\\AI-transcription\")",
+      "Bash(findstr:*)"
     ],
     "deny": []
   }
