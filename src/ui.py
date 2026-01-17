@@ -228,12 +228,13 @@ def create_file_section(parent, app, theme, widgets):
     whisper_model_label.pack(side=tk.LEFT, padx=(0, 10))
     
     # Whisperモデル選択（設定から初期値を取得）
-    saved_whisper_model = app.config.get("whisper_model", "base")
+    # 最新モデル: large-v3（最高精度）, large-v3-turbo（高速版、推奨）
+    saved_whisper_model = app.config.get("whisper_model", "large-v3-turbo")
     whisper_model_var = tk.StringVar(value=saved_whisper_model)
     whisper_model_combo = ttk.Combobox(
         whisper_model_frame,
         textvariable=whisper_model_var,
-        values=['tiny', 'base', 'small', 'medium', 'large', 'turbo'],
+        values=['tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3', 'large-v3-turbo', 'turbo'],
         state='readonly',
         width=15,
         style='Modern.TCombobox'
@@ -241,9 +242,10 @@ def create_file_section(parent, app, theme, widgets):
     whisper_model_combo.pack(side=tk.LEFT, padx=(0, 10))
     
     # モデル説明
+    # デフォルトは large-v3-turbo の説明
     whisper_model_info = tk.Label(
         whisper_model_frame,
-        text="バランス型（推奨）",
+        text="高速版large-v3（推奨）",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface']
@@ -265,11 +267,14 @@ def create_file_section(parent, app, theme, widgets):
     def on_model_change(event=None):
         model_descriptions = {
             'tiny': '最小・最速（低精度）',
-            'base': 'バランス型（推奨）',
+            'base': 'バランス型',
             'small': '中程度の精度',
             'medium': '高精度',
-            'large': '最高精度（処理時間が長い）',
-            'turbo': '高速版（large-v3最適化）'
+            'large': '高精度（large-v1）',
+            'large-v2': '高精度（v2改良版）',
+            'large-v3': '最高精度（99言語対応）',
+            'large-v3-turbo': '高速版large-v3（推奨）',
+            'turbo': 'large-v3-turboの別名'
         }
         whisper_model_info.config(text=model_descriptions.get(whisper_model_var.get(), ''))
         

@@ -14,7 +14,17 @@ from .utils import format_duration, get_file_size_mb
 
 
 class WhisperApiService:
-    """OpenAI Whisper APIを使用した文字起こしサービス"""
+    """OpenAI Whisper APIを使用した文字起こしサービス
+    
+    OpenAI Whisper APIは現在 whisper-1 モデルのみ提供されています。
+    このモデルはWhisper large-v2をベースにしており、多言語対応・高精度です。
+    
+    注意: ローカルWhisperでlarge-v3を使用したい場合は WhisperService を使用してください。
+    """
+    
+    # OpenAI Whisper APIでサポートされているモデル
+    # 参考: https://platform.openai.com/docs/models/whisper
+    SUPPORTED_MODELS = ['whisper-1']  # 現在はwhisper-1のみ
     
     def __init__(self, api_key: Optional[str] = None):
         """Whisper APIサービスの初期化
@@ -163,17 +173,21 @@ class WhisperApiService:
             
         Returns:
             dict: 料金情報
+            
+        参考: https://openai.com/api/pricing/ (2025年1月時点)
+        - Whisper: $0.006 per minute
         """
-        # Whisper APIの料金: $0.006 per minute
+        # Whisper APIの料金: $0.006 per minute (2025年1月時点)
         cost_per_minute = 0.006
         duration_minutes = audio_duration_seconds / 60.0
         cost_usd = duration_minutes * cost_per_minute
-        cost_jpy = cost_usd * 150  # 1ドル=150円として概算
+        cost_jpy = cost_usd * 155  # 1ドル=155円として概算（2025年1月為替レート）
         
         return {
             'cost_usd': cost_usd,
             'cost_jpy': cost_jpy,
             'duration_minutes': duration_minutes,
-            'cost_per_minute': cost_per_minute
+            'cost_per_minute': cost_per_minute,
+            'model': 'whisper-1'  # 現在利用可能なモデル
         }
 

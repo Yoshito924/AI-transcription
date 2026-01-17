@@ -31,14 +31,18 @@ except ImportError:
 class WhisperService:
     """OpenAI Whisperを使用した文字起こしサービス"""
     
-    # Whisperモデルサイズとその特性
+    # Whisperモデルサイズとその特性（2025年最新）
+    # 参考: https://github.com/openai/whisper
     MODEL_INFO = {
-        'tiny': {'size': '39M', 'description': '最小・最速（低精度）'},
-        'base': {'size': '74M', 'description': 'バランス型（推奨）'},
-        'small': {'size': '244M', 'description': '中程度の精度'},
-        'medium': {'size': '769M', 'description': '高精度'},
-        'large': {'size': '1550M', 'description': '最高精度（処理時間が長い）'},
-        'turbo': {'size': '809M', 'description': '高速版（large-v3最適化）'}
+        'tiny': {'size': '39M', 'description': '最小・最速（低精度）', 'params': '39M'},
+        'base': {'size': '74M', 'description': 'バランス型', 'params': '74M'},
+        'small': {'size': '244M', 'description': '中程度の精度', 'params': '244M'},
+        'medium': {'size': '769M', 'description': '高精度', 'params': '769M'},
+        'large': {'size': '1550M', 'description': '高精度（large-v1）', 'params': '1550M'},
+        'large-v2': {'size': '1550M', 'description': '高精度（v2改良版）', 'params': '1550M'},
+        'large-v3': {'size': '1550M', 'description': '最高精度（99言語対応）', 'params': '1550M'},
+        'large-v3-turbo': {'size': '809M', 'description': '高速版large-v3（推奨）', 'params': '809M'},
+        'turbo': {'size': '809M', 'description': 'large-v3-turboの別名', 'params': '809M'}
     }
     
     def __init__(self):
@@ -113,46 +117,91 @@ class WhisperService:
         return model_name
     
     def load_model(self, model_name: str = 'base', force_reload: bool = False):
-        """Whisperモデルをロード"""
+        """Whisperモデルをロード
+        
+        サポートされるモデル名:
+        - tiny, base, small, medium: 標準モデル
+        - large, large-v2, large-v3: Largeシリーズ
+        - large-v3-turbo, turbo: 高速版（推奨）
+        """
         if self.model is None or self.current_model_name != model_name or force_reload:
             logger.info(f"Whisperモデルをロード中: {model_name}")
             try:
                 if self.backend == "openai-whisper":
-                    # モデル名の正規化（turboは正式にはlarge-v3-turboまたはturbo）
+                    # モデル名の正規化
+                    # turboとlarge-v3-turboは同じモデル
                     actual_model_name = model_name
-                    if model_name == 'turbo':
-                        # turboとlarge-v3-turboの両方を試す
-                        for turbo_variant in ['turbo', 'large-v3-turbo']:
+                    
+                    # turbo系モデルの処理
+                    if model_name in ['turbo', 'large-v3-turbo']:
+                        # 優先順位: turbo → large-v3-turbo → large-v3 → large
+                        for turbo_variant in ['turbo', 'large-v3-turbo', 'large-v3', 'large']:
                             try:
                                 self.model = whisper.load_model(turbo_variant, device=self.device)
                                 actual_model_name = turbo_variant
-                                logger.info(f"turboモデル（{turbo_variant}）のロードに成功")
+                                logger.info(f"モデル（{turbo_variant}）のロードに成功")
                                 break
                             except Exception as e:
                                 logger.warning(f"{turbo_variant}のロードに失敗: {str(e)}")
                                 continue
                         
-                        # turboのロードに失敗した場合はlargeにフォールバック
+                        # すべて失敗した場合
                         if self.model is None:
-                            logger.warning("turboモデルのロードに失敗、largeにフォールバック")
-                            self.model = whisper.load_model('large', device=self.device)
-                            actual_model_name = 'large'
+                            raise AudioProcessingError("turbo系モデルのロードに失敗しました")
+                    # large-v3の処理
+                    elif model_name == 'large-v3':
+                        for variant in ['large-v3', 'large']:
+                            try:
+                                self.model = whisper.load_model(variant, device=self.device)
+                                actual_model_name = variant
+                                logger.info(f"モデル（{variant}）のロードに成功")
+                                break
+                            except Exception as e:
+                                logger.warning(f"{variant}のロードに失敗: {str(e)}")
+                                continue
+                    # large-v2の処理
+                    elif model_name == 'large-v2':
+                        for variant in ['large-v2', 'large']:
+                            try:
+                                self.model = whisper.load_model(variant, device=self.device)
+                                actual_model_name = variant
+                                logger.info(f"モデル（{variant}）のロードに成功")
+                                break
+                            except Exception as e:
+                                logger.warning(f"{variant}のロードに失敗: {str(e)}")
+                                continue
                     else:
                         self.model = whisper.load_model(actual_model_name, device=self.device)
                     
                     model_name = actual_model_name  # 実際にロードされたモデル名を記録
                 else:  # faster-whisper
                     device = "cuda" if self.device == "cuda" else "cpu"
-                    # faster-whisperもturboをサポートしていない可能性がある
-                    if model_name == 'turbo':
-                        try:
-                            self.model = WhisperModel('turbo', device=device)
-                        except:
-                            logger.warning("turboモデルのロードに失敗、largeにフォールバック")
-                            self.model = WhisperModel('large', device=device)
-                            model_name = 'large'
-                    else:
-                        self.model = WhisperModel(model_name, device=device)
+                    compute_type = "float16" if device == "cuda" else "int8"
+                    
+                    # faster-whisperでのモデル名マッピング
+                    # faster-whisperはlarge-v3, large-v3-turboを直接サポート
+                    fw_model_map = {
+                        'turbo': 'large-v3-turbo',
+                        'large': 'large-v3',  # largeは最新のlarge-v3を使用
+                    }
+                    fw_model_name = fw_model_map.get(model_name, model_name)
+                    
+                    try:
+                        self.model = WhisperModel(fw_model_name, device=device, compute_type=compute_type)
+                        model_name = fw_model_name
+                    except Exception as e:
+                        logger.warning(f"{fw_model_name}のロードに失敗: {str(e)}")
+                        # フォールバック: large-v3 → large-v2 → large
+                        for fallback in ['large-v3', 'large-v2', 'large']:
+                            if fallback == fw_model_name:
+                                continue
+                            try:
+                                self.model = WhisperModel(fallback, device=device, compute_type=compute_type)
+                                model_name = fallback
+                                logger.info(f"フォールバックモデル（{fallback}）のロードに成功")
+                                break
+                            except Exception:
+                                continue
                 
                 self.current_model_name = model_name
                 logger.info(f"モデルロード完了: {model_name} (デバイス: {self.device})")
@@ -413,12 +462,17 @@ class WhisperService:
     def estimate_processing_time(self, audio_duration_sec: float, model_name: str = 'base') -> float:
         """処理時間の推定（秒）"""
         # 大まかな推定値（デバイスとモデルサイズに基づく）
+        # 参考: 音声時間に対する処理時間の比率
         base_factor = {
             'tiny': 0.1,
             'base': 0.15,
             'small': 0.25,
             'medium': 0.5,
-            'large': 1.0
+            'large': 1.0,
+            'large-v2': 1.0,
+            'large-v3': 1.0,
+            'large-v3-turbo': 0.4,  # turboは約40%高速
+            'turbo': 0.4,
         }.get(model_name, 0.2)
         
         # CPUの場合は3-5倍遅い

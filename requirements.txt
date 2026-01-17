@@ -7,7 +7,11 @@ tiktoken>=0.3.0
 --find-links https://download.pytorch.org/whl/torch_stable.html
 torch>=2.0.0
 torchaudio>=2.0.0
-# Whisper（最新版または開発版）
-openai-whisper
+# Whisper（最新版: large-v3, large-v3-turbo対応）
+# 参考: https://github.com/openai/whisper
+openai-whisper>=20231117
+# faster-whisper: 高速版Whisper（オプション、large-v3対応）
+# 参考: https://github.com/SYSTRAN/faster-whisper
+# faster-whisper>=1.0.0
 # OpenAI Whisper API
 openai>=1.0.0
