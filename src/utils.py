@@ -114,6 +114,45 @@ def truncate_display_name(name, max_length):
     return name
 
 
+def truncate_status_message(message, max_length):
+    """ステータスメッセージを指定の長さに切り詰める"""
+    if len(message) > max_length:
+        return message[:max_length-3] + "..."
+    return message
+
+
+def get_engine_value(ui_elements, default='gemini'):
+    """UI要素からエンジン値を取得する
+    
+    Args:
+        ui_elements: UI要素の辞書
+        default: デフォルト値
+        
+    Returns:
+        str: エンジン値（'gemini', 'whisper', 'whisper-api'）
+    """
+    engine_var = ui_elements.get('engine_var', None)
+    if engine_var:
+        return engine_var.get()
+    return default
+
+
+def get_whisper_model_value(ui_elements, default='base'):
+    """UI要素からWhisperモデル値を取得する
+    
+    Args:
+        ui_elements: UI要素の辞書
+        default: デフォルト値
+        
+    Returns:
+        str: Whisperモデル値
+    """
+    whisper_model_var = ui_elements.get('whisper_model_var', None)
+    if whisper_model_var:
+        return whisper_model_var.get()
+    return default
+
+
 def calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_input=False, audio_duration_seconds=None):
     """Gemini APIの使用料金を計算する
 

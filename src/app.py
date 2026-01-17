@@ -12,7 +12,14 @@ from .processor import FileProcessor
 from .controllers import TranscriptionController
 from .usage_tracker import UsageTracker
 from .constants import OUTPUT_DIR, FILE_NAME_DISPLAY_MAX_LENGTH
-from .utils import open_file, open_directory, normalize_file_path, truncate_display_name
+from .utils import (
+    open_file,
+    open_directory,
+    normalize_file_path,
+    truncate_display_name,
+    get_engine_value,
+    get_whisper_model_value
+)
 from .exceptions import FileProcessingError
 
 class TranscriptionApp:
@@ -78,12 +85,7 @@ class TranscriptionApp:
         self.config.set("api_key", self.api_key.get())
         
         # エンジン選択とWhisperモデル選択を保存
-        if hasattr(self, 'ui_elements'):
-            if 'engine_var' in self.ui_elements:
-                self.config.set("transcription_engine", self.ui_elements['engine_var'].get())
-            if 'whisper_model_var' in self.ui_elements:
-                self.config.set("whisper_model", self.ui_elements['whisper_model_var'].get())
-        
+        self._save_engine_settings()
         self.config.save()
         
         # アプリケーションを終了
@@ -100,8 +102,7 @@ class TranscriptionApp:
     def check_api_connection(self):
         """API接続を確認"""
         # エンジンの確認
-        engine = self.ui_elements.get('engine_var', None)
-        engine_value = engine.get() if engine else 'gemini'
+        engine_value = get_engine_value(self.ui_elements)
         
         if engine_value == 'whisper':
             # Whisperモードの場合は利用可能性を確認
@@ -171,10 +172,7 @@ class TranscriptionApp:
                 # 設定を保存
                 self.config.set("api_key", api_key)
                 # エンジン設定も同時に保存
-                if 'engine_var' in self.ui_elements:
-                    self.config.set("transcription_engine", self.ui_elements['engine_var'].get())
-                if 'whisper_model_var' in self.ui_elements:
-                    self.config.set("whisper_model", self.ui_elements['whisper_model_var'].get())
+                self._save_engine_settings()
                 self.config.save()
                 
                 messagebox.showinfo("成功", f"Gemini APIへの接続に成功しました！\n使用モデル: {result}")
@@ -260,4 +258,12 @@ class TranscriptionApp:
             
         except Exception as e:
             print(f"使用量表示の更新エラー: {e}")
+    
+    def _save_engine_settings(self):
+        """エンジン設定を保存"""
+        if hasattr(self, 'ui_elements'):
+            engine_value = get_engine_value(self.ui_elements)
+            whisper_model = get_whisper_model_value(self.ui_elements)
+            self.config.set("transcription_engine", engine_value)
+            self.config.set("whisper_model", whisper_model)
     

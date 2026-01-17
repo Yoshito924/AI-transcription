@@ -21,7 +21,14 @@ from .exceptions import (
     ApiConnectionError,
     FileProcessingError
 )
-from .utils import get_file_size_mb
+from .utils import (
+    get_file_size_mb,
+    normalize_file_path,
+    truncate_display_name,
+    truncate_status_message,
+    get_engine_value,
+    get_whisper_model_value
+)
 
 
 class TranscriptionController:
@@ -39,30 +46,33 @@ class TranscriptionController:
     def update_status(self, message):
         """ステータスを更新"""
         # ステータスメッセージは短くする
-        if len(message) > STATUS_MESSAGE_MAX_LENGTH:
-            status_message = message[:STATUS_MESSAGE_MAX_LENGTH-3] + "..."
-        else:
-            status_message = message
+        status_message = truncate_status_message(message, STATUS_MESSAGE_MAX_LENGTH)
         
         # ステータスラベルを更新
         if 'status_label' in self.ui_elements:
             self.ui_elements['status_label'].config(text=status_message)
         
         # API接続状態の更新
-        if 'api_status' in self.ui_elements:
-            if "API接続" in message and "成功" in message:
-                self.ui_elements['api_status'].config(
-                    text="● 接続済み",
-                    fg="#4caf50"  # 緑色
-                )
-            elif "エラー" in message:
-                self.ui_elements['api_status'].config(
-                    text="● エラー",
-                    fg="#f44336"  # 赤色
-                )
+        self._update_api_status(message)
         
         # ログにも追加
         self.add_log(message)
+    
+    def _update_api_status(self, message):
+        """API接続状態を更新"""
+        if 'api_status' not in self.ui_elements:
+            return
+        
+        if "API接続" in message and "成功" in message:
+            self.ui_elements['api_status'].config(
+                text="● 接続済み",
+                fg="#4caf50"  # 緑色
+            )
+        elif "エラー" in message:
+            self.ui_elements['api_status'].config(
+                text="● エラー",
+                fg="#f44336"  # 赤色
+            )
     
     def add_log(self, message):
         """ログエリアにメッセージを追加"""
@@ -82,20 +92,14 @@ class TranscriptionController:
         """ファイルを読み込む"""
         try:
             # ファイルパスの正規化
-            file_path = file_path.strip()
-            if file_path.startswith('{') and file_path.endswith('}'):
-                file_path = file_path[1:-1]
-            
-            file_path = file_path.replace('\\', '/')
+            file_path = normalize_file_path(file_path)
             
             if os.path.exists(file_path):
                 self.current_file = file_path
                 filename = os.path.basename(file_path)
                 
                 # ファイル名が長い場合、短く表示
-                display_name = filename
-                if len(display_name) > FILE_NAME_DISPLAY_MAX_LENGTH:
-                    display_name = display_name[:FILE_NAME_DISPLAY_MAX_LENGTH-3] + "..."
+                display_name = truncate_display_name(filename, FILE_NAME_DISPLAY_MAX_LENGTH)
                     
                 self.ui_elements['file_label'].config(text=f"選択ファイル: {display_name}")
                 self.update_status("ファイル読み込み完了")
@@ -106,10 +110,17 @@ class TranscriptionController:
             else:
                 raise FileProcessingError("ファイルが見つかりません")
                 
+        except FileProcessingError as e:
+            # カスタム例外の場合は詳細メッセージを使用
+            user_msg = e.get_detailed_message() if hasattr(e, 'get_detailed_message') else str(e)
+            messagebox.showerror("エラー", user_msg)
+            self.update_status(e.user_message if hasattr(e, 'user_message') else str(e))
         except Exception as e:
+            # その他の例外
             error_msg = f"ファイル読み込みエラー: {str(e)}"
             messagebox.showerror("エラー", error_msg)
             self.update_status(error_msg)
+            self.add_log(f"エラー詳細: {type(e).__name__}: {str(e)}")
     
     def start_transcription(self):
         """文字起こし処理を開始"""
@@ -122,8 +133,7 @@ class TranscriptionController:
             return
         
         # エンジンの取得
-        engine = self.ui_elements.get('engine_var', None)
-        engine_value = engine.get() if engine else 'gemini'
+        engine_value = get_engine_value(self.ui_elements)
         
         # GeminiまたはWhisper APIの場合はAPIキーが必要
         api_key = self.ui_elements['api_key_var'].get().strip()
@@ -171,11 +181,8 @@ class TranscriptionController:
                 self.ui_elements['root'].after(0, lambda: self.update_status(msg))
 
             # エンジンとモデルの取得
-            engine = self.ui_elements.get('engine_var', None)
-            engine_value = engine.get() if engine else 'gemini'
-
-            whisper_model_var = self.ui_elements.get('whisper_model_var', None)
-            whisper_model = whisper_model_var.get() if whisper_model_var else 'base'
+            engine_value = get_engine_value(self.ui_elements)
+            whisper_model = get_whisper_model_value(self.ui_elements)
 
             # エンジンに応じた開始メッセージを表示
             if engine_value == 'whisper':
@@ -198,12 +205,26 @@ class TranscriptionController:
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))
             
+        except (TranscriptionError, AudioProcessingError, ApiConnectionError, FileProcessingError) as e:
+            # カスタム例外の場合は詳細メッセージを使用
+            user_msg = e.get_detailed_message() if hasattr(e, 'get_detailed_message') else str(e)
+            status_msg = e.user_message if hasattr(e, 'user_message') else str(e)
+            self.ui_elements['root'].after(0, lambda: self._handle_processing_error(e, user_msg, status_msg))
         except Exception as e:
+            # その他の例外
             error_msg = f"処理エラー: {str(e)}"
-            self.ui_elements['root'].after(0, lambda: self.update_status(error_msg))
-            self.ui_elements['root'].after(0, lambda: messagebox.showerror("エラー", error_msg))
-            self.ui_elements['root'].after(0, self.ui_elements['progress'].stop)
-            self.is_processing = False
+            self.ui_elements['root'].after(0, lambda: self._handle_processing_error(e, error_msg, error_msg))
+    
+    def _handle_processing_error(self, exception, user_message, status_message):
+        """処理エラーをハンドル"""
+        self.update_status(status_message)
+        messagebox.showerror("エラー", user_message)
+        self.ui_elements['progress'].stop()
+        self.is_processing = False
+        # ログに詳細を記録
+        if hasattr(exception, 'error_code'):
+            self.add_log(f"エラーコード: {exception.error_code}")
+        self.add_log(f"エラー詳細: {type(exception).__name__}: {str(exception)}")
     
     def _on_processing_complete(self, output_file):
         """処理完了時の処理"""
@@ -212,8 +233,7 @@ class TranscriptionController:
         self.update_status(f"処理完了: {os.path.basename(output_file)}")
 
         # エンジンの確認
-        engine = self.ui_elements.get('engine_var', None)
-        engine_value = engine.get() if engine else 'gemini'
+        engine_value = get_engine_value(self.ui_elements)
 
         # GeminiまたはWhisper APIの場合のみ使用量を記録
         if engine_value == 'gemini':
@@ -246,8 +266,7 @@ class TranscriptionController:
             self.add_log(f"━━━ Whisper API処理完了 ━━━")
         else:
             # Whisper（ローカル）の場合
-            whisper_model_var = self.ui_elements.get('whisper_model_var', None)
-            whisper_model = whisper_model_var.get() if whisper_model_var else 'base'
+            whisper_model = get_whisper_model_value(self.ui_elements)
             self.add_log(f"━━━ Whisper処理完了 (モデル: {whisper_model}, 無料) ━━━")
 
             # ファイルサイズ情報を記録
@@ -262,14 +281,32 @@ class TranscriptionController:
             self.update_history_callback()
 
         # エンジンに応じたメッセージを表示
+        self._show_completion_message(engine_value, output_file)
+    
+    def _show_completion_message(self, engine_value, output_file):
+        """処理完了メッセージを表示"""
+        filename = os.path.basename(output_file)
+        
         if engine_value == 'whisper':
-            whisper_model_var = self.ui_elements.get('whisper_model_var', None)
-            whisper_model = whisper_model_var.get() if whisper_model_var else 'base'
-            messagebox.showinfo("成功", f"Whisperによる文字起こしが完了しました。\nモデル: {whisper_model} (ローカル/無料)\n出力ファイル: {os.path.basename(output_file)}")
+            whisper_model = get_whisper_model_value(self.ui_elements)
+            messagebox.showinfo(
+                "成功",
+                f"Whisperによる文字起こしが完了しました。\n"
+                f"モデル: {whisper_model} (ローカル/無料)\n"
+                f"出力ファイル: {filename}"
+            )
         elif engine_value == 'whisper-api':
-            messagebox.showinfo("成功", f"Whisper APIによる文字起こしが完了しました。\n出力ファイル: {os.path.basename(output_file)}")
+            messagebox.showinfo(
+                "成功",
+                f"Whisper APIによる文字起こしが完了しました。\n"
+                f"出力ファイル: {filename}"
+            )
         else:
-            messagebox.showinfo("成功", f"Geminiによる文字起こしが完了しました。\n出力ファイル: {os.path.basename(output_file)}")
+            messagebox.showinfo(
+                "成功",
+                f"Geminiによる文字起こしが完了しました。\n"
+                f"出力ファイル: {filename}"
+            )
     
     def set_update_history_callback(self, callback):
         """履歴更新のコールバックを設定"""
