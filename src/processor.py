@@ -14,7 +14,8 @@ from .constants import (
     AUDIO_MIME_TYPE,
     OUTPUT_DIR,
     AI_GENERATION_CONFIG,
-    SEGMENT_MERGE_CONFIG
+    SEGMENT_MERGE_CONFIG,
+    SAFETY_SETTINGS_TRANSCRIPTION
 )
 from .exceptions import (
     TranscriptionError, 
@@ -93,8 +94,14 @@ class FileProcessor:
             # 5 or FINISH_REASON_OTHER: その他の理由
 
             if finish_reason == 2:
-                error_msg = f"{segment_info}応答が安全性フィルターによってブロックされました"
-                solution = "音声の内容を確認してください。過激な表現や不適切なコンテンツが含まれている場合、処理できません。"
+                error_msg = f"{segment_info}安全性フィルター - 音声の内容が安全性基準に抵触する可能性があります"
+                solution = (
+                    "安全性フィルターは緩和設定済みですが、それでもブロックされました。\n"
+                    "以下をお試しください：\n"
+                    "1. Whisperエンジンに切り替える（ローカル処理で安全性フィルターなし）\n"
+                    "2. 音声ファイルを分割して問題の箇所を特定する\n"
+                    "3. 問題のセグメントのみスキップして処理を続行する"
+                )
                 logger.error(f"{error_msg} - 対処法: {solution}")
                 raise TranscriptionError(
                     error_msg,
@@ -358,7 +365,8 @@ class FileProcessor:
 
         model = genai.GenerativeModel(
             model_name,
-            generation_config=AI_GENERATION_CONFIG
+            generation_config=AI_GENERATION_CONFIG,
+            safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 文字起こし用に安全性フィルターを緩和
         )
 
         with open(audio_path, 'rb') as audio_file:
@@ -541,7 +549,8 @@ class FileProcessor:
 
             model = genai.GenerativeModel(
                 model_name,
-                generation_config=AI_GENERATION_CONFIG
+                generation_config=AI_GENERATION_CONFIG,
+                safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 文字起こし用に安全性フィルターを緩和
             )
 
             with open(segment_file, 'rb') as audio_file:
@@ -800,7 +809,8 @@ class FileProcessor:
         
         model = genai.GenerativeModel(
             model_name,
-            generation_config=AI_GENERATION_CONFIG
+            generation_config=AI_GENERATION_CONFIG,
+            safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 安全性フィルターを緩和
         )
         
         response = model.generate_content(prompt)

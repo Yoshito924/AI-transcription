@@ -75,6 +75,34 @@ AI_GENERATION_CONFIG = {
     'candidate_count': 1       # 候補数は1つに限定
 }
 
+# Gemini API 安全性フィルター設定（文字起こし用に緩和）
+# 参考: https://ai.google.dev/gemini-api/docs/safety-settings
+# 文字起こしでは音声の内容をそのまま書き起こす必要があるため、
+# 安全性フィルターを緩和して誤ブロックを防ぐ
+# しきい値:
+#   BLOCK_NONE: すべて許可（文字起こし推奨）
+#   BLOCK_ONLY_HIGH: 高リスクのみブロック
+#   BLOCK_MEDIUM_AND_ABOVE: 中リスク以上をブロック（デフォルト）
+#   BLOCK_LOW_AND_ABOVE: 低リスク以上をブロック
+SAFETY_SETTINGS_TRANSCRIPTION = [
+    {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_NONE"
+    }
+]
+
 # セグメント統合設定
 SEGMENT_MERGE_CONFIG = {
     'overlap_threshold': 0.6,     # 重複判定の閾値
