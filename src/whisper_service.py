@@ -33,16 +33,51 @@ class WhisperService:
     
     # Whisperモデルサイズとその特性（2025年最新）
     # 参考: https://github.com/openai/whisper
+    # 推奨順: turbo > large-v3 > medium > small > base > tiny
     MODEL_INFO = {
-        'tiny': {'size': '39M', 'description': '最小・最速（低精度）', 'params': '39M'},
-        'base': {'size': '74M', 'description': 'バランス型', 'params': '74M'},
-        'small': {'size': '244M', 'description': '中程度の精度', 'params': '244M'},
-        'medium': {'size': '769M', 'description': '高精度', 'params': '769M'},
-        'large': {'size': '1550M', 'description': '高精度（large-v1）', 'params': '1550M'},
-        'large-v2': {'size': '1550M', 'description': '高精度（v2改良版）', 'params': '1550M'},
-        'large-v3': {'size': '1550M', 'description': '最高精度（99言語対応）', 'params': '1550M'},
-        'large-v3-turbo': {'size': '809M', 'description': '高速版large-v3（推奨）', 'params': '809M'},
-        'turbo': {'size': '809M', 'description': 'large-v3-turboの別名', 'params': '809M'}
+        'turbo': {
+            'size': '809M',
+            'description': '⭐推奨：高速かつ高精度',
+            'params': '809M',
+            'recommended': True
+        },
+        'large-v3': {
+            'size': '1550M',
+            'description': '最高精度（99言語対応）',
+            'params': '1550M',
+            'recommended': False
+        },
+        'medium': {
+            'size': '769M',
+            'description': '高精度・軽量バランス型',
+            'params': '769M',
+            'recommended': False
+        },
+        'small': {
+            'size': '244M',
+            'description': '中精度・軽量',
+            'params': '244M',
+            'recommended': False
+        },
+        'base': {
+            'size': '74M',
+            'description': '標準モデル',
+            'params': '74M',
+            'recommended': False
+        },
+        'tiny': {
+            'size': '39M',
+            'description': '最速・低精度（テスト用）',
+            'params': '39M',
+            'recommended': False
+        },
+        # 互換性のための別名（内部でturboに変換）
+        'large-v3-turbo': {
+            'size': '809M',
+            'description': 'turboの別名',
+            'params': '809M',
+            'alias_of': 'turbo'
+        },
     }
     
     def __init__(self):

@@ -137,7 +137,7 @@ def get_engine_value(ui_elements, default='gemini'):
     return default
 
 
-def get_whisper_model_value(ui_elements, default='base'):
+def get_whisper_model_value(ui_elements, default='turbo'):
     """UI要素からWhisperモデル値を取得する
     
     Args:
@@ -145,11 +145,23 @@ def get_whisper_model_value(ui_elements, default='base'):
         default: デフォルト値
         
     Returns:
-        str: Whisperモデル値
+        str: Whisperモデル値（内部名: turbo, large-v3, medium, small, base, tiny）
     """
+    # UI表示名から内部名へのマッピング
+    display_to_model = {
+        '⭐ turbo（推奨・高速高精度）': 'turbo',
+        'large-v3（最高精度）': 'large-v3',
+        'medium（高精度・軽量）': 'medium',
+        'small（中精度・軽量）': 'small',
+        'base（標準）': 'base',
+        'tiny（最速・低精度）': 'tiny',
+    }
+    
     whisper_model_var = ui_elements.get('whisper_model_var', None)
     if whisper_model_var:
-        return whisper_model_var.get()
+        display_name = whisper_model_var.get()
+        # 表示名から内部名に変換（見つからない場合はそのまま返す）
+        return display_to_model.get(display_name, display_name)
     return default
 
 

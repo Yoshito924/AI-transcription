@@ -228,24 +228,51 @@ def create_file_section(parent, app, theme, widgets):
     whisper_model_label.pack(side=tk.LEFT, padx=(0, 10))
     
     # Whisperモデル選択（設定から初期値を取得）
-    # 最新モデル: large-v3（最高精度）, large-v3-turbo（高速版、推奨）
-    saved_whisper_model = app.config.get("whisper_model", "large-v3-turbo")
-    whisper_model_var = tk.StringVar(value=saved_whisper_model)
+    # モデル一覧（推奨順に並べ替え、わかりやすい表示名を使用）
+    # 内部値とUI表示名のマッピング
+    model_display_names = {
+        'turbo': '⭐ turbo（推奨・高速高精度）',
+        'large-v3': 'large-v3（最高精度）',
+        'medium': 'medium（高精度・軽量）',
+        'small': 'small（中精度・軽量）',
+        'base': 'base（標準）',
+        'tiny': 'tiny（最速・低精度）',
+    }
+    # 逆マッピング（表示名→内部値）
+    display_to_model = {v: k for k, v in model_display_names.items()}
+    
+    saved_whisper_model = app.config.get("whisper_model", "turbo")
+    # turbo, large-v3-turbo は turbo に統一
+    if saved_whisper_model in ['large-v3-turbo']:
+        saved_whisper_model = 'turbo'
+    # 古いモデル名は medium にフォールバック
+    if saved_whisper_model not in model_display_names:
+        saved_whisper_model = 'turbo'
+    
+    whisper_model_var = tk.StringVar(value=model_display_names.get(saved_whisper_model, model_display_names['turbo']))
     whisper_model_combo = ttk.Combobox(
         whisper_model_frame,
         textvariable=whisper_model_var,
-        values=['tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3', 'large-v3-turbo', 'turbo'],
+        values=list(model_display_names.values()),
         state='readonly',
-        width=15,
+        width=28,
         style='Modern.TCombobox'
     )
     whisper_model_combo.pack(side=tk.LEFT, padx=(0, 10))
     
-    # モデル説明
-    # デフォルトは large-v3-turbo の説明
+    # モデル説明（詳細情報）
+    model_details = {
+        'turbo': '809MB | 高速かつ高精度、日本語対応◎',
+        'large-v3': '1.5GB | 99言語対応、最高精度',
+        'medium': '769MB | バランス型、日本語対応○',
+        'small': '244MB | 軽量、処理速度重視',
+        'base': '74MB | 軽量、テスト用',
+        'tiny': '39MB | 最軽量、精度低',
+    }
+    
     whisper_model_info = tk.Label(
         whisper_model_frame,
-        text="高速版large-v3（推奨）",
+        text=model_details.get(saved_whisper_model, ''),
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface']
@@ -265,21 +292,12 @@ def create_file_section(parent, app, theme, widgets):
     
     # モデル変更時の説明更新
     def on_model_change(event=None):
-        model_descriptions = {
-            'tiny': '最小・最速（低精度）',
-            'base': 'バランス型',
-            'small': '中程度の精度',
-            'medium': '高精度',
-            'large': '高精度（large-v1）',
-            'large-v2': '高精度（v2改良版）',
-            'large-v3': '最高精度（99言語対応）',
-            'large-v3-turbo': '高速版large-v3（推奨）',
-            'turbo': 'large-v3-turboの別名'
-        }
-        whisper_model_info.config(text=model_descriptions.get(whisper_model_var.get(), ''))
+        display_name = whisper_model_var.get()
+        model_name = display_to_model.get(display_name, 'turbo')
+        whisper_model_info.config(text=model_details.get(model_name, ''))
         
-        # 設定を保存
-        app.config.set("whisper_model", whisper_model_var.get())
+        # 設定を保存（内部名で保存）
+        app.config.set("whisper_model", model_name)
         app.config.save()
     
     engine_var.trace('w', lambda *args: on_engine_change())
