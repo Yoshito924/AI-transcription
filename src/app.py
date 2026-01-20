@@ -39,7 +39,8 @@ class TranscriptionApp:
         self.usage_tracker = UsageTracker(self.app_dir)
         
         # 変数初期化
-        self.api_key = tk.StringVar(value=self.config.get("api_key", ""))
+        self.api_key = tk.StringVar(value=self.config.get("api_key", ""))  # Gemini API用
+        self.openai_api_key = tk.StringVar(value=self.config.get("openai_api_key", ""))  # OpenAI API用
         self.preferred_model = None  # 手動選択されたモデル
         
         # プロセッサの初期化
@@ -50,6 +51,7 @@ class TranscriptionApp:
         
         # コントローラーの初期化
         self.ui_elements['api_key_var'] = self.api_key
+        self.ui_elements['openai_api_key_var'] = self.openai_api_key
         self.ui_elements['root'] = self.root
         self.controller = TranscriptionController(
             self.processor, self.config, self.usage_tracker, self.ui_elements
@@ -83,6 +85,7 @@ class TranscriptionApp:
         
         # 設定を保存
         self.config.set("api_key", self.api_key.get())
+        self.config.set("openai_api_key", self.openai_api_key.get())
         
         # エンジン選択とWhisperモデル選択を保存
         self._save_engine_settings()
@@ -93,11 +96,19 @@ class TranscriptionApp:
     
     def toggle_api_key_visibility(self):
         """APIキーの表示/非表示を切り替える"""
+        # Gemini API
         entry = self.ui_elements['api_entry']
+        # OpenAI API
+        openai_entry = self.ui_elements.get('openai_api_entry')
+
         if entry['show'] == '*':
             entry.config(show='')
+            if openai_entry:
+                openai_entry.config(show='')
         else:
             entry.config(show='*')
+            if openai_entry:
+                openai_entry.config(show='*')
     
     def check_api_connection(self):
         """API接続を確認"""
@@ -128,10 +139,10 @@ class TranscriptionApp:
                 if 'model_label' in self.ui_elements:
                     self.ui_elements['model_label'].config(text="Whisperエラー")
         elif engine_value == 'whisper-api':
-            # Whisper APIモードの場合はAPI接続を確認
-            api_key = self.api_key.get().strip()
+            # Whisper APIモードの場合はOpenAI API接続を確認
+            api_key = self.openai_api_key.get().strip()
             if not api_key:
-                messagebox.showerror("エラー", "Whisper APIモードではAPIキーを入力してください。")
+                messagebox.showerror("エラー", "Whisper APIモードではOpenAI APIキーを入力してください。")
                 return
             
             self.controller.update_status("Whisper API接続を確認中...")

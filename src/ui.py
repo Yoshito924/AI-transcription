@@ -75,13 +75,13 @@ def setup_ui(app):
 
 
 def create_api_section(parent, app, theme, widgets):
-    """API設定セクション（コンパクト版）"""
+    """API設定セクション（Gemini API + OpenAI API）"""
     card = widgets.create_card_frame(parent)
-    
+
     # ヘッダー
     header_frame = tk.Frame(card, bg=theme.colors['surface'])
     header_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(CARD_PADDING, 5))
-    
+
     header_label = tk.Label(
         header_frame,
         text=f"{ICONS['key']} API設定",
@@ -90,7 +90,7 @@ def create_api_section(parent, app, theme, widgets):
         bg=theme.colors['surface']
     )
     header_label.pack(side=tk.LEFT)
-    
+
     # API接続状態
     api_status = tk.Label(
         header_frame,
@@ -100,37 +100,76 @@ def create_api_section(parent, app, theme, widgets):
         bg=theme.colors['surface']
     )
     api_status.pack(side=tk.RIGHT)
-    
-    # API入力フレーム
-    input_frame = tk.Frame(card, bg=theme.colors['surface'])
-    input_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 5))
-    
+
+    # Gemini API入力フレーム
+    gemini_frame = tk.Frame(card, bg=theme.colors['surface'])
+    gemini_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 3))
+
+    gemini_label = tk.Label(
+        gemini_frame,
+        text="Gemini:",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface'],
+        width=8,
+        anchor='w'
+    )
+    gemini_label.pack(side=tk.LEFT)
+
     api_entry = ttk.Entry(
-        input_frame,
+        gemini_frame,
         textvariable=app.api_key,
         show="*",
         style='Modern.TEntry',
-        width=30
+        width=25
     )
     api_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-    
+
+    # OpenAI API入力フレーム
+    openai_frame = tk.Frame(card, bg=theme.colors['surface'])
+    openai_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 5))
+
+    openai_label = tk.Label(
+        openai_frame,
+        text="OpenAI:",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface'],
+        width=8,
+        anchor='w'
+    )
+    openai_label.pack(side=tk.LEFT)
+
+    openai_api_entry = ttk.Entry(
+        openai_frame,
+        textvariable=app.openai_api_key,
+        show="*",
+        style='Modern.TEntry',
+        width=25
+    )
+    openai_api_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+
+    # ボタンフレーム
+    button_frame = tk.Frame(card, bg=theme.colors['surface'])
+    button_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 5))
+
     # ボタン（小さく）
     toggle_btn = widgets.create_button(
-        input_frame, "表示", 'Secondary',
+        button_frame, "表示", 'Secondary',
         command=app.toggle_api_key_visibility
     )
     toggle_btn.pack(side=tk.LEFT, padx=(0, 3))
-    
+
     connect_btn = widgets.create_button(
-        input_frame, "接続", 'Primary',
+        button_frame, "接続", 'Primary',
         command=app.check_api_connection
     )
     connect_btn.pack(side=tk.LEFT)
-    
+
     # モデル情報（1行で）
     model_frame = tk.Frame(card, bg=theme.colors['surface'])
     model_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, CARD_PADDING))
-    
+
     model_label_text = tk.Label(
         model_frame,
         text="モデル:",
@@ -139,7 +178,7 @@ def create_api_section(parent, app, theme, widgets):
         bg=theme.colors['surface']
     )
     model_label_text.pack(side=tk.LEFT, padx=(0, 5))
-    
+
     model_name = tk.Label(
         model_frame,
         text="未接続",
@@ -148,11 +187,12 @@ def create_api_section(parent, app, theme, widgets):
         bg=theme.colors['surface']
     )
     model_name.pack(side=tk.LEFT)
-    
+
     card.api_entry = api_entry
+    card.openai_api_entry = openai_api_entry
     card.api_status = api_status
     card.model_label = model_name
-    
+
     return card
 
 
@@ -596,6 +636,7 @@ def collect_ui_elements(api_section, file_section, usage_section, history_sectio
     """UI要素を収集して辞書として返す"""
     return {
         'api_entry': api_section.api_entry,
+        'openai_api_entry': api_section.openai_api_entry,
         'api_status': api_section.api_status,
         'model_label': api_section.model_label,
         'drop_area': file_section.drop_area,

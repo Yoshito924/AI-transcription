@@ -135,12 +135,23 @@ class TranscriptionController:
         # エンジンの取得
         engine_value = get_engine_value(self.ui_elements)
         
-        # GeminiまたはWhisper APIの場合はAPIキーが必要
-        api_key = self.ui_elements['api_key_var'].get().strip()
-        if engine_value in ['gemini', 'whisper-api'] and not api_key:
-            engine_name = "Gemini" if engine_value == 'gemini' else "Whisper API"
-            messagebox.showerror("エラー", f"{engine_name}モードではAPIキーを入力してください。")
-            return
+        # エンジンに応じたAPIキーを取得
+        if engine_value == 'whisper-api':
+            # Whisper APIの場合はOpenAI APIキーを使用
+            api_key = self.ui_elements.get('openai_api_key_var')
+            api_key = api_key.get().strip() if api_key else ""
+            if not api_key:
+                messagebox.showerror("エラー", "Whisper APIモードではOpenAI APIキーを入力してください。")
+                return
+        elif engine_value == 'gemini':
+            # GeminiはGemini APIキーを使用
+            api_key = self.ui_elements['api_key_var'].get().strip()
+            if not api_key:
+                messagebox.showerror("エラー", "GeminiモードではGemini APIキーを入力してください。")
+                return
+        else:
+            # Whisper（ローカル）の場合はAPIキー不要
+            api_key = ""
         
         # 固定プロンプト（文字起こし専用）
         prompts = {

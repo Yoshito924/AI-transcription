@@ -28,8 +28,9 @@ class Config:
             "window_height": DEFAULT_WINDOW_HEIGHT,
             "window_x": None,
             "window_y": None,
-            "api_key": "",
-            "transcription_engine": "gemini",  # "gemini" または "whisper"
+            "api_key": "",  # Gemini API用
+            "openai_api_key": "",  # OpenAI API用（Whisper API等）
+            "transcription_engine": "gemini",  # "gemini" または "whisper" または "whisper-api"
             "whisper_model": "base"  # "tiny", "base", "small", "medium", "large", "turbo"
         }
         
