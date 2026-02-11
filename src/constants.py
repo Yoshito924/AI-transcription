@@ -66,6 +66,10 @@ MIN_BITRATE = 32  # 最低品質確保のための最小ビットレート
 MAX_BITRATE = 256  # 最大ビットレート
 MAX_COMPRESSION_ATTEMPTS = 5
 
+# トークン数の概算パラメータ（使用量記録用）
+TOKEN_ESTIMATION_FACTOR = 1000  # 概算: 1MB ≈ 1000トークン
+OUTPUT_TOKEN_RATIO = 0.1  # 出力トークン数 ≈ 入力トークン数の10%
+
 # AI生成パラメータ（安定した出力のため）
 AI_GENERATION_CONFIG = {
     'temperature': 0.1,        # 低い温度で安定した出力

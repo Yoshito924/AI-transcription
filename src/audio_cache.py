@@ -47,8 +47,19 @@ class AudioCacheManager:
 
         # メタデータを読み込み
         self._load_metadata()
+        self._metadata_dirty = False
 
         logger.info(f"AudioCacheManager初期化: cache_dir={self.cache_dir}, max_items={max_cache_items}")
+
+    def __del__(self):
+        """デストラクタ: 未保存のメタデータをフラッシュ"""
+        if self._metadata_dirty:
+            self._save_metadata(force=True)
+
+    def flush_metadata(self):
+        """未保存のメタデータを明示的にディスクに書き込む"""
+        if self._metadata_dirty:
+            self._save_metadata(force=True)
 
     def _load_metadata(self):
         """メタデータを読み込み"""
@@ -62,13 +73,24 @@ class AudioCacheManager:
         else:
             self.metadata = {}
 
-    def _save_metadata(self):
-        """メタデータを保存"""
+    def _save_metadata(self, force=False):
+        """メタデータを保存
+
+        Args:
+            force: Trueの場合、dirty flagに関係なく保存する
+        """
+        if not force and not self._metadata_dirty:
+            return
         try:
             with open(self.metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(self.metadata, f, ensure_ascii=False, indent=2)
+            self._metadata_dirty = False
         except Exception as e:
             logger.error(f"メタデータの保存に失敗: {str(e)}")
+
+    def _mark_dirty(self):
+        """メタデータの変更をマーク"""
+        self._metadata_dirty = True
 
     def _calculate_file_hash(self, file_path: str) -> str:
         """ファイルのハッシュ値を計算（ファイル名+サイズ+更新日時）"""
@@ -94,15 +116,15 @@ class AudioCacheManager:
             # キャッシュディレクトリが実際に存在するか確認
             if cache_path.exists():
                 logger.info(f"キャッシュヒット: {os.path.basename(original_file)} (hash={file_hash})")
-                # アクセス時刻を更新（LRU用）
+                # アクセス時刻を更新（LRU用）- 即座にディスク書き込みせずdirty flagで管理
                 entry['last_accessed'] = datetime.now().isoformat()
-                self._save_metadata()
+                self._mark_dirty()
                 return entry
             else:
                 # メタデータはあるがファイルがない場合は削除
                 logger.warning(f"キャッシュファイルが見つからないため削除: {file_hash}")
                 del self.metadata[file_hash]
-                self._save_metadata()
+                self._save_metadata(force=True)
 
         logger.info(f"キャッシュミス: {os.path.basename(original_file)}")
         return None
@@ -163,7 +185,7 @@ class AudioCacheManager:
 
             # メタデータに追加
             self.metadata[file_hash] = entry
-            self._save_metadata()
+            self._save_metadata(force=True)
 
             # キャッシュ数を制限
             self._cleanup_old_cache()
@@ -203,7 +225,7 @@ class AudioCacheManager:
             except Exception as e:
                 logger.error(f"キャッシュ削除エラー: {str(e)}")
 
-        self._save_metadata()
+        self._save_metadata(force=True)
 
     def get_cached_files(self, cache_id: str) -> Tuple[Optional[str], Optional[List[str]]]:
         """キャッシュから処理済みファイルとセグメントを取得
@@ -239,7 +261,7 @@ class AudioCacheManager:
                     else:
                         item.unlink()
             self.metadata = {}
-            self._save_metadata()
+            self._save_metadata(force=True)
             logger.info("すべてのキャッシュを削除しました")
         except Exception as e:
             logger.error(f"キャッシュクリアエラー: {str(e)}")

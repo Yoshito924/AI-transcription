@@ -3,6 +3,7 @@
 
 from .constants import PREFERRED_MODELS, AI_GENERATION_CONFIG
 from .exceptions import ApiConnectionError
+from .logger import logger
 
 class ApiUtils:
     """API接続関連のユーティリティクラス"""
@@ -42,11 +43,11 @@ class ApiUtils:
             # 見つからなければ最初のモデルを使用
             if not model_name:
                 model_name = available_gemini_models[0]
-                print(f"警告: 優先モデルが見つからないため、利用可能な最初のモデルを使用: {model_name}")
+                logger.warning(f"優先モデルが見つからないため、利用可能な最初のモデルを使用: {model_name}")
             else:
-                print(f"使用モデル: {model_name} (優先度リストから選択)")
-                
-            print(f"利用可能なGeminiモデル一覧: {', '.join(available_gemini_models)}")
+                logger.info(f"使用モデル: {model_name} (優先度リストから選択)")
+
+            logger.info(f"利用可能なGeminiモデル一覧: {', '.join(available_gemini_models)}")
             
             # 選択したモデルでテスト
             model = genai.GenerativeModel(
@@ -57,7 +58,7 @@ class ApiUtils:
             
             # 応答がある場合は成功（モデル名を返す）
             if response and hasattr(response, 'text'):
-                print(f"API接続テスト成功: {model_name}")
+                logger.info(f"API接続テスト成功: {model_name}")
                 return model_name
             raise ApiConnectionError("API応答が正常ではありません")
             
@@ -69,45 +70,34 @@ class ApiUtils:
 
         優先順位:
         1. flash-preview-XX-2025 (最新日付、ProとLiveは除外)
-        2. flash / flash-lite 系（軽量・高速）
-        3. その他（Proは最後）
+        2. flash-lite 系（最軽量）
+        3. flash 系安定版（プレビュー・Lite以外）
+        4. その他（Proは最後）
 
         除外: Pro系、Live系、TTS系、Thinking系（音声処理には重すぎる/特殊用途）
         """
-        ranked = []
-
         # Pro系、Live系、TTS系、Thinking系を除外
-        # TTS (Text-to-Speech) は音声生成専用で音声入力には非対応
-        # Thinking系は推論特化モデルで音声処理には不向き
+        exclude_keywords = ['pro', 'live', '-tts', 'thinking']
         filtered_models = [
             m for m in available_models
-            if 'pro' not in m.lower()
-            and 'live' not in m.lower()
-            and '-tts' not in m.lower()
-            and 'thinking' not in m.lower()
+            if not any(kw in m.lower() for kw in exclude_keywords)
         ]
 
-        # Flash プレビュー版を日付順でソート（最新が優先）
-        flash_preview = [m for m in filtered_models if 'flash' in m.lower() and 'preview' in m.lower()]
-        flash_preview.sort(reverse=True)  # 2025-09が2025-08より優先
-        ranked.extend(flash_preview)
-
-        # Flash Lite系（最軽量）
-        flash_lite = [m for m in filtered_models if 'flash-lite' in m.lower() and m not in ranked]
-        flash_lite.sort(reverse=True)  # バージョン順
-        ranked.extend(flash_lite)
-
-        # Flash系（プレビュー・Lite以外）
-        flash_stable = [
-            m for m in filtered_models
-            if 'flash' in m.lower() and 'lite' not in m.lower() and 'preview' not in m.lower() and m not in ranked
+        # 優先度グループを定義: (フィルタ関数, 説明)
+        priority_groups = [
+            lambda m, ranked: 'flash' in m.lower() and 'preview' in m.lower(),
+            lambda m, ranked: 'flash-lite' in m.lower() and m not in ranked,
+            lambda m, ranked: 'flash' in m.lower() and 'lite' not in m.lower() and 'preview' not in m.lower() and m not in ranked,
         ]
-        flash_stable.sort(reverse=True)  # バージョン順
-        ranked.extend(flash_stable)
 
-        # その他のGeminiモデル（Flash系以外）
-        others = [m for m in filtered_models if m not in ranked]
-        ranked.extend(others)
+        ranked = []
+        for group_filter in priority_groups:
+            matches = [m for m in filtered_models if group_filter(m, ranked)]
+            matches.sort(reverse=True)
+            ranked.extend(matches)
+
+        # その他のGeminiモデル（上記に含まれないもの）
+        ranked.extend(m for m in filtered_models if m not in ranked)
 
         return ranked
 
@@ -142,7 +132,7 @@ class ApiUtils:
         if not available_gemini_models:
             raise ApiConnectionError("利用可能なGeminiモデルが見つかりません")
 
-        print(f"API利用可能モデル ({len(available_gemini_models)}個): {', '.join(available_gemini_models)}")
+        logger.info(f"API利用可能モデル ({len(available_gemini_models)}個): {', '.join(available_gemini_models)}")
 
         model_name = None
 
@@ -151,10 +141,10 @@ class ApiUtils:
             for available in available_gemini_models:
                 if preferred_model in available:
                     model_name = available
-                    print(f"✓ 使用モデル: {model_name} (手動選択)")
+                    logger.info(f"✓ 使用モデル: {model_name} (手動選択)")
                     return model_name
 
-            print(f"⚠ 警告: 指定されたモデル '{preferred_model}' が利用できません。自動選択に切り替えます。")
+            logger.warning(f"指定されたモデル '{preferred_model}' が利用できません。自動選択に切り替えます。")
 
         # 自動選択：スマートランキングで最適なモデルを選択
         ranked_models = self._rank_models_by_priority(available_gemini_models)
@@ -171,13 +161,13 @@ class ApiUtils:
             else:
                 model_type = "音声処理用"
 
-            print(f"✓ 使用モデル: {model_name} (自動選択: {model_type})")
+            logger.info(f"✓ 使用モデル: {model_name} (自動選択: {model_type})")
             if len(ranked_models) > 1:
-                print(f"  次候補: {ranked_models[1]}")
-            print(f"  ※ Pro/Live/TTS/Thinking系は音声処理には不向きのため除外されています")
+                logger.info(f"  次候補: {ranked_models[1]}")
+            logger.info(f"  ※ Pro/Live/TTS/Thinking系は音声処理には不向きのため除外されています")
         else:
             # フォールバック（理論上は起こらない）
             model_name = available_gemini_models[0]
-            print(f"⚠ 使用モデル: {model_name} (フォールバック)")
+            logger.warning(f"使用モデル: {model_name} (フォールバック)")
 
         return model_name

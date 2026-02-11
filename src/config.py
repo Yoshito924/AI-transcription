@@ -45,7 +45,7 @@ class Config:
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except:
+            except (json.JSONDecodeError, OSError):
                 return {}
         return {}
     
@@ -112,7 +112,7 @@ class PromptManager:
             try:
                 with open(self.prompt_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except:
+            except (json.JSONDecodeError, OSError):
                 return self.default_prompts()
         return self.default_prompts()
     

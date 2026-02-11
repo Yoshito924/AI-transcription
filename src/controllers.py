@@ -13,7 +13,9 @@ from tkinter import messagebox
 
 from .constants import (
     STATUS_MESSAGE_MAX_LENGTH,
-    FILE_NAME_DISPLAY_MAX_LENGTH
+    FILE_NAME_DISPLAY_MAX_LENGTH,
+    TOKEN_ESTIMATION_FACTOR,
+    OUTPUT_TOKEN_RATIO
 )
 from .exceptions import (
     TranscriptionError,
@@ -29,6 +31,7 @@ from .utils import (
     get_engine_value,
     get_whisper_model_value
 )
+from .logger import logger
 
 
 class TranscriptionController:
@@ -40,6 +43,7 @@ class TranscriptionController:
         self.usage_tracker = usage_tracker
         self.ui_elements = ui_elements
         self.is_processing = False
+        self._processing_lock = threading.Lock()
         self.current_file = None
         self.preferred_model = None
     
@@ -173,7 +177,10 @@ class TranscriptionController:
     
     def _start_processing_thread(self, process_type, api_key, prompts):
         """処理スレッドを開始"""
-        self.is_processing = True
+        with self._processing_lock:
+            if self.is_processing:
+                return
+            self.is_processing = True
         self.ui_elements['progress'].start()
         self.update_status("文字起こし処理を開始しています...")
         
@@ -253,8 +260,8 @@ class TranscriptionController:
                 filename = os.path.basename(self.current_file) if self.current_file else "unknown"
 
                 # 音声時間とファイルサイズから概算トークン数を推定
-                estimated_input_tokens = int(file_size_mb * 1000)  # 概算値
-                estimated_output_tokens = int(estimated_input_tokens * 0.1)  # 出力は入力の10%程度
+                estimated_input_tokens = int(file_size_mb * TOKEN_ESTIMATION_FACTOR)
+                estimated_output_tokens = int(estimated_input_tokens * OUTPUT_TOKEN_RATIO)
 
                 cost = self.usage_tracker.record_usage(
                     model="gemini-2.5-flash",  # デフォルトモデル（2025年11月推奨）
@@ -271,7 +278,7 @@ class TranscriptionController:
                 if hasattr(self, 'update_usage_callback') and self.update_usage_callback:
                     self.update_usage_callback()
             except Exception as e:
-                print(f"使用量記録エラー: {e}")
+                logger.error(f"使用量記録エラー: {e}")
         elif engine_value == 'whisper-api':
             # Whisper APIの場合
             self.add_log(f"━━━ Whisper API処理完了 ━━━")
@@ -285,7 +292,7 @@ class TranscriptionController:
                 file_size_mb = get_file_size_mb(self.current_file) if self.current_file else 0.0
                 self.add_log(f"処理ファイルサイズ: {file_size_mb:.2f}MB")
             except Exception as e:
-                print(f"ファイルサイズ取得エラー: {e}")
+                logger.error(f"ファイルサイズ取得エラー: {e}")
 
         # 履歴更新のコールバックがある場合は呼び出し
         if hasattr(self, 'update_history_callback') and self.update_history_callback:

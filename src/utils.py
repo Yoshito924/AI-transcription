@@ -67,7 +67,7 @@ def check_ffmpeg():
                                stdout=subprocess.PIPE, 
                                stderr=subprocess.PIPE)
         return result.returncode == 0
-    except:
+    except (FileNotFoundError, OSError):
         return False
 
 
@@ -81,7 +81,7 @@ def open_file(file_path):
         else:  # Linux
             subprocess.run(['xdg-open', file_path])
         return True
-    except:
+    except (FileNotFoundError, OSError):
         return False
 
 
@@ -95,7 +95,7 @@ def open_directory(dir_path):
         else:  # Linux
             subprocess.run(['xdg-open', dir_path])
         return True
-    except:
+    except (FileNotFoundError, OSError):
         return False
 
 
@@ -104,7 +104,7 @@ def normalize_file_path(file_path):
     file_path = file_path.strip()
     if file_path.startswith('{') and file_path.endswith('}'):
         file_path = file_path[1:-1]
-    return file_path.replace('\\', '/')
+    return os.path.normpath(file_path)
 
 
 def truncate_display_name(name, max_length):

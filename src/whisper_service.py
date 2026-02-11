@@ -153,12 +153,19 @@ class WhisperService:
     
     def load_model(self, model_name: str = 'base', force_reload: bool = False):
         """Whisperモデルをロード
-        
+
         サポートされるモデル名:
         - tiny, base, small, medium: 標準モデル
         - large, large-v2, large-v3: Largeシリーズ
         - large-v3-turbo, turbo: 高速版（推奨）
         """
+        # エイリアス解決: MODEL_INFOにalias_ofが定義されている場合、実際のモデル名に変換
+        if model_name in self.MODEL_INFO:
+            actual_name = self.MODEL_INFO[model_name].get('alias_of')
+            if actual_name:
+                logger.info(f"モデルエイリアス解決: {model_name} -> {actual_name}")
+                model_name = actual_name
+
         if self.model is None or self.current_model_name != model_name or force_reload:
             logger.info(f"Whisperモデルをロード中: {model_name}")
             try:

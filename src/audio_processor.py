@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -19,6 +20,7 @@ from .constants import (
 )
 from .exceptions import AudioProcessingError
 from .utils import format_duration, get_file_size_mb
+from .logger import logger
 
 class AudioProcessor:
     """音声ファイルの処理を行うクラス"""
@@ -39,13 +41,13 @@ class AudioProcessor:
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
             if result.returncode != 0:
-                print(f"エラー: 音声長さの取得に失敗しました")
+                logger.error("音声長さの取得に失敗しました")
                 return None
-                
+
             duration = float(result.stdout.decode('utf-8').strip())
             return duration
         except Exception as e:
-            print(f"エラー: 音声長さの取得中に例外が発生しました: {str(e)}")
+            logger.error(f"音声長さの取得中に例外が発生: {file_path}", exc_info=True)
             return None
     
     def split_audio(self, input_file_path, segment_duration_sec=SEGMENT_DURATION_SEC, callback=None, overlap_sec=OVERLAP_SECONDS):
@@ -58,15 +60,15 @@ class AudioProcessor:
             overlap_sec: セグメント間のオーバーラップ時間（秒）
         """
         def update_status(message):
-            print(message)
+            logger.info(message)
             if callback:
                 callback(message)
-        
+
         # 入力ファイルが存在するか確認
         if not os.path.exists(input_file_path):
             update_status(f"エラー: ファイル {input_file_path} が見つかりません")
             return None
-        
+
         # 音声の長さを取得
         audio_duration_sec = self.get_audio_duration(input_file_path)
         if audio_duration_sec is None or audio_duration_sec <= 0:
@@ -150,15 +152,12 @@ class AudioProcessor:
                                 update_status(f"エラー: セグメント {i+1} の一時ファイル作成に失敗しました")
                                 continue
 
-                            # ファイルをコピー
-                            with open(segment_file, 'rb') as src:
-                                data = src.read()
-                                if data:
-                                    with open(perm_path, 'wb') as dst:
-                                        dst.write(data)
-                                    permanent_segments.append(perm_path)
-                                else:
-                                    update_status(f"警告: セグメント {i+1} のデータが空です")
+                            # ファイルをコピー（shutil.copyfileでメモリ効率化）
+                            shutil.copyfile(segment_file, perm_path)
+                            if os.path.getsize(perm_path) > 0:
+                                permanent_segments.append(perm_path)
+                            else:
+                                update_status(f"警告: セグメント {i+1} のデータが空です")
                         except Exception as e:
                             update_status(f"エラー: セグメント {i+1} のコピー中に例外が発生: {str(e)}")
                 
@@ -172,15 +171,15 @@ class AudioProcessor:
     def compress_audio(self, input_file_path, target_size_mb=MAX_AUDIO_SIZE_MB, callback=None, max_attempts=MAX_COMPRESSION_ATTEMPTS):
         """FFmpegを使用して音声ファイルを圧縮する。目標サイズに達するまで繰り返し圧縮を試みる"""
         def update_status(message):
-            print(message)
+            logger.info(message)
             if callback:
                 callback(message)
-        
+
         # 入力ファイルが存在するか確認
         if not os.path.exists(input_file_path):
             update_status(f"エラー: ファイル {input_file_path} が見つかりません")
             return None
-        
+
         # 入力ファイルサイズを取得
         input_size_mb = get_file_size_mb(input_file_path)
         
@@ -212,11 +211,11 @@ class AudioProcessor:
                     if os.path.exists(temp_file):
                         try:
                             os.remove(temp_file)
-                        except:
+                        except OSError:
                             pass
-                
+
                 return current_input
-            
+
             # 一時ファイルを作成
             with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
                 output_path = temp_file.name
@@ -259,10 +258,10 @@ class AudioProcessor:
                         if os.path.exists(temp_file):
                             try:
                                 os.remove(temp_file)
-                            except:
+                            except OSError:
                                 pass
                     return None
-                
+
                 # 圧縮結果を確認
                 output_size_mb = get_file_size_mb(output_path)
                 compression_ratio = ((current_size_mb - output_size_mb) / current_size_mb * 100)
@@ -277,11 +276,11 @@ class AudioProcessor:
                         if os.path.exists(temp_file):
                             try:
                                 os.remove(temp_file)
-                            except:
+                            except OSError:
                                 pass
-                    
+
                     return output_path
-                
+
                 # 次の試行のための準備
                 current_input = output_path
                 current_size_mb = output_size_mb
@@ -293,10 +292,10 @@ class AudioProcessor:
                     if os.path.exists(temp_file):
                         try:
                             os.remove(temp_file)
-                        except:
+                        except OSError:
                             pass
                 return None
-        
+
         # 最大試行回数に達した場合
         update_status(f"最大試行回数（{max_attempts}回）に達しました。最終サイズ: {current_size_mb:.2f}MB")
         
@@ -305,9 +304,9 @@ class AudioProcessor:
             if os.path.exists(temp_file):
                 try:
                     os.remove(temp_file)
-                except:
+                except OSError:
                     pass
-        
+
         return current_input
     
     def convert_audio(self, input_file, output_format='mp3', 
@@ -341,6 +340,6 @@ class AudioProcessor:
             # エラー時は一時ファイルを削除
             try:
                 os.unlink(output_path)
-            except:
+            except OSError:
                 pass
             raise AudioProcessingError(f"音声変換に失敗しました: {str(e)}")

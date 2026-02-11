@@ -449,15 +449,16 @@ class FileProcessor:
                         segment_costs.append(cost_info)
                 else:
                     segment_transcription = result
-                
-                segment_transcriptions.append(segment_transcription)
-                
-                # エラーチェックと記録
-                if "処理エラー" in segment_transcription:
+
+                # エラーチェック: エラーテキストは結果に含めない
+                if isinstance(segment_transcription, str) and "処理エラー" in segment_transcription:
                     segment_errors.append({
                         'segment_index': i+1,
                         'error_text': segment_transcription
                     })
+                    logger.warning(f"セグメント {i+1} をスキップ: {segment_transcription}")
+                else:
+                    segment_transcriptions.append(segment_transcription)
                 
                 # セグメント情報を記録（将来の拡張用）
                 segment_info.append({
@@ -603,88 +604,87 @@ class FileProcessor:
             return response.text.strip(), segment_cost_info
             
         except Exception as e:
-            # エラーの詳細情報を記録
-            error_details = {
-                'segment_num': segment_num,
-                'total_segments': total_segments,
-                'segment_file': segment_file,
-                'error_type': type(e).__name__,
-                'error_message': str(e),
-                'model': model_name
-            }
-            
-            # エラーの種類によって詳細メッセージと対処法を作成
-            error_str = str(e).lower()
-
-            if 'audio input modality is not enabled' in error_str or 'audio input is not supported' in error_str:
-                error_category = "モデル非対応"
-                error_detail = "選択されたモデルは音声入力に対応していません"
-                solution = "別のモデルを選択してください。Flash系モデル（gemini-2.5-flash等）の使用を推奨します。"
-            elif 'rate limit' in error_str or '429' in error_str:
-                error_category = "APIレート制限"
-                error_detail = "APIの呼び出し回数が上限に達しました"
-                solution = "数分待ってから再度実行してください。または、有料プランへのアップグレードをご検討ください。"
-            elif 'timeout' in error_str:
-                error_category = "タイムアウト"
-                error_detail = "API応答に時間がかかりすぎました"
-                solution = "音声の内容が複雑すぎる可能性があります。しばらく待ってから再度実行してください。"
-            elif 'network' in error_str or 'connection' in error_str:
-                error_category = "ネットワーク接続"
-                error_detail = "インターネット接続に問題があります"
-                solution = "ネットワーク接続を確認してから再度実行してください。"
-            elif 'authentication' in error_str or '401' in str(e) or '403' in str(e):
-                error_category = "認証失敗"
-                error_detail = "APIキーが無効または権限がありません"
-                solution = "APIキーが正しく設定されているか確認してください。"
-            elif 'finish_reason' in error_str and '4' in error_str:
-                error_category = "著作権保護コンテンツ"
-                error_detail = "音楽や著作権保護されたコンテンツが検出されました"
-                solution = "音声に含まれる音楽やBGMを削除するか、別の音声ファイルを使用してください。"
-            elif 'copyrighted' in error_str or '著作権' in str(e):
-                error_category = "著作権保護コンテンツ"
-                error_detail = "音楽や著作権保護されたコンテンツが検出されました"
-                solution = "音声に含まれる音楽やBGMを削除するか、別の音声ファイルを使用してください。"
-            elif 'safety' in error_str or '安全性' in str(e) or 'blocked' in error_str:
-                error_category = "安全性フィルター"
-                error_detail = "音声の内容が安全性基準に抵触する可能性があります"
-                solution = "音声の内容を確認してください。過激な表現や不適切なコンテンツが含まれている場合、処理できません。"
-            elif '500' in str(e) or 'internal' in error_str:
-                error_category = "サーバーエラー"
-                error_detail = f"{type(e).__name__}"
-                solution = "Google側のサーバーで一時的な問題が発生しています。数分待ってから再度実行してください。"
-            else:
-                error_category = "予期しないエラー"
-                error_detail = f"{type(e).__name__}: {str(e)}"
-                solution = "エラーが続く場合は、別の音声ファイルを試すか、ログファイルを確認してください。"
-
-            # エラー情報をファイルに保存（デバッグ用）
-            try:
-                segment_dir = os.path.dirname(segment_file) if segment_file else tempfile.gettempdir()
-                if segment_dir and os.path.exists(segment_dir):
-                    error_log_path = os.path.join(
-                        segment_dir,
-                        f"segment_{segment_num}_error.log"
-                    )
-                    error_details['error_category'] = error_category
-                    error_details['error_detail'] = error_detail
-                    error_details['solution'] = solution
-                    with open(error_log_path, 'w', encoding='utf-8') as f:
-                        json.dump(error_details, f, ensure_ascii=False, indent=2)
-            except Exception as log_error:
-                logger.debug(f"エラーログの保存に失敗: {str(log_error)}")
-
-            # わかりやすいエラーメッセージを作成
-            user_friendly_error = (
-                f"\n⚠️ セグメント {segment_num} 処理エラー\n"
-                f"エラー種別: {error_category}\n"
-                f"詳細: {error_detail}\n"
-                f"💡 対処法: {solution}"
-            )
-
-            logger.error(f"セグメント {segment_num} 処理エラー: {error_category} - {error_detail}")
-            logger.debug(f"エラー詳細: {json.dumps(error_details, ensure_ascii=False)}")
-
+            error_category, error_detail = self._classify_segment_error(e, segment_num, segment_file, total_segments, model_name)
             return f"[セグメント {segment_num} 処理エラー: {error_category} - {error_detail}]", None
+
+    def _classify_segment_error(self, exception, segment_num, segment_file, total_segments, model_name):
+        """セグメント処理エラーを分類し、ログに記録する
+
+        Returns:
+            (error_category, error_detail) のタプル
+        """
+        error_details = {
+            'segment_num': segment_num,
+            'total_segments': total_segments,
+            'segment_file': segment_file,
+            'error_type': type(exception).__name__,
+            'error_message': str(exception),
+            'model': model_name
+        }
+
+        error_str = str(exception).lower()
+
+        if 'audio input modality is not enabled' in error_str or 'audio input is not supported' in error_str:
+            error_category = "モデル非対応"
+            error_detail = "選択されたモデルは音声入力に対応していません"
+            solution = "別のモデルを選択してください。Flash系モデル（gemini-2.5-flash等）の使用を推奨します。"
+        elif 'rate limit' in error_str or '429' in error_str:
+            error_category = "APIレート制限"
+            error_detail = "APIの呼び出し回数が上限に達しました"
+            solution = "数分待ってから再度実行してください。または、有料プランへのアップグレードをご検討ください。"
+        elif 'timeout' in error_str:
+            error_category = "タイムアウト"
+            error_detail = "API応答に時間がかかりすぎました"
+            solution = "音声の内容が複雑すぎる可能性があります。しばらく待ってから再度実行してください。"
+        elif 'network' in error_str or 'connection' in error_str:
+            error_category = "ネットワーク接続"
+            error_detail = "インターネット接続に問題があります"
+            solution = "ネットワーク接続を確認してから再度実行してください。"
+        elif 'authentication' in error_str or '401' in str(exception) or '403' in str(exception):
+            error_category = "認証失敗"
+            error_detail = "APIキーが無効または権限がありません"
+            solution = "APIキーが正しく設定されているか確認してください。"
+        elif 'finish_reason' in error_str and '4' in error_str:
+            error_category = "著作権保護コンテンツ"
+            error_detail = "音楽や著作権保護されたコンテンツが検出されました"
+            solution = "音声に含まれる音楽やBGMを削除するか、別の音声ファイルを使用してください。"
+        elif 'copyrighted' in error_str or '著作権' in str(exception):
+            error_category = "著作権保護コンテンツ"
+            error_detail = "音楽や著作権保護されたコンテンツが検出されました"
+            solution = "音声に含まれる音楽やBGMを削除するか、別の音声ファイルを使用してください。"
+        elif 'safety' in error_str or '安全性' in str(exception) or 'blocked' in error_str:
+            error_category = "安全性フィルター"
+            error_detail = "音声の内容が安全性基準に抵触する可能性があります"
+            solution = "音声の内容を確認してください。過激な表現や不適切なコンテンツが含まれている場合、処理できません。"
+        elif '500' in str(exception) or 'internal' in error_str:
+            error_category = "サーバーエラー"
+            error_detail = f"{type(exception).__name__}"
+            solution = "Google側のサーバーで一時的な問題が発生しています。数分待ってから再度実行してください。"
+        else:
+            error_category = "予期しないエラー"
+            error_detail = f"{type(exception).__name__}: {str(exception)}"
+            solution = "エラーが続く場合は、別の音声ファイルを試すか、ログファイルを確認してください。"
+
+        # エラー情報をファイルに保存（デバッグ用）
+        try:
+            segment_dir = os.path.dirname(segment_file) if segment_file else tempfile.gettempdir()
+            if segment_dir and os.path.exists(segment_dir):
+                error_log_path = os.path.join(
+                    segment_dir,
+                    f"segment_{segment_num}_error.log"
+                )
+                error_details['error_category'] = error_category
+                error_details['error_detail'] = error_detail
+                error_details['solution'] = solution
+                with open(error_log_path, 'w', encoding='utf-8') as f:
+                    json.dump(error_details, f, ensure_ascii=False, indent=2)
+        except Exception as log_error:
+            logger.debug(f"エラーログの保存に失敗: {str(log_error)}")
+
+        logger.error(f"セグメント {segment_num} 処理エラー: {error_category} - {error_detail}")
+        logger.debug(f"エラー詳細: {json.dumps(error_details, ensure_ascii=False)}")
+
+        return error_category, error_detail
     
     def _perform_whisper_single_transcription(self, audio_path, update_status, whisper_model='base'):
         """Whisperを使用した単一ファイルの文字起こし"""
@@ -781,8 +781,8 @@ class FileProcessor:
             if segment_file != original_audio_path and os.path.exists(segment_file):
                 try:
                     os.unlink(segment_file)
-                except:
-                    pass
+                except OSError:
+                    logger.warning(f"セグメントファイルの削除に失敗: {segment_file}")
     
     def _perform_additional_processing(self, transcription, process_type, prompts, api_key, update_status, preferred_model=None):
         """追加処理（要約、議事録作成など）"""
