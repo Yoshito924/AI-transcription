@@ -235,6 +235,12 @@ class TranscriptionController:
             else:
                 self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Gemini処理開始 ━━━"))
 
+            # 保存先設定の取得
+            save_to_output = self.ui_elements.get('save_to_output_var')
+            save_to_source = self.ui_elements.get('save_to_source_var')
+            save_to_output_dir = save_to_output.get() if save_to_output else True
+            save_to_source_dir = save_to_source.get() if save_to_source else False
+
             output_file = self.processor.process_file(
                 self.current_file,
                 process_type,
@@ -243,7 +249,9 @@ class TranscriptionController:
                 progress_callback,
                 self.preferred_model,
                 engine_value,
-                whisper_model
+                whisper_model,
+                save_to_output_dir=save_to_output_dir,
+                save_to_source_dir=save_to_source_dir
             )
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))

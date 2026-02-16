@@ -89,6 +89,9 @@ class TranscriptionApp:
         
         # エンジン選択とWhisperモデル選択を保存
         self._save_engine_settings()
+
+        # 保存先設定を保存
+        self._save_destination_settings()
         self.config.save()
         
         # アプリケーションを終了
@@ -278,4 +281,14 @@ class TranscriptionApp:
             whisper_model = get_whisper_model_value(self.ui_elements)
             self.config.set("transcription_engine", engine_value)
             self.config.set("whisper_model", whisper_model)
+
+    def _save_destination_settings(self):
+        """保存先設定を保存"""
+        if hasattr(self, 'ui_elements'):
+            save_to_output = self.ui_elements.get('save_to_output_var')
+            save_to_source = self.ui_elements.get('save_to_source_var')
+            if save_to_output is not None:
+                self.config.set("save_to_output_dir", save_to_output.get())
+            if save_to_source is not None:
+                self.config.set("save_to_source_dir", save_to_source.get())
     

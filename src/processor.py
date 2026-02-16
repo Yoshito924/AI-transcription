@@ -4,6 +4,7 @@
 import os
 import re
 import json
+import shutil
 import datetime
 import tempfile
 import google.generativeai as genai
@@ -150,8 +151,9 @@ class FileProcessor:
         files.sort(key=lambda x: x[3], reverse=True)
         return files
     
-    def process_file(self, input_file, process_type, api_key, prompts, status_callback=None, 
-                    preferred_model=None, engine='gemini', whisper_model='base'):
+    def process_file(self, input_file, process_type, api_key, prompts, status_callback=None,
+                    preferred_model=None, engine='gemini', whisper_model='base',
+                    save_to_output_dir=True, save_to_source_dir=False):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
         
@@ -186,7 +188,8 @@ class FileProcessor:
             
             # 結果をファイルに保存
             output_path = self._save_result(
-                input_file, final_text, process_type, prompts, start_time, update_status
+                input_file, final_text, process_type, prompts, start_time, update_status,
+                save_to_output_dir=save_to_output_dir, save_to_source_dir=save_to_source_dir
             )
             
             return output_path
@@ -829,34 +832,56 @@ class FileProcessor:
         
         return response.text
     
-    def _save_result(self, input_file, final_text, process_type, prompts, start_time, update_status):
+    def _save_result(self, input_file, final_text, process_type, prompts, start_time, update_status,
+                     save_to_output_dir=True, save_to_source_dir=False):
         """結果をファイルに保存"""
+        if not save_to_output_dir and not save_to_source_dir:
+            logger.warning("保存先が未指定のため、outputフォルダに保存します")
+            save_to_output_dir = True
+
         timestamp = get_timestamp()
         base_name = os.path.splitext(os.path.basename(input_file))[0]
-        
+
         # process_typeがプロンプトに存在しない場合はデフォルト名を使用
         if process_type in prompts:
             process_name = prompts[process_type]["name"]
         else:
             process_name = "文字起こし"
-        
+
         output_filename = f"{base_name}_{process_name}_{timestamp}.txt"
-        output_path = os.path.join(self.output_dir, output_filename)
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(final_text)
-        
+        result_path = None
+
+        # outputフォルダへ保存
+        if save_to_output_dir:
+            output_path = os.path.join(self.output_dir, output_filename)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(final_text)
+            result_path = output_path
+
+        # 元ファイルのフォルダへ保存
+        if save_to_source_dir:
+            source_dir = os.path.dirname(os.path.abspath(input_file))
+            source_path = os.path.join(source_dir, output_filename)
+            if save_to_output_dir and result_path:
+                shutil.copy2(result_path, source_path)
+            else:
+                with open(source_path, 'w', encoding='utf-8') as f:
+                    f.write(final_text)
+            if result_path is None:
+                result_path = source_path
+            update_status(f"元ファイルのフォルダにも保存: {source_path}")
+
         # 処理完了のログ
         end_time = datetime.datetime.now()
         process_time_str = format_process_time(start_time, end_time)
-        output_size_kb = get_file_size_kb(output_path)
+        output_size_kb = get_file_size_kb(result_path)
         update_status(
             f"処理完了: {output_filename}\n"
             f"- 処理時間: {process_time_str}\n"
             f"- 出力ファイルサイズ: {output_size_kb:.2f}KB"
         )
-        
-        return output_path
+
+        return result_path
     
     def process_transcription_file(self, transcription_file, prompt_key, api_key, prompts, status_callback=None):
         """文字起こしファイルの追加処理を実行"""

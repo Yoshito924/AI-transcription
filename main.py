@@ -33,6 +33,11 @@ def main():
         print("警告: tkinterdnd2が見つかりません。ドラッグ＆ドロップ機能は無効です。")
         root = tk.Tk()
     
+    # アイコン設定
+    icon_path = os.path.join(app_dir, "icon.ico")
+    if os.path.exists(icon_path):
+        root.iconbitmap(icon_path)
+
     # アプリケーション起動
     app = TranscriptionApp(root)
     root.mainloop()

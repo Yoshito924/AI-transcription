@@ -336,6 +336,54 @@ def create_file_section(parent, app, theme, widgets):
     whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
     on_engine_change()
 
+    # 保存先選択フレーム
+    save_dest_frame = tk.Frame(card, bg=theme.colors['surface'])
+    save_dest_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+
+    save_dest_label = tk.Label(
+        save_dest_frame,
+        text="保存先:",
+        font=theme.fonts['body'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    )
+    save_dest_label.pack(side=tk.LEFT, padx=(0, 10))
+
+    save_to_output_var = tk.BooleanVar(value=app.config.get("save_to_output_dir", True))
+    save_to_source_var = tk.BooleanVar(value=app.config.get("save_to_source_dir", False))
+
+    def on_output_toggle():
+        if not save_to_output_var.get() and not save_to_source_var.get():
+            save_to_output_var.set(True)
+        app.config.set("save_to_output_dir", save_to_output_var.get())
+        app.config.set("save_to_source_dir", save_to_source_var.get())
+        app.config.save()
+
+    def on_source_toggle():
+        if not save_to_source_var.get() and not save_to_output_var.get():
+            save_to_source_var.set(True)
+        app.config.set("save_to_output_dir", save_to_output_var.get())
+        app.config.set("save_to_source_dir", save_to_source_var.get())
+        app.config.save()
+
+    save_to_output_cb = ttk.Checkbutton(
+        save_dest_frame,
+        text="outputフォルダ",
+        variable=save_to_output_var,
+        command=on_output_toggle,
+        style='Modern.TCheckbutton'
+    )
+    save_to_output_cb.pack(side=tk.LEFT, padx=(0, 15))
+
+    save_to_source_cb = ttk.Checkbutton(
+        save_dest_frame,
+        text="元ファイルのフォルダ",
+        variable=save_to_source_var,
+        command=on_source_toggle,
+        style='Modern.TCheckbutton'
+    )
+    save_to_source_cb.pack(side=tk.LEFT)
+
     # ドラッグ&ドロップエリア（Canvas版）
     drop_container = widgets.create_drag_drop_canvas(
         card,
@@ -414,6 +462,8 @@ def create_file_section(parent, app, theme, widgets):
     card.engine_var = engine_var
     card.whisper_model_var = whisper_model_var
     card.whisper_model_combo = whisper_model_combo
+    card.save_to_output_var = save_to_output_var
+    card.save_to_source_var = save_to_source_var
 
     return card
 
@@ -630,6 +680,8 @@ def collect_ui_elements(api_section, file_section, usage_section, history_sectio
         'engine_var': file_section.engine_var,
         'whisper_model_var': file_section.whisper_model_var,
         'whisper_model_combo': file_section.whisper_model_combo,
+        'save_to_output_var': file_section.save_to_output_var,
+        'save_to_source_var': file_section.save_to_source_var,
         'usage_sessions': usage_section.sessions_value,
         'usage_tokens': usage_section.tokens_value,
         'usage_cost_usd': usage_section.cost_usd_value,
