@@ -216,17 +216,18 @@ class TranscriptionApp:
     
     
     def update_history(self):
-        """履歴リストを更新"""
+        """履歴リストを更新（交互行色付き）"""
         tree = self.ui_elements['history_tree']
-        
+
         # リストをクリア
         for item in tree.get_children():
             tree.delete(item)
-        
-        # ファイルリスト取得と表示
+
+        # ファイルリスト取得と表示（交互行色）
         files = self.processor.get_output_files()
-        for file, date, size, _ in files:
-            tree.insert('', 'end', values=(file, date, size))
+        for i, (file, date, size, _) in enumerate(files):
+            tag = 'row_even' if i % 2 == 0 else 'row_odd'
+            tree.insert('', 'end', values=(file, date, size), tags=(tag,))
     
     
     def open_output_file(self, event=None):

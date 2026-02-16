@@ -66,29 +66,54 @@ class TranscriptionController:
         """API接続状態を更新"""
         if 'api_status' not in self.ui_elements:
             return
-        
+
         if "API接続" in message and "成功" in message:
             self.ui_elements['api_status'].config(
-                text="● 接続済み",
-                fg="#4caf50"  # 緑色
+                text="\u25cf 接続済み",
+                fg="#5B9A6B"
             )
         elif "エラー" in message:
             self.ui_elements['api_status'].config(
-                text="● エラー",
-                fg="#f44336"  # 赤色
+                text="\u25cf エラー",
+                fg="#C25450"
             )
+
+        # ステータスドットの色を更新
+        if 'status_dot' in self.ui_elements:
+            if "完了" in message or "成功" in message:
+                self.ui_elements['status_dot'].config(fg="#5B9A6B")
+            elif "エラー" in message or "失敗" in message:
+                self.ui_elements['status_dot'].config(fg="#C25450")
+            elif "処理" in message or "開始" in message or "確認中" in message:
+                self.ui_elements['status_dot'].config(fg="#5586B0")
+            else:
+                self.ui_elements['status_dot'].config(fg="#B0ACA7")
     
     def add_log(self, message):
-        """ログエリアにメッセージを追加"""
+        """ログエリアにメッセージを追加（色付きタグ対応）"""
         if 'log_text' not in self.ui_elements:
             return
-            
+
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        log_message = f"[{timestamp}] {message}\n"
-        
         log_text = self.ui_elements['log_text']
         log_text.config(state='normal')
-        log_text.insert('end', log_message)
+
+        # タイムスタンプ部分を色付きで挿入
+        log_text.insert('end', f"[{timestamp}] ", 'timestamp')
+
+        # メッセージの内容に応じてタグを選択
+        if "エラー" in message or "失敗" in message:
+            tag = 'error'
+        elif "完了" in message or "成功" in message:
+            tag = 'success'
+        elif "警告" in message:
+            tag = 'warning'
+        elif "━━━" in message:
+            tag = 'separator'
+        else:
+            tag = 'normal'
+
+        log_text.insert('end', f"{message}\n", tag)
         log_text.see('end')
         log_text.config(state='disabled')
     
