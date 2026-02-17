@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import json
 import tkinter as tk
 from tkinter import messagebox
 import re
@@ -11,7 +12,7 @@ from .config import Config
 from .processor import FileProcessor
 from .controllers import TranscriptionController
 from .usage_tracker import UsageTracker
-from .constants import OUTPUT_DIR, FILE_NAME_DISPLAY_MAX_LENGTH
+from .constants import OUTPUT_DIR, DATA_DIR, FILE_NAME_DISPLAY_MAX_LENGTH
 from .utils import (
     open_file,
     open_directory,
@@ -45,7 +46,13 @@ class TranscriptionApp:
         
         # プロセッサの初期化
         self.processor = FileProcessor(self.output_dir)
-        
+
+        # 処理履歴メタデータ（元ファイルパスの記録）
+        self.data_dir = os.path.join(self.app_dir, DATA_DIR)
+        os.makedirs(self.data_dir, exist_ok=True)
+        self.history_meta_path = os.path.join(self.data_dir, 'processing_history.json')
+        self.history_metadata = self._load_history_metadata()
+
         # UIの構築
         self.ui_elements = setup_ui(self)
         
@@ -56,7 +63,7 @@ class TranscriptionApp:
         self.controller = TranscriptionController(
             self.processor, self.config, self.usage_tracker, self.ui_elements
         )
-        self.controller.set_update_history_callback(self.update_history)
+        self.controller.set_update_history_callback(self._on_history_update)
         self.controller.update_usage_callback = self.update_usage_display
         
         
@@ -252,7 +259,72 @@ class TranscriptionApp:
         """出力フォルダを開く"""
         if not open_directory(self.output_dir):
             messagebox.showerror("エラー", "出力フォルダを開けません。")
-    
+
+    def open_source_file_folder(self, event=None):
+        """選択されたファイルの元ファイルのフォルダをエクスプローラーで開く"""
+        tree = self.ui_elements['history_tree']
+        selection = tree.selection()
+        if not selection:
+            messagebox.showinfo("情報", "履歴からファイルを選択してください。")
+            return
+
+        item = tree.item(selection[0])
+        filename = item['values'][0]
+
+        meta = self.history_metadata.get(filename)
+        if meta and 'source_dir' in meta:
+            source_dir = meta['source_dir']
+            if os.path.exists(source_dir):
+                if not open_directory(source_dir):
+                    messagebox.showerror("エラー", f"フォルダを開けません:\n{source_dir}")
+            else:
+                messagebox.showinfo("情報", f"元ファイルのフォルダが見つかりません:\n{source_dir}")
+        else:
+            messagebox.showinfo(
+                "情報",
+                "このファイルの元ファイル情報が記録されていません。\n"
+                "（この機能は今後処理されたファイルに対して利用可能です）"
+            )
+
+    def _on_history_update(self):
+        """処理完了時のコールバック - メタデータ保存 + 履歴更新"""
+        if self.controller.current_file:
+            files = self.processor.get_output_files()
+            if files:
+                latest_output = files[0][0]  # 最新の出力ファイル名
+                source_file = self.controller.current_file
+                self.history_metadata[latest_output] = {
+                    'source_file': os.path.abspath(source_file),
+                    'source_dir': os.path.dirname(os.path.abspath(source_file))
+                }
+                self._save_history_metadata()
+        self.update_history()
+
+    def _load_history_metadata(self):
+        """処理履歴メタデータを読み込む"""
+        try:
+            if os.path.exists(self.history_meta_path):
+                with open(self.history_meta_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                # 存在しない出力ファイルのエントリを削除
+                cleaned = {}
+                for filename, meta in data.items():
+                    output_path = os.path.join(self.output_dir, filename)
+                    if os.path.exists(output_path):
+                        cleaned[filename] = meta
+                return cleaned
+        except Exception:
+            pass
+        return {}
+
+    def _save_history_metadata(self):
+        """処理履歴メタデータを保存する"""
+        try:
+            with open(self.history_meta_path, 'w', encoding='utf-8') as f:
+                json.dump(self.history_metadata, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"処理履歴メタデータの保存エラー: {e}")
+
     def update_usage_display(self):
         """使用量表示を更新"""
         try:

@@ -149,12 +149,12 @@ def get_whisper_model_value(ui_elements, default='turbo'):
     """
     # UI表示名から内部名へのマッピング
     display_to_model = {
-        '⭐ turbo（推奨・高速高精度）': 'turbo',
+        '\u2b50 turbo（推奨）': 'turbo',
         'large-v3（最高精度）': 'large-v3',
-        'medium（高精度・軽量）': 'medium',
-        'small（中精度・軽量）': 'small',
+        'medium（高精度）': 'medium',
+        'small（軽量）': 'small',
         'base（標準）': 'base',
-        'tiny（最速・低精度）': 'tiny',
+        'tiny（最速）': 'tiny',
     }
     
     whisper_model_var = ui_elements.get('whisper_model_var', None)

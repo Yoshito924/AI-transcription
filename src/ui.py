@@ -41,31 +41,40 @@ def setup_ui(app):
 
     # アプリケーションヘッダー
     app_header = _create_app_header(main_container, theme)
-    app_header.pack(fill=tk.X, pady=(0, SECTION_SPACING))
+    app_header.pack(fill=tk.X, pady=(0, 8))
 
-    # 上部：API設定と使用量を横並び
-    top_container = tk.Frame(main_container, bg=theme.colors['background'])
-    top_container.pack(fill=tk.X, pady=(0, SECTION_SPACING))
+    # タブ（文字起こし / API設定・使用量）
+    notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
+    notebook.pack(fill=tk.X, pady=(0, SECTION_SPACING))
 
-    api_section = create_api_section(top_container, app, theme, widgets)
-    api_section.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+    # タブ1: 文字起こし
+    file_tab = tk.Frame(notebook, bg=theme.colors['surface'])
+    notebook.add(file_tab, text='  文字起こし  ')
+    file_section = create_file_section(file_tab, app, theme, widgets)
+    file_section.pack(fill=tk.X)
 
-    usage_section = create_usage_section(top_container, app, theme, widgets)
-    usage_section.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(8, 0))
+    # タブ2: API設定・使用量
+    settings_tab = tk.Frame(notebook, bg=theme.colors['surface'])
+    notebook.add(settings_tab, text='  API設定・使用量  ')
+    settings_content = tk.Frame(settings_tab, bg=theme.colors['surface'])
+    settings_content.pack(fill=tk.X, padx=8, pady=8)
+    api_section = create_api_section(settings_content, app, theme, widgets)
+    api_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+    usage_section = create_usage_section(settings_content, app, theme, widgets)
+    usage_section.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8, 0))
 
-    # ファイル入力セクション
-    file_section = create_file_section(main_container, app, theme, widgets)
-    file_section.pack(fill=tk.X, pady=(0, SECTION_SPACING))
-
-    # 処理履歴とログを横並びに
+    # 処理履歴とログを横並びに（履歴を大きめに配置）
     bottom_container = tk.Frame(main_container, bg=theme.colors['background'])
     bottom_container.pack(fill=tk.BOTH, expand=True)
+    bottom_container.columnconfigure(0, weight=3)  # 処理履歴: 60%
+    bottom_container.columnconfigure(1, weight=2)  # ログ: 40%
+    bottom_container.rowconfigure(0, weight=1)
 
     history_section = create_history_section(bottom_container, app, theme, widgets)
-    history_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+    history_section.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
 
     log_section = create_log_section(bottom_container, app, theme, widgets)
-    log_section.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8, 0))
+    log_section.grid(row=0, column=1, sticky='nsew', padx=(8, 0))
 
     # UI要素を収集
     ui_elements = collect_ui_elements(
@@ -209,76 +218,51 @@ def create_api_section(parent, app, theme, widgets):
 
 
 def create_file_section(parent, app, theme, widgets):
-    """ファイル入力セクションの作成"""
-    card = widgets.create_card_frame(parent)
+    """ファイル入力セクション（コンパクト版・タブ内用）"""
+    frame = tk.Frame(parent, bg=theme.colors['surface'])
+    pad = 16
 
-    # セクションヘッダー
-    header = widgets.create_section_header(card, "ファイル選択")
-    header.pack(fill=tk.X, padx=CARD_PADDING, pady=(CARD_PADDING, 10))
-
-    # エンジン選択フレーム
-    engine_frame = tk.Frame(card, bg=theme.colors['surface'])
-    engine_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    # Row 1: エンジン選択（コンパクト）
+    engine_frame = tk.Frame(frame, bg=theme.colors['surface'])
+    engine_frame.pack(fill=tk.X, padx=pad, pady=(pad, 4))
 
     engine_label = tk.Label(
-        engine_frame,
-        text="文字起こしエンジン:",
+        engine_frame, text="エンジン:",
         font=theme.fonts['body'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface']
     )
-    engine_label.pack(side=tk.LEFT, padx=(0, 10))
+    engine_label.pack(side=tk.LEFT, padx=(0, 8))
 
     saved_engine = app.config.get("transcription_engine", "gemini")
     engine_var = tk.StringVar(value=saved_engine)
 
-    gemini_radio = ttk.Radiobutton(
-        engine_frame,
-        text="Gemini (クラウド/高精度)",
-        variable=engine_var,
-        value="gemini",
-        style='Modern.TRadiobutton'
-    )
-    gemini_radio.pack(side=tk.LEFT, padx=(0, 15))
+    for text, value in [("Gemini", "gemini"), ("Whisper (ローカル)", "whisper"), ("Whisper API", "whisper-api")]:
+        ttk.Radiobutton(
+            engine_frame, text=text,
+            variable=engine_var, value=value,
+            style='Modern.TRadiobutton'
+        ).pack(side=tk.LEFT, padx=(0, 12))
 
-    whisper_radio = ttk.Radiobutton(
-        engine_frame,
-        text="Whisper (ローカル/無料)",
-        variable=engine_var,
-        value="whisper",
-        style='Modern.TRadiobutton'
-    )
-    whisper_radio.pack(side=tk.LEFT, padx=(0, 15))
-
-    whisper_api_radio = ttk.Radiobutton(
-        engine_frame,
-        text="Whisper API (クラウド/高精度)",
-        variable=engine_var,
-        value="whisper-api",
-        style='Modern.TRadiobutton'
-    )
-    whisper_api_radio.pack(side=tk.LEFT)
-
-    # Whisperモデル選択
-    whisper_model_frame = tk.Frame(card, bg=theme.colors['surface'])
-    whisper_model_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    # Row 2: Whisperモデル + 保存先（1行に統合）
+    options_frame = tk.Frame(frame, bg=theme.colors['surface'])
+    options_frame.pack(fill=tk.X, padx=pad, pady=(0, 6))
 
     whisper_model_label = tk.Label(
-        whisper_model_frame,
-        text="Whisperモデル:",
-        font=theme.fonts['body'],
+        options_frame, text="モデル:",
+        font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface']
     )
-    whisper_model_label.pack(side=tk.LEFT, padx=(0, 10))
+    whisper_model_label.pack(side=tk.LEFT, padx=(0, 4))
 
     model_display_names = {
-        'turbo': '\u2b50 turbo（推奨・高速高精度）',
+        'turbo': '\u2b50 turbo（推奨）',
         'large-v3': 'large-v3（最高精度）',
-        'medium': 'medium（高精度・軽量）',
-        'small': 'small（中精度・軽量）',
+        'medium': 'medium（高精度）',
+        'small': 'small（軽量）',
         'base': 'base（標準）',
-        'tiny': 'tiny（最速・低精度）',
+        'tiny': 'tiny（最速）',
     }
     display_to_model = {v: k for k, v in model_display_names.items()}
 
@@ -288,66 +272,47 @@ def create_file_section(parent, app, theme, widgets):
     if saved_whisper_model not in model_display_names:
         saved_whisper_model = 'turbo'
 
-    whisper_model_var = tk.StringVar(value=model_display_names.get(saved_whisper_model, model_display_names['turbo']))
+    whisper_model_var = tk.StringVar(
+        value=model_display_names.get(saved_whisper_model, model_display_names['turbo'])
+    )
     whisper_model_combo = ttk.Combobox(
-        whisper_model_frame,
+        options_frame,
         textvariable=whisper_model_var,
         values=list(model_display_names.values()),
-        state='readonly',
-        width=28,
+        state='readonly', width=22,
         style='Modern.TCombobox'
     )
-    whisper_model_combo.pack(side=tk.LEFT, padx=(0, 10))
+    whisper_model_combo.pack(side=tk.LEFT, padx=(0, 8))
 
     model_details = {
-        'turbo': '809MB | 高速かつ高精度、日本語対応\u25ce',
-        'large-v3': '1.5GB | 99言語対応、最高精度',
-        'medium': '769MB | バランス型、日本語対応\u25cb',
-        'small': '244MB | 軽量、処理速度重視',
-        'base': '74MB | 軽量、テスト用',
-        'tiny': '39MB | 最軽量、精度低',
+        'turbo': '809MB | 高速高精度',
+        'large-v3': '1.5GB | 最高精度',
+        'medium': '769MB | バランス型',
+        'small': '244MB | 軽量',
+        'base': '74MB | テスト用',
+        'tiny': '39MB | 最軽量',
     }
 
     whisper_model_info = tk.Label(
-        whisper_model_frame,
+        options_frame,
         text=model_details.get(saved_whisper_model, ''),
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface']
     )
-    whisper_model_info.pack(side=tk.LEFT)
+    whisper_model_info.pack(side=tk.LEFT, padx=(0, 16))
 
-    def on_engine_change():
-        is_whisper = engine_var.get() == "whisper"
-        whisper_model_combo.config(state='readonly' if is_whisper else 'disabled')
-        whisper_model_label.config(fg=theme.colors['text_secondary'] if is_whisper else theme.colors['text_disabled'])
-        whisper_model_info.config(fg=theme.colors['text_secondary'] if is_whisper else theme.colors['text_disabled'])
-        app.config.set("transcription_engine", engine_var.get())
-        app.config.save()
+    # 区切り線
+    tk.Frame(
+        options_frame, bg=theme.colors['outline'], width=1
+    ).pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12), pady=2)
 
-    def on_model_change(event=None):
-        display_name = whisper_model_var.get()
-        model_name = display_to_model.get(display_name, 'turbo')
-        whisper_model_info.config(text=model_details.get(model_name, ''))
-        app.config.set("whisper_model", model_name)
-        app.config.save()
-
-    engine_var.trace('w', lambda *args: on_engine_change())
-    whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
-    on_engine_change()
-
-    # 保存先選択フレーム
-    save_dest_frame = tk.Frame(card, bg=theme.colors['surface'])
-    save_dest_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
-
-    save_dest_label = tk.Label(
-        save_dest_frame,
-        text="保存先:",
-        font=theme.fonts['body'],
+    tk.Label(
+        options_frame, text="保存先:",
+        font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface']
-    )
-    save_dest_label.pack(side=tk.LEFT, padx=(0, 10))
+    ).pack(side=tk.LEFT, padx=(0, 6))
 
     save_to_output_var = tk.BooleanVar(value=app.config.get("save_to_output_dir", True))
     save_to_source_var = tk.BooleanVar(value=app.config.get("save_to_source_dir", False))
@@ -366,42 +331,60 @@ def create_file_section(parent, app, theme, widgets):
         app.config.set("save_to_source_dir", save_to_source_var.get())
         app.config.save()
 
-    save_to_output_cb = ttk.Checkbutton(
-        save_dest_frame,
-        text="outputフォルダ",
-        variable=save_to_output_var,
-        command=on_output_toggle,
+    ttk.Checkbutton(
+        options_frame, text="output",
+        variable=save_to_output_var, command=on_output_toggle,
         style='Modern.TCheckbutton'
-    )
-    save_to_output_cb.pack(side=tk.LEFT, padx=(0, 15))
+    ).pack(side=tk.LEFT, padx=(0, 8))
 
-    save_to_source_cb = ttk.Checkbutton(
-        save_dest_frame,
-        text="元ファイルのフォルダ",
-        variable=save_to_source_var,
-        command=on_source_toggle,
+    ttk.Checkbutton(
+        options_frame, text="元ファイル側",
+        variable=save_to_source_var, command=on_source_toggle,
         style='Modern.TCheckbutton'
-    )
-    save_to_source_cb.pack(side=tk.LEFT)
+    ).pack(side=tk.LEFT)
 
-    # ドラッグ&ドロップエリア（Canvas版）
+    # エンジン切り替えコールバック
+    def on_engine_change():
+        is_whisper = engine_var.get() == "whisper"
+        whisper_model_combo.config(state='readonly' if is_whisper else 'disabled')
+        whisper_model_label.config(
+            fg=theme.colors['text_secondary'] if is_whisper else theme.colors['text_disabled']
+        )
+        whisper_model_info.config(
+            fg=theme.colors['text_secondary'] if is_whisper else theme.colors['text_disabled']
+        )
+        app.config.set("transcription_engine", engine_var.get())
+        app.config.save()
+
+    def on_model_change(event=None):
+        display_name = whisper_model_var.get()
+        model_name = display_to_model.get(display_name, 'turbo')
+        whisper_model_info.config(text=model_details.get(model_name, ''))
+        app.config.set("whisper_model", model_name)
+        app.config.save()
+
+    engine_var.trace('w', lambda *args: on_engine_change())
+    whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
+    on_engine_change()
+
+    # Row 3: ドラッグ&ドロップ（コンパクト）
     drop_container = widgets.create_drag_drop_canvas(
-        card,
-        "ここをクリックして音声/動画ファイルを選択\nまたはファイルをドラッグ&ドロップ",
-        height=DRAG_DROP_AREA_HEIGHT
+        frame,
+        "ここをクリックしてファイルを選択  /  ドラッグ&ドロップ",
+        height=75
     )
-    drop_container.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    drop_container.pack(fill=tk.X, padx=pad, pady=(0, 6))
 
     drop_canvas = drop_container.canvas
     drop_canvas.bind("<Button-1>", app.browse_file)
     setup_drag_drop(drop_canvas, drop_canvas, app)
 
-    # ファイル情報
-    file_info_frame = tk.Frame(card, bg=theme.colors['surface'])
-    file_info_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 8))
+    # Row 4: ファイル情報 + ステータス（1行に統合）
+    info_status_frame = tk.Frame(frame, bg=theme.colors['surface'])
+    info_status_frame.pack(fill=tk.X, padx=pad, pady=(0, 4))
 
     file_label = tk.Label(
-        file_info_frame,
+        info_status_frame,
         text="選択ファイル: なし",
         font=theme.fonts['body'],
         fg=theme.colors['text_secondary'],
@@ -409,63 +392,52 @@ def create_file_section(parent, app, theme, widgets):
     )
     file_label.pack(side=tk.LEFT)
 
-    # ステータス表示
-    status_frame = tk.Frame(card, bg=theme.colors['surface'])
-    status_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 4))
-
-    status_dot = tk.Label(
-        status_frame,
-        text="\u25cf",
-        font=(theme.fonts['default'][0], 8),
-        fg=theme.colors['text_disabled'],
-        bg=theme.colors['surface']
-    )
-    status_dot.pack(side=tk.LEFT, padx=(0, 5))
-
     status_label = tk.Label(
-        status_frame,
+        info_status_frame,
         text="準備完了",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface']
     )
-    status_label.pack(side=tk.LEFT)
+    status_label.pack(side=tk.RIGHT)
 
-    # プログレスバー（フルワイド、独立行）
-    progress_frame = tk.Frame(card, bg=theme.colors['surface'])
-    progress_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    status_dot = tk.Label(
+        info_status_frame,
+        text="\u25cf",
+        font=(theme.fonts['default'][0], 8),
+        fg=theme.colors['text_disabled'],
+        bg=theme.colors['surface']
+    )
+    status_dot.pack(side=tk.RIGHT, padx=(0, 4))
 
+    # Row 5: プログレスバー
     progress = ttk.Progressbar(
-        progress_frame,
-        orient=tk.HORIZONTAL,
+        frame, orient=tk.HORIZONTAL,
         mode='indeterminate',
         style='Modern.Horizontal.TProgressbar'
     )
-    progress.pack(fill=tk.X)
+    progress.pack(fill=tk.X, padx=pad, pady=(0, 8))
 
-    # 文字起こしボタン（アクションボタン）
-    button_frame = tk.Frame(card, bg=theme.colors['surface'])
-    button_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, CARD_PADDING))
-
+    # Row 6: 文字起こしボタン
     transcribe_btn = widgets.create_action_button(
-        button_frame,
-        "音声を文字起こし開始",
+        frame, "文字起こし開始",
         command=lambda: app.start_process("transcription")
     )
-    transcribe_btn.pack(expand=True, fill=tk.X)
+    transcribe_btn.pack(fill=tk.X, padx=pad, pady=(0, pad))
 
-    card.drop_area = drop_canvas
-    card.file_label = file_label
-    card.status_label = status_label
-    card.status_dot = status_dot
-    card.progress = progress
-    card.engine_var = engine_var
-    card.whisper_model_var = whisper_model_var
-    card.whisper_model_combo = whisper_model_combo
-    card.save_to_output_var = save_to_output_var
-    card.save_to_source_var = save_to_source_var
+    # UI要素の参照を設定
+    frame.drop_area = drop_canvas
+    frame.file_label = file_label
+    frame.status_label = status_label
+    frame.status_dot = status_dot
+    frame.progress = progress
+    frame.engine_var = engine_var
+    frame.whisper_model_var = whisper_model_var
+    frame.whisper_model_combo = whisper_model_combo
+    frame.save_to_output_var = save_to_output_var
+    frame.save_to_source_var = save_to_source_var
 
-    return card
+    return frame
 
 
 def create_history_section(parent, app, theme, widgets):
@@ -495,7 +467,7 @@ def create_history_section(parent, app, theme, widgets):
         columns=columns,
         show='headings',
         style='Modern.Treeview',
-        height=8
+        height=12
     )
 
     history_tree.heading('filename', text='ファイル名')
@@ -528,10 +500,16 @@ def create_history_section(parent, app, theme, widgets):
     button_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, CARD_PADDING))
 
     open_btn = widgets.create_icon_button(
-        button_frame, "ファイルを開く", ICONS['open'], 'Secondary',
+        button_frame, "ファイルを開く", ICONS['document'], 'Secondary',
         command=app.open_output_file
     )
     open_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+    source_folder_btn = widgets.create_icon_button(
+        button_frame, "元ファイルのフォルダ", ICONS['file'], 'Secondary',
+        command=app.open_source_file_folder
+    )
+    source_folder_btn.pack(side=tk.LEFT, padx=(0, 5))
 
     folder_btn = widgets.create_icon_button(
         button_frame, "出力フォルダを開く", ICONS['folder'], 'Secondary',
