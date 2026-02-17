@@ -421,13 +421,25 @@ def create_file_section(parent, app, theme, widgets):
     )
     status_dot.pack(side=tk.RIGHT, padx=(0, 4))
 
-    # Row 5: プログレスバー
+    # Row 5: プログレスバー + パーセント表示
+    progress_frame = tk.Frame(frame, bg=theme.colors['surface'])
+    progress_frame.pack(fill=tk.X, padx=pad, pady=(0, 8))
+
     progress = ttk.Progressbar(
-        frame, orient=tk.HORIZONTAL,
-        mode='indeterminate',
+        progress_frame, orient=tk.HORIZONTAL,
+        mode='determinate', maximum=100, value=0,
         style='Modern.Horizontal.TProgressbar'
     )
-    progress.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    progress.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    progress_label = tk.Label(
+        progress_frame, text="",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface'],
+        width=5, anchor='e'
+    )
+    progress_label.pack(side=tk.RIGHT, padx=(4, 0))
 
     # Row 6: 文字起こしボタン
     transcribe_btn = widgets.create_action_button(
@@ -442,6 +454,7 @@ def create_file_section(parent, app, theme, widgets):
     frame.status_label = status_label
     frame.status_dot = status_dot
     frame.progress = progress
+    frame.progress_label = progress_label
     frame.engine_var = engine_var
     frame.whisper_model_var = whisper_model_var
     frame.whisper_model_combo = whisper_model_combo
@@ -666,6 +679,7 @@ def collect_ui_elements(api_section, file_section, usage_section, history_sectio
         'status_label': file_section.status_label,
         'status_dot': file_section.status_dot,
         'progress': file_section.progress,
+        'progress_label': file_section.progress_label,
         'engine_var': file_section.engine_var,
         'whisper_model_var': file_section.whisper_model_var,
         'whisper_model_combo': file_section.whisper_model_combo,

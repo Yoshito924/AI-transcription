@@ -153,45 +153,58 @@ class FileProcessor:
     
     def process_file(self, input_file, process_type, api_key, prompts, status_callback=None,
                     preferred_model=None, engine='gemini', whisper_model='base',
-                    save_to_output_dir=True, save_to_source_dir=False):
+                    save_to_output_dir=True, save_to_source_dir=False,
+                    progress_value_callback=None):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
-        
+
         def update_status(message):
             logger.info(message)
             if status_callback:
                 status_callback(message)
-        
+
+        def update_progress(value):
+            if progress_value_callback:
+                progress_value_callback(value)
+
         try:
             # 音声ファイルの準備（キャッシュ対応）
+            update_progress(2)
             audio_path, cached_segments, from_cache = self._prepare_audio_file(input_file, update_status)
+            update_progress(10)
 
             # 文字起こし実行（エンジンに応じて分岐）
             # キャッシュからセグメントを取得した場合は、それを使用
             if engine == 'whisper':
                 transcription = self._perform_whisper_transcription(
-                    audio_path, update_status, whisper_model, cached_segments
+                    audio_path, update_status, whisper_model, cached_segments,
+                    progress_callback=update_progress
                 )
             elif engine == 'whisper-api':
                 transcription = self._perform_whisper_api_transcription(
-                    audio_path, api_key, update_status, cached_segments
+                    audio_path, api_key, update_status, cached_segments,
+                    progress_callback=update_progress
                 )
             else:  # gemini
                 transcription = self._perform_transcription(
-                    audio_path, api_key, update_status, preferred_model, cached_segments
+                    audio_path, api_key, update_status, preferred_model, cached_segments,
+                    progress_callback=update_progress
                 )
-            
+            update_progress(85)
+
             # 追加処理（必要な場合）
             final_text = self._perform_additional_processing(
                 transcription, process_type, prompts, api_key, update_status, preferred_model
             )
-            
+            update_progress(95)
+
             # 結果をファイルに保存
             output_path = self._save_result(
                 input_file, final_text, process_type, prompts, start_time, update_status,
                 save_to_output_dir=save_to_output_dir, save_to_source_dir=save_to_source_dir
             )
-            
+            update_progress(100)
+
             return output_path
             
         except Exception as e:
@@ -267,13 +280,14 @@ class FileProcessor:
 
         return audio_path, segment_files, False
     
-    def _perform_transcription(self, audio_path, api_key, update_status, preferred_model=None, cached_segments=None):
+    def _perform_transcription(self, audio_path, api_key, update_status, preferred_model=None, cached_segments=None, progress_callback=None):
         """文字起こしを実行"""
         # キャッシュされたセグメントがある場合は、それを使用
         if cached_segments:
             logger.info(f"キャッシュされたセグメントを使用: {len(cached_segments)}個")
             return self._perform_segmented_transcription(
-                audio_path, api_key, update_status, preferred_model, cached_segments
+                audio_path, api_key, update_status, preferred_model, cached_segments,
+                progress_callback=progress_callback
             )
 
         # ファイルサイズと長さを再チェック
@@ -287,18 +301,27 @@ class FileProcessor:
 
         if needs_split:
             logger.info(f"ファイル分割処理を実行: サイズ={file_size_mb:.2f}MB, 長さ={audio_duration_sec}s")
-            return self._perform_segmented_transcription(audio_path, api_key, update_status, preferred_model)
+            return self._perform_segmented_transcription(
+                audio_path, api_key, update_status, preferred_model,
+                progress_callback=progress_callback
+            )
         else:
             logger.info(f"単一ファイル処理を実行: サイズ={file_size_mb:.2f}MB")
-            return self._perform_single_transcription(audio_path, api_key, update_status, preferred_model)
+            if progress_callback:
+                progress_callback(15)
+            result = self._perform_single_transcription(audio_path, api_key, update_status, preferred_model)
+            if progress_callback:
+                progress_callback(80)
+            return result
     
-    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='base', cached_segments=None):
+    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='base', cached_segments=None, progress_callback=None):
         """Whisperを使用した文字起こしを実行"""
         # キャッシュされたセグメントがある場合は、それを使用
         if cached_segments:
             logger.info(f"キャッシュされたセグメントを使用: {len(cached_segments)}個")
             return self._perform_whisper_segmented_transcription(
-                audio_path, update_status, whisper_model, cached_segments
+                audio_path, update_status, whisper_model, cached_segments,
+                progress_callback=progress_callback
             )
 
         # ファイルサイズと長さをチェック
@@ -310,12 +333,20 @@ class FileProcessor:
 
         if needs_split:
             logger.info(f"Whisper分割処理を実行: 長さ={audio_duration_sec}s")
-            return self._perform_whisper_segmented_transcription(audio_path, update_status, whisper_model)
+            return self._perform_whisper_segmented_transcription(
+                audio_path, update_status, whisper_model,
+                progress_callback=progress_callback
+            )
         else:
             logger.info(f"Whisper単一ファイル処理を実行: サイズ={file_size_mb:.2f}MB")
-            return self._perform_whisper_single_transcription(audio_path, update_status, whisper_model)
+            if progress_callback:
+                progress_callback(15)
+            result = self._perform_whisper_single_transcription(audio_path, update_status, whisper_model)
+            if progress_callback:
+                progress_callback(80)
+            return result
     
-    def _perform_whisper_api_transcription(self, audio_path, api_key, update_status, cached_segments=None):
+    def _perform_whisper_api_transcription(self, audio_path, api_key, update_status, cached_segments=None, progress_callback=None):
         """OpenAI Whisper APIを使用した文字起こしを実行"""
         # Whisper APIサービスの初期化
         if not self.whisper_api_service or self.whisper_api_service.api_key != api_key:
@@ -334,7 +365,9 @@ class FileProcessor:
         
         logger.info(f"Whisper API文字起こし開始: サイズ={file_size_mb:.2f}MB, 長さ={format_duration(audio_duration_sec)}")
         update_status(f"Whisper APIで文字起こし中...")
-        
+        if progress_callback:
+            progress_callback(15)
+
         try:
             text, metadata = self.whisper_api_service.transcribe(audio_path, language='ja')
             
@@ -347,12 +380,14 @@ class FileProcessor:
                     f"- 音声長さ: {format_duration(audio_duration_sec)}"
                 )
             
+            if progress_callback:
+                progress_callback(80)
             return text
-            
+
         except Exception as e:
             logger.error(f"Whisper API文字起こしエラー: {str(e)}")
             raise TranscriptionError(f"Whisper API文字起こしに失敗しました: {str(e)}")
-    
+
     def _perform_single_transcription(self, audio_path, api_key, update_status, preferred_model=None):
         """単一ファイルの文字起こし"""
         genai.configure(api_key=api_key)
@@ -408,7 +443,7 @@ class FileProcessor:
 
         return response.text
     
-    def _perform_segmented_transcription(self, audio_path, api_key, update_status, preferred_model=None, cached_segments=None):
+    def _perform_segmented_transcription(self, audio_path, api_key, update_status, preferred_model=None, cached_segments=None, progress_callback=None):
         """分割された音声ファイルの文字起こし（スマート統合付き）"""
         genai.configure(api_key=api_key)
         model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
@@ -438,14 +473,19 @@ class FileProcessor:
         segment_errors = []  # エラー情報を記録
         
         try:
+            total = len(segment_files)
             for i, segment_file in enumerate(segment_files):
-                update_status(f"セグメント {i+1}/{len(segment_files)} を処理中")
-                
+                update_status(f"セグメント {i+1}/{total} を処理中")
+                if progress_callback:
+                    # 10%〜80%の範囲でセグメントごとに進捗
+                    pct = 10 + int((i / total) * 70)
+                    progress_callback(pct)
+
                 # セグメントの文字起こし（改善版）
                 result = self._transcribe_segment_enhanced(
-                    segment_file, api_key, i+1, len(segment_files), model_name
+                    segment_file, api_key, i+1, total, model_name
                 )
-                
+
                 if isinstance(result, tuple):
                     segment_transcription, cost_info = result
                     if cost_info:
@@ -719,7 +759,7 @@ class FileProcessor:
             logger.error(f"Whisper文字起こしエラー: {str(e)}")
             raise TranscriptionError(f"Whisper文字起こしに失敗しました: {str(e)}")
     
-    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model='base', cached_segments=None):
+    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model='base', cached_segments=None, progress_callback=None):
         """Whisperを使用した分割ファイルの文字起こし"""
         # キャッシュされたセグメントを使用
         if cached_segments:
@@ -735,13 +775,17 @@ class FileProcessor:
                 raise AudioProcessingError("音声ファイルの分割に失敗しました")
 
             update_status(f"{len(segment_files)}個のセグメントに分割しました")
-        
+
         segment_transcriptions = []
         segment_info = []
-        
+        total = len(segment_files)
+
         try:
             for i, segment_file in enumerate(segment_files):
-                update_status(f"セグメント {i+1}/{len(segment_files)} をWhisperで処理中")
+                update_status(f"セグメント {i+1}/{total} をWhisperで処理中")
+                if progress_callback:
+                    pct = 10 + int((i / total) * 70)
+                    progress_callback(pct)
                 
                 # Whisperでセグメントを文字起こし
                 text, metadata = self.whisper_service.transcribe_segment(

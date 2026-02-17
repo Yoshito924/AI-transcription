@@ -206,7 +206,9 @@ class TranscriptionController:
             if self.is_processing:
                 return
             self.is_processing = True
-        self.ui_elements['progress'].start()
+        self.ui_elements['progress'].config(mode='determinate', maximum=100, value=0)
+        if 'progress_label' in self.ui_elements:
+            self.ui_elements['progress_label'].config(text="0%")
         self.update_status("文字起こし処理を開始しています...")
         
         thread = threading.Thread(
@@ -219,9 +221,14 @@ class TranscriptionController:
     def _process_in_thread(self, process_type, api_key, prompts):
         """スレッドで実行される処理"""
         try:
-            # プログレスコールバック
+            # ステータスメッセージコールバック
             def progress_callback(msg):
                 self.ui_elements['root'].after(0, lambda: self.update_status(msg))
+
+            # プログレスバー値コールバック
+            def progress_value_callback(value):
+                value = max(0, min(100, int(value)))
+                self.ui_elements['root'].after(0, lambda v=value: self._update_progress_bar(v))
 
             # エンジンとモデルの取得
             engine_value = get_engine_value(self.ui_elements)
@@ -251,7 +258,8 @@ class TranscriptionController:
                 engine_value,
                 whisper_model,
                 save_to_output_dir=save_to_output_dir,
-                save_to_source_dir=save_to_source_dir
+                save_to_source_dir=save_to_source_dir,
+                progress_value_callback=progress_value_callback
             )
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))
@@ -270,16 +278,24 @@ class TranscriptionController:
         """処理エラーをハンドル"""
         self.update_status(status_message)
         messagebox.showerror("エラー", user_message)
-        self.ui_elements['progress'].stop()
+        self.ui_elements['progress'].config(value=0)
+        if 'progress_label' in self.ui_elements:
+            self.ui_elements['progress_label'].config(text="")
         self.is_processing = False
         # ログに詳細を記録
         if hasattr(exception, 'error_code'):
             self.add_log(f"エラーコード: {exception.error_code}")
         self.add_log(f"エラー詳細: {type(exception).__name__}: {str(exception)}")
     
+    def _update_progress_bar(self, value):
+        """プログレスバーの値とラベルを更新"""
+        self.ui_elements['progress'].config(value=value)
+        if 'progress_label' in self.ui_elements:
+            self.ui_elements['progress_label'].config(text=f"{value}%")
+
     def _on_processing_complete(self, output_file):
         """処理完了時の処理"""
-        self.ui_elements['progress'].stop()
+        self._update_progress_bar(100)
         self.is_processing = False
         self.update_status(f"処理完了: {os.path.basename(output_file)}")
 
