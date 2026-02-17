@@ -65,6 +65,8 @@ class TranscriptionApp:
         )
         self.controller.set_update_history_callback(self._on_history_update)
         self.controller.update_usage_callback = self.update_usage_display
+        self.controller.history_metadata = self.history_metadata
+        self.controller.update_queue_callback = self._update_queue_display
         
         
         # ウィンドウサイズと位置の設定を適用（UI構築後）
@@ -205,24 +207,130 @@ class TranscriptionApp:
                     self.ui_elements['model_label'].config(text="接続エラー")
     
     def browse_file(self, event=None):
-        """ファイル選択ダイアログを表示"""
+        """ファイル選択ダイアログを表示（複数選択対応）"""
         from tkinter import filedialog
         file_types = [
             ('音声・動画ファイル', '*.mp3 *.wav *.mp4 *.avi *.mov *.m4a *.flac *.ogg'),
             ('すべてのファイル', '*.*')
         ]
-        file_path = filedialog.askopenfilename(filetypes=file_types)
-        if file_path:
-            self.load_file(file_path)
+        file_paths = filedialog.askopenfilenames(filetypes=file_types)
+        if file_paths:
+            if len(file_paths) == 1:
+                self.load_file(file_paths[0])
+            else:
+                self._add_files_to_queue(list(file_paths))
     
     def load_file(self, file_path):
         """ファイルを読み込む（コントローラーに委譲）"""
         self.controller.load_file(file_path)
-    
+
+    def load_files(self, raw_data):
+        """D&Dデータから複数ファイルを解析してキューに追加"""
+        paths = self._parse_dnd_paths(raw_data)
+        if len(paths) == 1:
+            self.load_file(paths[0])
+        elif len(paths) > 1:
+            self._add_files_to_queue(paths)
+
+    def _parse_dnd_paths(self, raw_data):
+        """tkinterdnd2のD&Dデータからファイルパスリストを解析
+
+        形式例:
+          {C:/path with spaces/file.mp3} C:/simple.wav
+          {C:/path with spaces/file.mp3}
+          C:/simple.wav
+        """
+        raw_data = raw_data.strip()
+        paths = []
+        i = 0
+        while i < len(raw_data):
+            if raw_data[i] == '{':
+                # 中括弧で囲まれたパス
+                end = raw_data.index('}', i)
+                path = raw_data[i+1:end]
+                paths.append(path.replace('\\', '/'))
+                i = end + 1
+            elif raw_data[i] in (' ', '\t', '\n', '\r'):
+                i += 1
+            else:
+                # スペースなしのパス（次のスペースまたは末尾まで）
+                end = i
+                while end < len(raw_data) and raw_data[end] not in (' ', '\t', '\n', '\r', '{'):
+                    end += 1
+                path = raw_data[i:end]
+                paths.append(path.replace('\\', '/'))
+                i = end
+        return paths
+
+    def _add_files_to_queue(self, file_paths):
+        """ファイルリストをキューに追加（重複検出付き）"""
+        added, duplicated_paths, invalid = self.controller.add_files_to_queue(file_paths)
+
+        if duplicated_paths:
+            dup_names = [os.path.basename(p) for p in duplicated_paths]
+            result = messagebox.askyesno(
+                "重複検出",
+                f"以下のファイルは既にキューまたは処理済みです:\n"
+                + "\n".join(f"  - {n}" for n in dup_names)
+                + "\n\nそれでも追加しますか？"
+            )
+            if result:
+                for path in duplicated_paths:
+                    self.controller.file_queue.append(os.path.abspath(path))
+                    added += 1
+                self._update_queue_display()
+
+        if invalid > 0:
+            self.controller.add_log(f"対応していないファイル形式: {invalid}件スキップ")
+
+        if added > 0:
+            self.controller.add_log(f"キューに{added}件追加（合計: {len(self.controller.file_queue)}件）")
+
+    def _update_queue_display(self):
+        """キューListboxを更新"""
+        queue_frame = self.ui_elements.get('queue_frame')
+        queue_listbox = self.ui_elements.get('queue_listbox')
+        queue_count_label = self.ui_elements.get('queue_count_label')
+        if not queue_frame or not queue_listbox:
+            return
+
+        queue_listbox.delete(0, tk.END)
+        queue = self.controller.file_queue
+
+        if queue:
+            for path in queue:
+                queue_listbox.insert(tk.END, os.path.basename(path))
+            queue_count_label.config(text=f"待機ファイル: {len(queue)}件")
+            # pack の前に親フレーム内の正しい位置に挿入
+            if not queue_frame.winfo_ismapped():
+                # D&Dエリアの後に挿入
+                drop_area = self.ui_elements.get('drop_area')
+                if drop_area:
+                    queue_frame.pack(fill=tk.X, padx=16, pady=(0, 6),
+                                     after=drop_area.master)
+                else:
+                    queue_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
+        else:
+            if queue_frame.winfo_ismapped():
+                queue_frame.pack_forget()
+
+    def remove_from_queue(self):
+        """Listboxの選択項目をキューから削除"""
+        queue_listbox = self.ui_elements.get('queue_listbox')
+        if not queue_listbox:
+            return
+        indices = list(queue_listbox.curselection())
+        if indices:
+            self.controller.remove_from_queue(indices)
+
+    def clear_queue(self):
+        """キュー全クリア"""
+        self.controller.clear_queue()
+
     def start_process(self, process_type):
         """処理を開始（コントローラーに委譲）"""
         if process_type == "transcription":
-            self.controller.start_transcription()
+            self.controller.start_queue_processing()
     
     
     def update_history(self):
@@ -252,9 +360,55 @@ class TranscriptionApp:
         filename = item['values'][0]
         file_path = os.path.join(self.output_dir, filename)
         
-        if not open_file(file_path):
-            messagebox.showerror("エラー", f"ファイル '{filename}' を開けません。")
+        try:
+            import subprocess
+            subprocess.Popen(['notepad.exe', file_path])
+        except (FileNotFoundError, OSError):
+            if not open_file(file_path):
+                messagebox.showerror("エラー", f"ファイル '{filename}' を開けません。")
     
+    def delete_output_file(self, event=None):
+        """選択された出力ファイルを削除する"""
+        tree = self.ui_elements['history_tree']
+        selection = tree.selection()
+        if not selection:
+            messagebox.showinfo("情報", "削除するファイルを選択してください。")
+            return
+
+        # 選択されたファイル名を収集
+        filenames = []
+        for sel in selection:
+            item = tree.item(sel)
+            filenames.append(item['values'][0])
+
+        # 確認ダイアログ
+        if len(filenames) == 1:
+            msg = f"以下のファイルを削除しますか？\n\n{filenames[0]}"
+        else:
+            msg = f"{len(filenames)}件のファイルを削除しますか？\n\n" + "\n".join(f"  - {f}" for f in filenames)
+
+        if not messagebox.askyesno("削除確認", msg):
+            return
+
+        # 削除実行
+        deleted = 0
+        for filename in filenames:
+            file_path = os.path.join(self.output_dir, filename)
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    deleted += 1
+                    # メタデータからも削除
+                    if filename in self.history_metadata:
+                        del self.history_metadata[filename]
+            except OSError as e:
+                messagebox.showerror("エラー", f"削除できませんでした:\n{filename}\n{e}")
+
+        if deleted > 0:
+            self._save_history_metadata()
+            self.update_history()
+            self.controller.add_log(f"{deleted}件のファイルを削除しました")
+
     def open_output_folder(self):
         """出力フォルダを開く"""
         if not open_directory(self.output_dir):
@@ -298,6 +452,8 @@ class TranscriptionApp:
                     'source_dir': os.path.dirname(os.path.abspath(source_file))
                 }
                 self._save_history_metadata()
+                # コントローラーの参照も更新
+                self.controller.history_metadata = self.history_metadata
         self.update_history()
 
     def _load_history_metadata(self):

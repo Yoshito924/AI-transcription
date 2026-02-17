@@ -16,7 +16,8 @@ from .constants import (
     DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
     DRAG_DROP_AREA_HEIGHT, CARD_PADDING,
-    SECTION_SPACING, MAIN_PADDING_X, MAIN_PADDING_Y
+    SECTION_SPACING, MAIN_PADDING_X, MAIN_PADDING_Y,
+    QUEUE_LISTBOX_HEIGHT
 )
 
 
@@ -390,6 +391,49 @@ def create_file_section(parent, app, theme, widgets):
     drop_canvas.bind("<Button-1>", app.browse_file)
     setup_drag_drop(drop_canvas, drop_canvas, app)
 
+    # Row 3.5: キュー表示セクション（初期非表示）
+    queue_frame = tk.Frame(frame, bg=theme.colors['surface'])
+    # queue_frame は _update_queue_display で pack/pack_forget される
+
+    queue_header = tk.Frame(queue_frame, bg=theme.colors['surface'])
+    queue_header.pack(fill=tk.X, pady=(0, 4))
+
+    queue_count_label = tk.Label(
+        queue_header,
+        text="待機ファイル: 0件",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    )
+    queue_count_label.pack(side=tk.LEFT)
+
+    queue_clear_btn = widgets.create_button(
+        queue_header, "クリア", 'Secondary',
+        command=lambda: app.clear_queue()
+    )
+    queue_clear_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+    queue_remove_btn = widgets.create_button(
+        queue_header, "削除", 'Secondary',
+        command=lambda: app.remove_from_queue()
+    )
+    queue_remove_btn.pack(side=tk.RIGHT)
+
+    queue_listbox = tk.Listbox(
+        queue_frame,
+        height=QUEUE_LISTBOX_HEIGHT,
+        selectmode=tk.EXTENDED,
+        font=theme.fonts['body'],
+        bg=theme.colors['surface_variant'],
+        fg=theme.colors['text_primary'],
+        selectbackground=theme.colors['table_selected'],
+        selectforeground=theme.colors['text_primary'],
+        relief='solid',
+        borderwidth=1,
+        highlightthickness=0
+    )
+    queue_listbox.pack(fill=tk.X)
+
     # Row 4: ファイル情報 + ステータス（1行に統合）
     info_status_frame = tk.Frame(frame, bg=theme.colors['surface'])
     info_status_frame.pack(fill=tk.X, padx=pad, pady=(0, 4))
@@ -460,6 +504,9 @@ def create_file_section(parent, app, theme, widgets):
     frame.whisper_model_combo = whisper_model_combo
     frame.save_to_output_var = save_to_output_var
     frame.save_to_source_var = save_to_source_var
+    frame.queue_frame = queue_frame
+    frame.queue_listbox = queue_listbox
+    frame.queue_count_label = queue_count_label
 
     return frame
 
@@ -540,6 +587,12 @@ def create_history_section(parent, app, theme, widgets):
         command=app.open_output_folder
     )
     folder_btn.pack(side=tk.LEFT)
+
+    delete_btn = widgets.create_icon_button(
+        button_frame, "削除", ICONS['delete'], 'Secondary',
+        command=app.delete_output_file
+    )
+    delete_btn.pack(side=tk.RIGHT)
 
     card.history_tree = history_tree
 
@@ -652,13 +705,13 @@ def create_log_section(parent, app, theme, widgets):
 
 
 def setup_drag_drop(drop_area, drop_label, app):
-    """ドラッグ&ドロップ機能の設定"""
+    """ドラッグ&ドロップ機能の設定（複数ファイル対応）"""
     try:
         from tkinterdnd2 import DND_FILES, TkinterDnD
 
         if isinstance(app.root, TkinterDnD.Tk):
             drop_area.drop_target_register(DND_FILES)
-            drop_area.dnd_bind('<<Drop>>', lambda e: app.load_file(e.data.strip('{}').replace('\\', '/')))
+            drop_area.dnd_bind('<<Drop>>', lambda e: app.load_files(e.data))
         else:
             print("警告: ドラッグ&ドロップを有効にするには、ルートウィンドウをTkinterDnD.Tkとして作成する必要があります")
     except ImportError:
@@ -685,6 +738,9 @@ def collect_ui_elements(api_section, file_section, usage_section, history_sectio
         'whisper_model_combo': file_section.whisper_model_combo,
         'save_to_output_var': file_section.save_to_output_var,
         'save_to_source_var': file_section.save_to_source_var,
+        'queue_frame': file_section.queue_frame,
+        'queue_listbox': file_section.queue_listbox,
+        'queue_count_label': file_section.queue_count_label,
         'usage_sessions': usage_section.sessions_value,
         'usage_tokens': usage_section.tokens_value,
         'usage_cost_usd': usage_section.cost_usd_value,
