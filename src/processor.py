@@ -479,11 +479,18 @@ class FileProcessor:
 
             update_status(f"{len(segment_files)}個のセグメントに分割しました")
         
+        # モデルインスタンスを一度だけ生成（全セグメントで共有）
+        model = genai.GenerativeModel(
+            model_name,
+            generation_config=AI_GENERATION_CONFIG,
+            safety_settings=SAFETY_SETTINGS_TRANSCRIPTION
+        )
+
         segment_transcriptions = []
         segment_info = []
         segment_costs = []
         segment_errors = []  # エラー情報を記録
-        
+
         try:
             total = len(segment_files)
             for i, segment_file in enumerate(segment_files):
@@ -495,7 +502,7 @@ class FileProcessor:
 
                 # セグメントの文字起こし（改善版）
                 result = self._transcribe_segment_enhanced(
-                    segment_file, api_key, i+1, total, model_name
+                    segment_file, api_key, i+1, total, model_name, model=model
                 )
 
                 if isinstance(result, tuple):
@@ -597,17 +604,19 @@ class FileProcessor:
             # 従来の方法で結合
             return "\n\n".join(segment_transcriptions)
     
-    def _transcribe_segment_enhanced(self, segment_file, api_key, segment_num, total_segments, model_name):
+    def _transcribe_segment_enhanced(self, segment_file, api_key, segment_num, total_segments, model_name, model=None):
         """改善された単一セグメントの文字起こし"""
         try:
             # セグメントの音声の長さを取得（料金計算用）
             segment_duration_sec = self.audio_processor.get_audio_duration(segment_file)
 
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config=AI_GENERATION_CONFIG,
-                safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 文字起こし用に安全性フィルターを緩和
-            )
+            # モデルインスタンスが渡されない場合のみ生成
+            if model is None:
+                model = genai.GenerativeModel(
+                    model_name,
+                    generation_config=AI_GENERATION_CONFIG,
+                    safety_settings=SAFETY_SETTINGS_TRANSCRIPTION
+                )
 
             with open(segment_file, 'rb') as audio_file:
                 audio_data = audio_file.read()
@@ -912,12 +921,8 @@ class FileProcessor:
         try:
             genai.configure(api_key=api_key)
 
-            # 軽量モデルを選択
-            models = genai.list_models()
-            available_names = [
-                m.name for m in models
-                if 'gemini' in m.name.lower() and 'generateContent' in m.supported_generation_methods
-            ]
+            # キャッシュ付きモデルリストを使用
+            available_names = self.api_utils._get_available_models(api_key)
 
             model_name = None
             for preferred in TITLE_GENERATION_MODELS:

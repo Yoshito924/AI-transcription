@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
 
 from .constants import (
     MAX_AUDIO_SIZE_MB, 
@@ -32,20 +31,26 @@ class AudioProcessor:
         """FFmpegを使用して音声ファイルの長さを秒単位で取得"""
         try:
             cmd = [
-                'ffprobe', 
-                '-v', 'error', 
-                '-show_entries', 'format=duration', 
-                '-of', 'default=noprint_wrappers=1:nokey=1', 
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
                 file_path
             ]
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30
+            )
+
             if result.returncode != 0:
                 logger.error("音声長さの取得に失敗しました")
                 return None
 
             duration = float(result.stdout.decode('utf-8').strip())
             return duration
+        except subprocess.TimeoutExpired:
+            logger.error(f"音声長さの取得がタイムアウトしました: {file_path}")
+            return None
         except Exception as e:
             logger.error(f"音声長さの取得中に例外が発生: {file_path}", exc_info=True)
             return None
@@ -116,10 +121,14 @@ class AudioProcessor:
                     output_path = os.path.join(temp_dir, f"segment_{i:03d}.mp3")
                     segment_files.append(output_path)
                     
+                    # セグメント長に基づくタイムアウト（最低60秒、セグメント長の3倍）
+                    segment_timeout = max(60, int(segment_length * 3))
+
                     # FFmpegコマンドを構築
                     command = [
                         'ffmpeg',
                         '-y',  # 既存ファイルを上書き
+                        '-nostdin',
                         '-i', input_file_path,
                         '-ss', str(start_time),  # 開始時間
                         '-t', str(segment_length),  # セグメント長さ
@@ -127,14 +136,23 @@ class AudioProcessor:
                         '-b:a', '128k',  # ビットレート
                         output_path
                     ]
-                    
+
                     update_status(f"セグメント {i+1}/{num_segments} を作成中... (開始: {format_duration(start_time)}, 長さ: {format_duration(segment_length)})")
-                    
+
                     # コマンドを実行
-                    process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    
+                    try:
+                        process = subprocess.run(
+                            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            timeout=segment_timeout
+                        )
+                    except subprocess.TimeoutExpired:
+                        update_status(f"エラー: セグメント {i+1} の作成がタイムアウトしました（{segment_timeout}秒）")
+                        return None
+
                     if process.returncode != 0:
                         error_msg = process.stderr.decode('utf-8', errors='replace')
+                        if len(error_msg) > 500:
+                            error_msg = "...\n" + error_msg[-500:]
                         update_status(f"エラー: セグメント {i+1} の作成に失敗しました: {error_msg}")
                         return None
                 
@@ -237,19 +255,26 @@ class AudioProcessor:
             
             update_status(f"音声圧縮 試行 {attempt}/{max_attempts}: 現在サイズ={current_size_mb:.2f}MB → 目標={target_size_mb:.2f}MB (ビットレート={bitrate}kbps)")
             
+            # 圧縮タイムアウト（最低120秒、音声長の2倍）
+            compress_timeout = max(120, int(audio_duration_sec * 2))
+
             # FFmpegコマンドを構築
             try:
                 command = [
                     'ffmpeg',
+                    '-nostdin',
                     '-i', current_input,
                     '-y',  # 既存ファイルを上書き
                     '-c:a', 'libmp3lame',  # MP3エンコーダを使用
                     '-b:a', f'{bitrate}k',  # 計算したビットレート
                     output_path
                 ]
-                
+
                 # コマンドを実行
-                process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                process = subprocess.run(
+                    command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    timeout=compress_timeout
+                )
                 
                 if process.returncode != 0:
                     update_status(f"エラー: 音声圧縮に失敗しました")
@@ -285,6 +310,16 @@ class AudioProcessor:
                 current_input = output_path
                 current_size_mb = output_size_mb
                 
+            except subprocess.TimeoutExpired:
+                update_status(f"エラー: 音声圧縮がタイムアウトしました（{compress_timeout}秒）")
+                for temp_file in temp_files:
+                    if os.path.exists(temp_file):
+                        try:
+                            os.remove(temp_file)
+                        except OSError:
+                            pass
+                return None
+
             except Exception as e:
                 update_status(f"エラー: 音声圧縮中に例外が発生しました: {str(e)}")
                 # 一時ファイルを削除

@@ -1,32 +1,57 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import time
+
 from .constants import PREFERRED_MODELS, AI_GENERATION_CONFIG
 from .exceptions import ApiConnectionError
 from .logger import logger
 
+# モデルリストキャッシュのTTL（秒）
+_MODEL_LIST_CACHE_TTL = 300  # 5分
+
 class ApiUtils:
     """API接続関連のユーティリティクラス"""
-    
+
     def __init__(self):
         self.preferred_models = PREFERRED_MODELS
+        self._model_list_cache = None
+        self._model_list_cache_time = 0
+        self._model_list_cache_key = None  # APIキーごとにキャッシュを分離
+
+    def _get_available_models(self, api_key):
+        """利用可能なGeminiモデルのリストを取得（キャッシュ付き）"""
+        import google.generativeai as genai
+
+        now = time.time()
+        if (self._model_list_cache is not None
+                and self._model_list_cache_key == api_key
+                and now - self._model_list_cache_time < _MODEL_LIST_CACHE_TTL):
+            return self._model_list_cache
+
+        genai.configure(api_key=api_key)
+        models = genai.list_models()
+        available = [
+            m.name for m in models
+            if 'gemini' in m.name.lower() and 'generateContent' in m.supported_generation_methods
+        ]
+
+        self._model_list_cache = available
+        self._model_list_cache_time = now
+        self._model_list_cache_key = api_key
+        logger.info(f"モデルリスト取得・キャッシュ更新 ({len(available)}個)")
+        return available
     
     def test_api_connection(self, api_key):
         """GeminiAPIの接続テスト"""
         try:
-            # Google Gemini APIのインポートと接続テスト
             import google.generativeai as genai
             genai.configure(api_key=api_key)
-            
-            # 利用可能なモデルを確認
-            models = genai.list_models()
-            
-            # 使用可能なGeminiモデルを探す
-            available_gemini_models = []
-            for m in models:
-                if 'gemini' in m.name.lower() and 'generateContent' in m.supported_generation_methods:
-                    available_gemini_models.append(m.name)
-            
+
+            # キャッシュをクリアして最新のリストを取得（接続テストなので）
+            self._model_list_cache = None
+            available_gemini_models = self._get_available_models(api_key)
+
             if not available_gemini_models:
                 raise ApiConnectionError("利用可能なGeminiモデルが見つかりません")
             
@@ -112,22 +137,14 @@ class ApiUtils:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
 
-        # 利用可能なモデルを確認
-        models = genai.list_models()
+        # キャッシュ付きモデルリスト取得
+        all_models = self._get_available_models(api_key)
 
-        # 使用可能なGeminiモデルを探す（音声入力対応を確認）
-        available_gemini_models = []
-        for m in models:
-            # generateContentに対応していることを確認
-            if 'gemini' not in m.name.lower() or 'generateContent' not in m.supported_generation_methods:
-                continue
-
-            # TTS、Live、Thinking系は音声入力に対応していないため除外
-            model_name_lower = m.name.lower()
-            if '-tts' in model_name_lower or 'live' in model_name_lower or 'thinking' in model_name_lower:
-                continue
-
-            available_gemini_models.append(m.name)
+        # 音声処理に不向きなモデルを除外
+        available_gemini_models = [
+            m for m in all_models
+            if not any(kw in m.lower() for kw in ['-tts', 'live', 'thinking'])
+        ]
 
         if not available_gemini_models:
             raise ApiConnectionError("利用可能なGeminiモデルが見つかりません")
