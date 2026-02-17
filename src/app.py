@@ -364,13 +364,23 @@ class TranscriptionApp:
             self.controller.history_metadata = self.history_metadata
 
     def _on_focus_in(self, event=None):
-        """ウィンドウにフォーカスが戻ったとき履歴を自動更新"""
+        """ウィンドウにフォーカスが戻ったとき履歴・キューを自動更新"""
         # ルートウィンドウのイベントのみ処理（子ウィジェットの連鎖を無視）
         if event and event.widget is not self.root:
             return
         self.update_history()
-    
-    
+        self._cleanup_queue()
+
+    def _cleanup_queue(self):
+        """キューから存在しないファイルを除去"""
+        queue = self.controller.file_queue
+        before = len(queue)
+        self.controller.file_queue = [p for p in queue if os.path.exists(p)]
+        if len(self.controller.file_queue) < before:
+            removed = before - len(self.controller.file_queue)
+            self.controller.add_log(f"キューから{removed}件の存在しないファイルを除去")
+            self._update_queue_display()
+
     def open_output_file(self, event=None):
         """選択された出力ファイルを開く"""
         tree = self.ui_elements['history_tree']
