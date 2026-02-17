@@ -309,33 +309,66 @@ class AudioProcessor:
 
         return current_input
     
-    def convert_audio(self, input_file, output_format='mp3', 
-                     bitrate=DEFAULT_AUDIO_BITRATE, 
-                     sample_rate=DEFAULT_SAMPLE_RATE, 
+    def convert_audio(self, input_file, output_format='mp3',
+                     bitrate=DEFAULT_AUDIO_BITRATE,
+                     sample_rate=DEFAULT_SAMPLE_RATE,
                      channels=DEFAULT_CHANNELS):
         """音声/動画ファイルを指定したフォーマットに変換する"""
         with tempfile.NamedTemporaryFile(suffix=f'.{output_format}', delete=False) as temp_file:
             output_path = temp_file.name
-        
+
         try:
+            # 音声の長さを取得してタイムアウトを計算（最低5分、音声長の2倍）
+            duration = self.get_audio_duration(input_file)
+            if duration and duration > 0:
+                timeout = max(300, int(duration * 2))
+            else:
+                timeout = 3600  # 長さ不明の場合は1時間
+
             # FFmpegで変換
             cmd = [
-                'ffmpeg', '-y', '-i', input_file, 
+                'ffmpeg', '-y',
+                '-nostdin',                    # 標準入力を無効化
+                '-i', input_file,
                 '-vn',                         # 映像を除去
                 '-ar', str(sample_rate),       # サンプルレート
                 '-ac', str(channels),          # チャンネル数
                 '-b:a', bitrate,               # ビットレート
                 output_path
             ]
-            
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            
+
+            logger.info(f"音声変換開始: {os.path.basename(input_file)} (タイムアウト: {timeout}秒)")
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=timeout
+            )
+
             if result.returncode != 0:
                 error_msg = result.stderr.decode('utf-8', errors='replace')
-                raise AudioProcessingError(f"音声変換エラー: {error_msg}")
-            
+                # エラーメッセージが長い場合は末尾のみ表示
+                if len(error_msg) > 500:
+                    error_msg = "...\n" + error_msg[-500:]
+                raise AudioProcessingError(f"音声変換エラー (returncode={result.returncode}): {error_msg}")
+
             return output_path
-        
+
+        except subprocess.TimeoutExpired:
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+            raise AudioProcessingError(f"音声変換がタイムアウトしました（{timeout}秒）。ファイルが大きすぎる可能性があります。")
+
+        except AudioProcessingError:
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+            raise
+
         except Exception as e:
             # エラー時は一時ファイルを削除
             try:
