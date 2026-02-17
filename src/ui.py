@@ -63,18 +63,29 @@ def setup_ui(app):
     usage_section = create_usage_section(settings_content, app, theme, widgets)
     usage_section.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8, 0))
 
-    # 処理履歴とログを横並びに（履歴を大きめに配置）
-    bottom_container = tk.Frame(main_container, bg=theme.colors['background'])
-    bottom_container.pack(fill=tk.BOTH, expand=True)
-    bottom_container.columnconfigure(0, weight=3)  # 処理履歴: 60%
-    bottom_container.columnconfigure(1, weight=2)  # ログ: 40%
-    bottom_container.rowconfigure(0, weight=1)
+    # 処理履歴とログを横並びに（ドラッグで幅変更可能）
+    paned = tk.PanedWindow(
+        main_container, orient=tk.HORIZONTAL,
+        bg=theme.colors['background'],
+        sashwidth=6, sashrelief='flat',
+        opaqueresize=True
+    )
+    paned.pack(fill=tk.BOTH, expand=True)
 
-    history_section = create_history_section(bottom_container, app, theme, widgets)
-    history_section.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
+    history_section = create_history_section(paned, app, theme, widgets)
+    paned.add(history_section, stretch='always', minsize=250)
 
-    log_section = create_log_section(bottom_container, app, theme, widgets)
-    log_section.grid(row=0, column=1, sticky='nsew', padx=(8, 0))
+    log_section = create_log_section(paned, app, theme, widgets)
+    paned.add(log_section, stretch='always', minsize=200)
+
+    # 初期比率を 3:2 に設定
+    def _set_initial_sash(event=None):
+        paned.update_idletasks()
+        total = paned.winfo_width()
+        if total > 10:
+            paned.sash_place(0, int(total * 0.6), 0)
+            paned.unbind('<Map>')
+    paned.bind('<Map>', _set_initial_sash)
 
     # UI要素を収集
     ui_elements = collect_ui_elements(
