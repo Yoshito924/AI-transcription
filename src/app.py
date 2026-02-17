@@ -77,6 +77,9 @@ class TranscriptionApp:
         self.update_history()
         self.update_usage_display()
         
+        # ウィンドウにフォーカスが戻ったとき履歴を自動更新
+        self.root.bind('<FocusIn>', self._on_focus_in)
+
         # 終了時にジオメトリを保存
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
@@ -347,9 +350,25 @@ class TranscriptionApp:
 
         # ファイルリスト取得と表示（交互行色）
         files = self.processor.get_output_files()
+        existing_filenames = {f[0] for f in files}
         for i, (file, date, size, _) in enumerate(files):
             tag = 'row_even' if i % 2 == 0 else 'row_odd'
             tree.insert('', 'end', values=(file, date, size), tags=(tag,))
+
+        # 存在しないファイルのメタデータを削除
+        stale_keys = [k for k in self.history_metadata if k not in existing_filenames]
+        if stale_keys:
+            for k in stale_keys:
+                del self.history_metadata[k]
+            self._save_history_metadata()
+            self.controller.history_metadata = self.history_metadata
+
+    def _on_focus_in(self, event=None):
+        """ウィンドウにフォーカスが戻ったとき履歴を自動更新"""
+        # ルートウィンドウのイベントのみ処理（子ウィジェットの連鎖を無視）
+        if event and event.widget is not self.root:
+            return
+        self.update_history()
     
     
     def open_output_file(self, event=None):
