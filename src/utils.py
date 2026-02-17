@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 import subprocess
 import platform
 from datetime import datetime
@@ -97,6 +98,24 @@ def open_directory(dir_path):
         return True
     except (FileNotFoundError, OSError):
         return False
+
+
+def sanitize_filename(name):
+    """ファイル名に使えない文字を除去する
+
+    Args:
+        name: サニタイズするファイル名文字列
+
+    Returns:
+        str or None: サニタイズ後のファイル名。空になった場合はNone
+    """
+    # Windowsで使えない文字を除去
+    sanitized = re.sub(r'[\\/:*?"<>|]', '', name)
+    # 改行・タブを除去
+    sanitized = re.sub(r'[\n\r\t]', '', sanitized)
+    # 前後の空白・ドットを除去
+    sanitized = sanitized.strip(' .')
+    return sanitized if sanitized else None
 
 
 def normalize_file_path(file_path):

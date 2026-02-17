@@ -15,7 +15,8 @@ from .constants import (
     STATUS_MESSAGE_MAX_LENGTH,
     FILE_NAME_DISPLAY_MAX_LENGTH,
     TOKEN_ESTIMATION_FACTOR,
-    OUTPUT_TOKEN_RATIO
+    OUTPUT_TOKEN_RATIO,
+    SUPPORTED_AUDIO_FORMATS
 )
 from .exceptions import (
     TranscriptionError,
@@ -46,6 +47,15 @@ class TranscriptionController:
         self._processing_lock = threading.Lock()
         self.current_file = None
         self.preferred_model = None
+
+        # キュー管理
+        self.file_queue = []
+        self.queue_processing = False
+        self.current_queue_index = 0
+        self.total_queue_files = 0
+        self.queue_errors = []
+        self.history_metadata = None
+        self.update_queue_callback = None
     
     def update_status(self, message):
         """ステータスを更新"""
@@ -248,6 +258,9 @@ class TranscriptionController:
             save_to_output_dir = save_to_output.get() if save_to_output else True
             save_to_source_dir = save_to_source.get() if save_to_source else False
 
+            # タイトル生成用のGemini APIキーを取得（エンジンに関係なく使用可能）
+            gemini_api_key = self.ui_elements['api_key_var'].get().strip() or None
+
             output_file = self.processor.process_file(
                 self.current_file,
                 process_type,
@@ -259,7 +272,8 @@ class TranscriptionController:
                 whisper_model,
                 save_to_output_dir=save_to_output_dir,
                 save_to_source_dir=save_to_source_dir,
-                progress_value_callback=progress_value_callback
+                progress_value_callback=progress_value_callback,
+                gemini_api_key=gemini_api_key
             )
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))
@@ -277,7 +291,6 @@ class TranscriptionController:
     def _handle_processing_error(self, exception, user_message, status_message):
         """処理エラーをハンドル"""
         self.update_status(status_message)
-        messagebox.showerror("エラー", user_message)
         self.ui_elements['progress'].config(value=0)
         if 'progress_label' in self.ui_elements:
             self.ui_elements['progress_label'].config(text="")
@@ -286,6 +299,15 @@ class TranscriptionController:
         if hasattr(exception, 'error_code'):
             self.add_log(f"エラーコード: {exception.error_code}")
         self.add_log(f"エラー詳細: {type(exception).__name__}: {str(exception)}")
+
+        # キュー処理中はエラーを記録して次のファイルへ
+        if self.queue_processing:
+            filename = os.path.basename(self.current_file) if self.current_file else "unknown"
+            self.queue_errors.append((filename, str(exception)))
+            self.ui_elements['root'].after(300, self._process_next_in_queue)
+            return
+
+        messagebox.showerror("エラー", user_message)
     
     def _update_progress_bar(self, value):
         """プログレスバーの値とラベルを更新"""
@@ -347,7 +369,12 @@ class TranscriptionController:
         if hasattr(self, 'update_history_callback') and self.update_history_callback:
             self.update_history_callback()
 
-        # エンジンに応じたメッセージを表示
+        # キュー処理中なら次のファイルへ進む（メッセージボックスは出さない）
+        if self.queue_processing:
+            self.ui_elements['root'].after(300, self._process_next_in_queue)
+            return
+
+        # エンジンに応じたメッセージを表示（単一処理のみ）
         self._show_completion_message(engine_value, output_file)
     
     def _show_completion_message(self, engine_value, output_file):
@@ -375,6 +402,173 @@ class TranscriptionController:
                 f"出力ファイル: {filename}"
             )
     
+    def add_files_to_queue(self, file_paths):
+        """ファイルを検証してキューに追加
+
+        Returns:
+            tuple: (added, duplicated_paths, invalid)
+        """
+        added = 0
+        duplicated_paths = []
+        invalid = 0
+
+        for path in file_paths:
+            abs_path = os.path.abspath(path)
+
+            # 拡張子チェック
+            ext = os.path.splitext(abs_path)[1].lower().lstrip('.')
+            if ext not in SUPPORTED_AUDIO_FORMATS:
+                invalid += 1
+                continue
+
+            if not os.path.exists(abs_path):
+                invalid += 1
+                continue
+
+            # キュー内重複チェック
+            if abs_path in [os.path.abspath(f) for f in self.file_queue]:
+                duplicated_paths.append(abs_path)
+                continue
+
+            # 処理済みチェック
+            if self.is_already_transcribed(abs_path):
+                duplicated_paths.append(abs_path)
+                continue
+
+            self.file_queue.append(abs_path)
+            added += 1
+
+        if self.update_queue_callback:
+            self.update_queue_callback()
+
+        return added, duplicated_paths, invalid
+
+    def remove_from_queue(self, indices):
+        """選択されたファイルをキューから削除"""
+        for i in sorted(indices, reverse=True):
+            if 0 <= i < len(self.file_queue):
+                del self.file_queue[i]
+        if self.update_queue_callback:
+            self.update_queue_callback()
+
+    def clear_queue(self):
+        """キューを全クリア"""
+        self.file_queue.clear()
+        if self.update_queue_callback:
+            self.update_queue_callback()
+
+    def is_already_transcribed(self, file_path):
+        """処理履歴と照合して処理済みか判定"""
+        if not self.history_metadata:
+            return False
+        abs_path = os.path.abspath(file_path)
+        for meta in self.history_metadata.values():
+            if meta.get('source_file') == abs_path:
+                return True
+        return False
+
+    def start_queue_processing(self):
+        """キュー処理を開始。キューが空なら単一ファイル処理にフォールバック"""
+        if self.is_processing:
+            messagebox.showinfo("情報", "すでに処理中です。完了までお待ちください。")
+            return
+
+        if self.file_queue:
+            self.queue_processing = True
+            self.current_queue_index = 0
+            self.total_queue_files = len(self.file_queue)
+            self.queue_errors = []
+            self.add_log(f"━━━ キュー処理開始: {self.total_queue_files}件 ━━━")
+            self._process_next_in_queue()
+        else:
+            # キューが空 → 従来の単一ファイル処理
+            self.queue_processing = False
+            self.start_transcription()
+
+    def _process_next_in_queue(self):
+        """キューから1つ取り出して処理開始"""
+        if not self.file_queue:
+            self._on_queue_complete()
+            return
+
+        self.current_queue_index += 1
+        file_path = self.file_queue.pop(0)
+        self.current_file = file_path
+        filename = os.path.basename(file_path)
+
+        # UI更新
+        display_name = truncate_display_name(filename, FILE_NAME_DISPLAY_MAX_LENGTH)
+        self.ui_elements['file_label'].config(
+            text=f"処理中 {self.current_queue_index}/{self.total_queue_files}: {display_name}"
+        )
+        self.ui_elements['progress'].config(value=0)
+        if 'progress_label' in self.ui_elements:
+            self.ui_elements['progress_label'].config(text="0%")
+
+        if self.update_queue_callback:
+            self.update_queue_callback()
+
+        self.add_log(f"[{self.current_queue_index}/{self.total_queue_files}] {filename} を処理開始")
+
+        # start_transcription の内部ロジックを直接呼ぶ
+        engine_value = get_engine_value(self.ui_elements)
+
+        if engine_value == 'whisper-api':
+            api_key = self.ui_elements.get('openai_api_key_var')
+            api_key = api_key.get().strip() if api_key else ""
+            if not api_key:
+                self.queue_errors.append((filename, "OpenAI APIキー未設定"))
+                self.add_log(f"エラー: OpenAI APIキー未設定 - {filename} をスキップ")
+                self.ui_elements['root'].after(300, self._process_next_in_queue)
+                return
+        elif engine_value == 'gemini':
+            api_key = self.ui_elements['api_key_var'].get().strip()
+            if not api_key:
+                self.queue_errors.append((filename, "Gemini APIキー未設定"))
+                self.add_log(f"エラー: Gemini APIキー未設定 - {filename} をスキップ")
+                self.ui_elements['root'].after(300, self._process_next_in_queue)
+                return
+        else:
+            api_key = ""
+
+        prompts = {
+            "transcription": {
+                "name": "文字起こし",
+                "prompt": """以下の音声を正確に文字起こししてください。話者が複数いる場合は話者を区別してください。
+
+重要な指示:
+- 元の音声の内容を忠実に文字起こしすること
+- 話者の区別が可能な場合は「話者A:」「話者B:」のように表記
+- 聞き取れない部分は[聞き取り不能]と表記
+- 時刻への言及がある場合はそのまま記載
+
+{transcription}"""
+            }
+        }
+
+        self._start_processing_thread("transcription", api_key, prompts)
+
+    def _on_queue_complete(self):
+        """全ファイル処理完了後のサマリー表示"""
+        self.queue_processing = False
+        success_count = self.total_queue_files - len(self.queue_errors)
+
+        self.add_log(f"━━━ キュー処理完了 ━━━")
+        self.add_log(f"成功: {success_count}件 / 失敗: {len(self.queue_errors)}件")
+
+        summary = f"キュー処理が完了しました。\n\n成功: {success_count}件\n失敗: {len(self.queue_errors)}件"
+        if self.queue_errors:
+            summary += "\n\n失敗したファイル:"
+            for fname, reason in self.queue_errors:
+                summary += f"\n  - {fname}: {reason}"
+
+        self.update_status("キュー処理完了")
+        self.ui_elements['file_label'].config(text="選択ファイル: なし")
+        messagebox.showinfo("キュー処理完了", summary)
+
+        if self.update_queue_callback:
+            self.update_queue_callback()
+
     def set_update_history_callback(self, callback):
         """履歴更新のコールバックを設定"""
         self.update_history_callback = callback

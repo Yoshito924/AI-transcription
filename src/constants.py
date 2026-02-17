@@ -41,6 +41,7 @@ MIN_WINDOW_WIDTH = 800
 MIN_WINDOW_HEIGHT = 600
 STATUS_MESSAGE_MAX_LENGTH = 40
 FILE_NAME_DISPLAY_MAX_LENGTH = 30
+SUMMARY_TITLE_MAX_LENGTH = 30  # ファイル名に含める要約タイトルの最大文字数
 
 # レイアウト設定
 SIDEBAR_WIDTH = 380
@@ -53,6 +54,7 @@ MAIN_PADDING_X = 24
 MAIN_PADDING_Y = 20
 ACCENT_STRIPE_WIDTH = 4
 HISTORY_ROW_HEIGHT = 28
+QUEUE_LISTBOX_HEIGHT = 4
 
 # API関連（優先順位: 安定版 → 最新プレビュー → 高速 → コスト重視 → 従来型）
 # 2025年11月時点の推奨: gemini-2.5-flashが安定版として推奨
@@ -67,6 +69,14 @@ PREFERRED_MODELS = [
     "gemini-1.5-pro",                    # Pro 1.5
     "gemini-pro"                         # 従来版
 ]
+# タイトル生成用の軽量モデル（優先順位順）
+TITLE_GENERATION_MODELS = [
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+]
+
 MIN_BITRATE = 32  # 最低品質確保のための最小ビットレート
 MAX_BITRATE = 256  # 最大ビットレート
 MAX_COMPRESSION_ATTEMPTS = 5

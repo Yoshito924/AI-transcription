@@ -11,12 +11,14 @@ import google.generativeai as genai
 
 from .constants import (
     MAX_AUDIO_SIZE_MB,
-    MAX_AUDIO_DURATION_SEC, 
+    MAX_AUDIO_DURATION_SEC,
     AUDIO_MIME_TYPE,
     OUTPUT_DIR,
     AI_GENERATION_CONFIG,
     SEGMENT_MERGE_CONFIG,
-    SAFETY_SETTINGS_TRANSCRIPTION
+    SAFETY_SETTINGS_TRANSCRIPTION,
+    SUMMARY_TITLE_MAX_LENGTH,
+    TITLE_GENERATION_MODELS
 )
 from .exceptions import (
     TranscriptionError, 
@@ -33,7 +35,8 @@ from .audio_cache import AudioCacheManager
 from .utils import (
     get_timestamp, format_duration, calculate_gemini_cost, format_token_usage,
     get_file_size_mb, get_file_size_kb, format_process_time,
-    extract_usage_metadata, process_usage_metadata
+    extract_usage_metadata, process_usage_metadata,
+    sanitize_filename
 )
 from .logger import logger
 
@@ -154,7 +157,7 @@ class FileProcessor:
     def process_file(self, input_file, process_type, api_key, prompts, status_callback=None,
                     preferred_model=None, engine='gemini', whisper_model='base',
                     save_to_output_dir=True, save_to_source_dir=False,
-                    progress_value_callback=None):
+                    progress_value_callback=None, gemini_api_key=None):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
 
@@ -198,10 +201,19 @@ class FileProcessor:
             )
             update_progress(95)
 
+            # 要約タイトルを生成（Gemini APIキーがある場合）
+            summary_title = None
+            if gemini_api_key:
+                update_status("要約タイトルを生成中...")
+                summary_title = self.generate_summary_title(final_text, gemini_api_key)
+                if summary_title:
+                    update_status(f"タイトル生成完了: {summary_title}")
+
             # 結果をファイルに保存
             output_path = self._save_result(
                 input_file, final_text, process_type, prompts, start_time, update_status,
-                save_to_output_dir=save_to_output_dir, save_to_source_dir=save_to_source_dir
+                save_to_output_dir=save_to_output_dir, save_to_source_dir=save_to_source_dir,
+                summary_title=summary_title
             )
             update_progress(100)
 
@@ -876,8 +888,99 @@ class FileProcessor:
         
         return response.text
     
+    def _get_unique_path(self, file_path):
+        """ファイルパスが重複する場合、末尾に連番を付与してユニークなパスを返す"""
+        if not os.path.exists(file_path):
+            return file_path
+
+        base, ext = os.path.splitext(file_path)
+        counter = 2
+        while os.path.exists(f"{base}_{counter}{ext}"):
+            counter += 1
+        return f"{base}_{counter}{ext}"
+
+    def generate_summary_title(self, text, api_key):
+        """文字起こしテキストから要約タイトルを生成する
+
+        Args:
+            text: 文字起こしテキスト
+            api_key: Gemini APIキー
+
+        Returns:
+            str or None: 要約タイトル。失敗時はNone
+        """
+        try:
+            genai.configure(api_key=api_key)
+
+            # 軽量モデルを選択
+            models = genai.list_models()
+            available_names = [
+                m.name for m in models
+                if 'gemini' in m.name.lower() and 'generateContent' in m.supported_generation_methods
+            ]
+
+            model_name = None
+            for preferred in TITLE_GENERATION_MODELS:
+                for available in available_names:
+                    if preferred in available:
+                        model_name = available
+                        break
+                if model_name:
+                    break
+
+            if not model_name:
+                model_name = available_names[0] if available_names else None
+            if not model_name:
+                logger.warning("タイトル生成: 利用可能なモデルが見つかりません")
+                return None
+
+            logger.info(f"タイトル生成モデル: {model_name}")
+
+            # テキストの先頭2000文字を使用
+            excerpt = text[:2000]
+
+            prompt = (
+                "この文字起こしの内容を15〜25文字で要約してタイトルを付けてください。\n"
+                "ファイル名に使うので記号は使わないでください。\n"
+                "タイトルのみを出力してください。説明や装飾は不要です。\n\n"
+                f"{excerpt}"
+            )
+
+            model = genai.GenerativeModel(
+                model_name,
+                generation_config={
+                    'temperature': 0.1,
+                    'max_output_tokens': 100,
+                    'candidate_count': 1
+                }
+            )
+
+            response = model.generate_content(prompt)
+
+            if not response.text or not response.text.strip():
+                logger.warning("タイトル生成: 空のレスポンス")
+                return None
+
+            title = response.text.strip()
+            # 最大文字数で切り詰め
+            if len(title) > SUMMARY_TITLE_MAX_LENGTH:
+                title = title[:SUMMARY_TITLE_MAX_LENGTH]
+
+            # ファイル名に使えない文字を除去
+            title = sanitize_filename(title)
+            if not title:
+                logger.warning("タイトル生成: サニタイズ後に空になりました")
+                return None
+
+            logger.info(f"生成されたタイトル: {title}")
+            return title
+
+        except Exception as e:
+            logger.warning(f"タイトル生成に失敗（フォールバックで従来のファイル名を使用）: {str(e)}")
+            return None
+
     def _save_result(self, input_file, final_text, process_type, prompts, start_time, update_status,
-                     save_to_output_dir=True, save_to_source_dir=False):
+                     save_to_output_dir=True, save_to_source_dir=False, summary_title=None):
         """結果をファイルに保存"""
         if not save_to_output_dir and not save_to_source_dir:
             logger.warning("保存先が未指定のため、outputフォルダに保存します")
@@ -892,20 +995,28 @@ class FileProcessor:
         else:
             process_name = "文字起こし"
 
-        output_filename = f"{base_name}_{process_name}_{timestamp}.txt"
+        # ファイル名の生成
+        if summary_title:
+            # タイトルあり: {要約タイトル}_文字起こし_{元ファイル名}.txt
+            output_filename = f"{summary_title}_{process_name}_{base_name}.txt"
+        else:
+            # タイトルなし: {元ファイル名}_文字起こし_{タイムスタンプ}.txt（従来通り）
+            output_filename = f"{base_name}_{process_name}_{timestamp}.txt"
+
         result_path = None
 
-        # outputフォルダへ保存
+        # outputフォルダへ保存（重複チェック付き）
         if save_to_output_dir:
-            output_path = os.path.join(self.output_dir, output_filename)
+            output_path = self._get_unique_path(os.path.join(self.output_dir, output_filename))
+            output_filename = os.path.basename(output_path)  # 重複回避後のファイル名に更新
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(final_text)
             result_path = output_path
 
-        # 元ファイルのフォルダへ保存
+        # 元ファイルのフォルダへ保存（重複チェック付き）
         if save_to_source_dir:
             source_dir = os.path.dirname(os.path.abspath(input_file))
-            source_path = os.path.join(source_dir, output_filename)
+            source_path = self._get_unique_path(os.path.join(source_dir, output_filename))
             if save_to_output_dir and result_path:
                 shutil.copy2(result_path, source_path)
             else:
