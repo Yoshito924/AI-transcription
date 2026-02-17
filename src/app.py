@@ -73,6 +73,7 @@ class TranscriptionApp:
         self.config.apply_window_geometry(self.root)
         
         # 初期設定
+        self._restore_column_widths()
         self.update_history()
         self.update_usage_display()
         
@@ -101,6 +102,9 @@ class TranscriptionApp:
 
         # 保存先設定を保存
         self._save_destination_settings()
+
+        # カラム幅を保存
+        self._save_column_widths()
         self.config.save()
         
         # アプリケーションを終了
@@ -519,4 +523,25 @@ class TranscriptionApp:
                 self.config.set("save_to_output_dir", save_to_output.get())
             if save_to_source is not None:
                 self.config.set("save_to_source_dir", save_to_source.get())
-    
+
+    def _save_column_widths(self):
+        """処理履歴のカラム幅を保存"""
+        tree = self.ui_elements.get('history_tree')
+        if not tree:
+            return
+        widths = {}
+        for col in ('filename', 'date', 'size'):
+            widths[col] = tree.column(col, 'width')
+        self.config.set("history_column_widths", widths)
+
+    def _restore_column_widths(self):
+        """処理履歴のカラム幅を復元"""
+        tree = self.ui_elements.get('history_tree')
+        if not tree:
+            return
+        widths = self.config.get("history_column_widths", None)
+        if not widths:
+            return
+        for col in ('filename', 'date', 'size'):
+            if col in widths:
+                tree.column(col, width=widths[col])
