@@ -14,18 +14,18 @@ from typing import Dict, List, Optional
 class UsageTracker:
     """使用量と料金の追跡クラス"""
     
-    # Gemini API料金（2025年11月時点の概算）
-    # 注意: 2.x系はトークンベース、1.5系は音声入力時に秒数ベース
+    # Gemini API料金（2026年2月時点）
+    # 注意: 音声入力（文字起こし用途）の料金を使用。テキスト入力より高い場合あり。
     # 参考: https://ai.google.dev/gemini-api/docs/pricing?hl=ja
     # 注意: gemini-2.5-flashはプロンプトサイズ（200Kトークン）で料金が変わるが、
     # ここでは標準料金（200Kトークン以下）を使用
     PRICING = {
         'gemini-2.5-flash': {
-            'input_per_1k': 0.00015,     # $0.15 per 1M tokens = $0.00015 per 1K tokens
+            'input_per_1k': 0.001,       # $1.00 per 1M tokens（音声入力）= $0.001 per 1K tokens
             'output_per_1k': 0.0025,     # $2.50 per 1M tokens = $0.0025 per 1K tokens
         },
         'gemini-2.5-flash-lite': {
-            'input_per_1k': 0.00015,     # $0.15 per 1M tokens = $0.00015 per 1K tokens
+            'input_per_1k': 0.0003,      # $0.30 per 1M tokens（音声入力）= $0.0003 per 1K tokens
             'output_per_1k': 0.0004,     # $0.40 per 1M tokens = $0.0004 per 1K tokens
         },
         'gemini-2.0-flash-lite': {
@@ -33,20 +33,20 @@ class UsageTracker:
             'output_per_1k': 0.0003,     # $0.30 per 1M tokens = $0.0003 per 1K tokens
         },
         'gemini-2.0-flash': {
-            'input_per_1k': 0.0001,      # $0.10 per 1M tokens
+            'input_per_1k': 0.0007,      # $0.70 per 1M tokens（音声入力）= $0.0007 per 1K tokens
             'output_per_1k': 0.0004,     # $0.40 per 1M tokens = $0.0004 per 1K tokens
         },
         'gemini-1.5-flash': {
-            'input_per_1k': 0.000075,    # $0.075 per 1K tokens（テキスト入力時）
-            'output_per_1k': 0.0003,     # $0.30 per 1K tokens
+            'input_per_1k': 0.000075,    # $0.075 per 1M tokens（テキスト入力時。音声は秒数ベースのため概算）
+            'output_per_1k': 0.0003,     # $0.30 per 1M tokens
         },
         'gemini-1.5-pro': {
-            'input_per_1k': 0.00125,     # $1.25 per 1K tokens（テキスト入力時）
-            'output_per_1k': 0.005,      # $5.00 per 1K tokens
+            'input_per_1k': 0.00125,     # $1.25 per 1M tokens（テキスト入力時）
+            'output_per_1k': 0.005,      # $5.00 per 1M tokens
         },
         'gemini-1.0-pro': {
-            'input_per_1k': 0.0005,      # $0.50 per 1K tokens
-            'output_per_1k': 0.0015,     # $1.50 per 1K tokens
+            'input_per_1k': 0.0005,      # $0.50 per 1M tokens
+            'output_per_1k': 0.0015,     # $1.50 per 1M tokens
         }
     }
     

@@ -146,10 +146,10 @@ PROMPT_FILE = "prompts.json"
 # 参考: https://ai.google.dev/gemini-api/docs/pricing?hl=ja
 GEMINI_PRICING = {
     "gemini-2.5-flash": {
-        "input_text": 0.15,  # プロンプト200Kトークン以下（標準）
-        "input_text_over_200k": 0.30,  # プロンプト200Kトークン超
-        "input_audio": 0.15,  # 100万トークンあたり（音声入力もトークンベース）
-        "input_audio_batch": 0.075,  # バッチAPI使用時（50%割引）
+        "input_text": 0.30,  # プロンプト200Kトークン以下（標準）
+        "input_text_over_200k": 0.60,  # プロンプト200Kトークン超
+        "input_audio": 1.00,  # 100万トークンあたり（音声入力）
+        "input_audio_batch": 0.50,  # バッチAPI使用時（50%割引）
         "output": 2.50,  # プロンプト200Kトークン以下（標準）
         "output_over_200k": 5.00,  # プロンプト200Kトークン超
         "output_batch": 1.25,  # バッチAPI使用時（50%割引）
@@ -158,7 +158,7 @@ GEMINI_PRICING = {
     },
     "gemini-2.0-flash-lite": {
         "input_text": 0.075,
-        "input_audio": 0.075,  # 100万トークンあたり（最安値）
+        "input_audio": 0.075,  # 100万トークンあたり（最安値・音声/テキスト同額）
         "input_audio_batch": 0.0375,  # バッチAPI使用時（50%割引）
         "output": 0.30,
         "output_batch": 0.15,  # バッチAPI使用時（50%割引）
@@ -166,9 +166,9 @@ GEMINI_PRICING = {
         "recommended_use": "コスト重視・大量処理"
     },
     "gemini-2.5-flash-lite": {
-        "input_text": 0.15,
-        "input_audio": 0.15,  # 100万トークンあたり（音声入力もトークンベース）
-        "input_audio_batch": 0.075,  # バッチAPI使用時（50%割引）
+        "input_text": 0.10,
+        "input_audio": 0.30,  # 100万トークンあたり（音声入力）
+        "input_audio_batch": 0.15,  # バッチAPI使用時（50%割引）
         "output": 0.40,
         "output_batch": 0.20,  # バッチAPI使用時（50%割引）
         "pricing_type": "token_based",
@@ -176,8 +176,8 @@ GEMINI_PRICING = {
     },
     "gemini-2.0-flash": {
         "input_text": 0.10,
-        "input_audio": 0.10,  # 100万トークンあたり（音声入力もトークンベース）
-        "input_audio_batch": 0.05,  # バッチAPI使用時（50%割引）
+        "input_audio": 0.70,  # 100万トークンあたり（音声入力）
+        "input_audio_batch": 0.35,  # バッチAPI使用時（50%割引）
         "output": 0.40,
         "output_batch": 0.20,  # バッチAPI使用時（50%割引）
         "pricing_type": "token_based",
