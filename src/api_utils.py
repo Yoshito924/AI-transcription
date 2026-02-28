@@ -46,7 +46,6 @@ class ApiUtils:
         """GeminiAPIの接続テスト"""
         try:
             import google.generativeai as genai
-            genai.configure(api_key=api_key)
 
             # キャッシュをクリアして最新のリストを取得（接続テストなので）
             self._model_list_cache = None
@@ -134,28 +133,19 @@ class ApiUtils:
         2. 最新のプレビュー版
         3. 安定版の最新バージョン
         """
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-
-        # キャッシュ付きモデルリスト取得
+        # キャッシュ付きモデルリスト取得（_rank_models_by_priorityが不要なモデルを除外）
         all_models = self._get_available_models(api_key)
 
-        # 音声処理に不向きなモデルを除外
-        available_gemini_models = [
-            m for m in all_models
-            if not any(kw in m.lower() for kw in ['-tts', 'live', 'thinking'])
-        ]
-
-        if not available_gemini_models:
+        if not all_models:
             raise ApiConnectionError("利用可能なGeminiモデルが見つかりません")
 
-        logger.info(f"API利用可能モデル ({len(available_gemini_models)}個): {', '.join(available_gemini_models)}")
+        logger.info(f"API利用可能モデル ({len(all_models)}個): {', '.join(all_models)}")
 
         model_name = None
 
         # 手動選択されたモデルを優先
         if preferred_model:
-            for available in available_gemini_models:
+            for available in all_models:
                 if preferred_model in available:
                     model_name = available
                     logger.info(f"✓ 使用モデル: {model_name} (手動選択)")
@@ -163,8 +153,8 @@ class ApiUtils:
 
             logger.warning(f"指定されたモデル '{preferred_model}' が利用できません。自動選択に切り替えます。")
 
-        # 自動選択：スマートランキングで最適なモデルを選択
-        ranked_models = self._rank_models_by_priority(available_gemini_models)
+        # 自動選択：スマートランキングで最適なモデルを選択（Pro/Live/TTS/Thinking系は内部で除外）
+        ranked_models = self._rank_models_by_priority(all_models)
 
         if ranked_models:
             model_name = ranked_models[0]
@@ -184,7 +174,7 @@ class ApiUtils:
             logger.info(f"  ※ Pro/Live/TTS/Thinking系は音声処理には不向きのため除外されています")
         else:
             # フォールバック（理論上は起こらない）
-            model_name = available_gemini_models[0]
+            model_name = all_models[0]
             logger.warning(f"使用モデル: {model_name} (フォールバック)")
 
         return model_name

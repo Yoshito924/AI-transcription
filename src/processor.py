@@ -919,10 +919,12 @@ class FileProcessor:
             str or None: 要約タイトル。失敗時はNone
         """
         try:
-            genai.configure(api_key=api_key)
-
-            # キャッシュ付きモデルリストを使用
-            available_names = self.api_utils._get_available_models(api_key)
+            # キャッシュ付きモデルリストを使用（音声処理不向きモデルを除外）
+            all_names = self.api_utils._get_available_models(api_key)
+            available_names = [
+                m for m in all_names
+                if not any(kw in m.lower() for kw in ['-tts', 'live', 'thinking'])
+            ]
 
             model_name = None
             for preferred in TITLE_GENERATION_MODELS:

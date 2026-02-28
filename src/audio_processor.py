@@ -226,11 +226,10 @@ class AudioProcessor:
                 
                 # 最後に使用した一時ファイル以外を削除
                 for temp_file in temp_files[:-1]:
-                    if os.path.exists(temp_file):
-                        try:
-                            os.remove(temp_file)
-                        except OSError:
-                            pass
+                    try:
+                        os.remove(temp_file)
+                    except OSError:
+                        pass
 
                 return current_input
 
@@ -280,11 +279,10 @@ class AudioProcessor:
                     update_status(f"エラー: 音声圧縮に失敗しました")
                     # 一時ファイルを削除
                     for temp_file in temp_files:
-                        if os.path.exists(temp_file):
-                            try:
-                                os.remove(temp_file)
-                            except OSError:
-                                pass
+                        try:
+                            os.remove(temp_file)
+                        except OSError:
+                            pass
                     return None
 
                 # 圧縮結果を確認
@@ -298,11 +296,10 @@ class AudioProcessor:
                     
                     # 一時ファイルを削除（最後のファイル以外）
                     for temp_file in temp_files[:-1]:
-                        if os.path.exists(temp_file):
-                            try:
-                                os.remove(temp_file)
-                            except OSError:
-                                pass
+                        try:
+                            os.remove(temp_file)
+                        except OSError:
+                            pass
 
                     return output_path
 
@@ -313,22 +310,20 @@ class AudioProcessor:
             except subprocess.TimeoutExpired:
                 update_status(f"エラー: 音声圧縮がタイムアウトしました（{compress_timeout}秒）")
                 for temp_file in temp_files:
-                    if os.path.exists(temp_file):
-                        try:
-                            os.remove(temp_file)
-                        except OSError:
-                            pass
+                    try:
+                        os.remove(temp_file)
+                    except OSError:
+                        pass
                 return None
 
             except Exception as e:
                 update_status(f"エラー: 音声圧縮中に例外が発生しました: {str(e)}")
                 # 一時ファイルを削除
                 for temp_file in temp_files:
-                    if os.path.exists(temp_file):
-                        try:
-                            os.remove(temp_file)
-                        except OSError:
-                            pass
+                    try:
+                        os.remove(temp_file)
+                    except OSError:
+                        pass
                 return None
 
         # 最大試行回数に達した場合
@@ -336,11 +331,10 @@ class AudioProcessor:
         
         # 一時ファイルを削除（最後のファイル以外）
         for temp_file in temp_files[:-1]:
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except OSError:
-                    pass
+            try:
+                os.remove(temp_file)
+            except OSError:
+                pass
 
         return current_input
     
