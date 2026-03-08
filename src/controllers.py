@@ -80,12 +80,20 @@ class TranscriptionController:
         if "API接続" in message and "成功" in message:
             self.ui_elements['api_status'].config(
                 text="\u25cf 接続済み",
-                fg="#5B9A6B"
+                fg="#4F8B63",
+                bg="#E4F0E7"
+            )
+        elif "利用可能" in message or "準備完了" in message or "確認完了" in message:
+            self.ui_elements['api_status'].config(
+                text="\u25cf 接続済み",
+                fg="#4F8B63",
+                bg="#E4F0E7"
             )
         elif "エラー" in message:
             self.ui_elements['api_status'].config(
                 text="\u25cf エラー",
-                fg="#C25450"
+                fg="#BD5B55",
+                bg="#F8E5E3"
             )
 
         # ステータスドットの色を更新

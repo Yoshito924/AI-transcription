@@ -519,14 +519,13 @@ class TranscriptionApp:
         try:
             usage_data = self.usage_tracker.get_current_month_usage()
             
-            # UI要素の更新（コンパクト版）
-            self.ui_elements['usage_sessions'].config(text=f"回数: {usage_data['total_sessions']}回")
+            self.ui_elements['usage_sessions'].config(text=f"{usage_data['total_sessions']}回")
             
             total_tokens = usage_data['total_input_tokens'] + usage_data['total_output_tokens']
             if total_tokens > 1000:
-                tokens_text = f"トークン: {total_tokens//1000}K"
+                tokens_text = f"{total_tokens//1000}K"
             else:
-                tokens_text = f"トークン: {total_tokens}"
+                tokens_text = f"{total_tokens}"
             self.ui_elements['usage_tokens'].config(text=tokens_text)
             
             self.ui_elements['usage_cost_usd'].config(text=f"${usage_data['total_cost_usd']:.3f}")
