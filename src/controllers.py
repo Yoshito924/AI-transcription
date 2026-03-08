@@ -258,8 +258,10 @@ class TranscriptionController:
             save_to_output_dir = save_to_output.get() if save_to_output else True
             save_to_source_dir = save_to_source.get() if save_to_source else False
 
-            # タイトル生成用のGemini APIキーを取得（エンジンに関係なく使用可能）
-            gemini_api_key = self.ui_elements['api_key_var'].get().strip() or None
+            # タイトル生成はGemini実行時のみ許可し、ローカルWhisperをオフラインのまま保つ
+            gemini_api_key = None
+            if engine_value == 'gemini':
+                gemini_api_key = self.ui_elements['api_key_var'].get().strip() or None
 
             output_file = self.processor.process_file(
                 self.current_file,
@@ -367,7 +369,7 @@ class TranscriptionController:
 
         # 履歴更新のコールバックがある場合は呼び出し
         if hasattr(self, 'update_history_callback') and self.update_history_callback:
-            self.update_history_callback()
+            self.update_history_callback(output_file)
 
         # キュー処理中なら次のファイルへ進む（メッセージボックスは出さない）
         if self.queue_processing:

@@ -219,6 +219,8 @@ class FileProcessor:
 
             return output_path
             
+        except (TranscriptionError, AudioProcessingError, ApiConnectionError, FileProcessingError):
+            raise
         except Exception as e:
             logger.error(f"処理エラー: {str(e)}", exc_info=True)
             update_status(f"処理エラー: {str(e)}")

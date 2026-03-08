@@ -150,6 +150,72 @@ class WhisperService:
             info = self.MODEL_INFO[model_name]
             return f"{model_name} - {info['description']} (サイズ: {info['size']})"
         return model_name
+
+    def _build_transcribe_options(self, language: Optional[str] = 'ja',
+                                  initial_prompt: Optional[str] = None,
+                                  **kwargs) -> Dict[str, Any]:
+        """バックエンド差異を吸収した文字起こしオプションを構築"""
+        options: Dict[str, Any] = {
+            'task': 'transcribe',
+        }
+
+        if language:
+            options['language'] = language
+        if initial_prompt:
+            options['initial_prompt'] = initial_prompt
+
+        if self.backend == "openai-whisper":
+            options['verbose'] = None
+            options['fp16'] = self.device == 'cuda'
+
+        options.update(kwargs)
+        return options
+
+    def _run_transcription(self, model, audio_path: str,
+                           options: Dict[str, Any]) -> Dict[str, Any]:
+        """バックエンドごとのレスポンスを共通形式に正規化"""
+        if self.backend == "openai-whisper":
+            result = model.transcribe(audio_path, **options)
+            if not result or 'text' not in result:
+                raise TranscriptionError("Whisperからの応答が不正です")
+
+            segments = []
+            for index, seg in enumerate(result.get('segments', [])):
+                segment_text = (seg.get('text') or '').strip()
+                segments.append({
+                    'id': seg.get('id', index),
+                    'start': seg.get('start', 0.0),
+                    'end': seg.get('end', 0.0),
+                    'text': segment_text
+                })
+
+            return {
+                'text': (result.get('text') or '').strip(),
+                'language': result.get('language', options.get('language')),
+                'duration': result.get('duration', 0),
+                'segments': segments
+            }
+
+        segments_iter, info = model.transcribe(audio_path, **options)
+        segments = []
+        text_parts = []
+
+        for index, seg in enumerate(segments_iter):
+            raw_text = getattr(seg, 'text', '') or ''
+            text_parts.append(raw_text)
+            segments.append({
+                'id': getattr(seg, 'id', index),
+                'start': getattr(seg, 'start', 0.0),
+                'end': getattr(seg, 'end', 0.0),
+                'text': raw_text.strip()
+            })
+
+        return {
+            'text': ''.join(text_parts).strip(),
+            'language': getattr(info, 'language', options.get('language')),
+            'duration': getattr(info, 'duration', 0),
+            'segments': segments
+        }
     
     def load_model(self, model_name: str = 'base', force_reload: bool = False):
         """Whisperモデルをロード
@@ -267,23 +333,10 @@ class WhisperService:
             logger.info(f"使用モデル: {model_name}, 言語: {language or '自動検出'}")
             
             # 文字起こしオプション
-            options = {
-                'language': language,
-                'task': 'transcribe',  # transcribeは元の言語のまま、translateは英語に翻訳
-                'verbose': None,  # Noneでtqdmを完全に無効化
-                'fp16': self.device == 'cuda',  # GPUの場合はFP16を使用
-            }
-            
-            # 追加オプションがあれば適用
-            options.update(kwargs)
-            
-            # 文字起こし実行
-            result = model.transcribe(audio_path, **options)
-            
-            if not result or 'text' not in result:
-                raise TranscriptionError("Whisperからの応答が不正です")
-            
-            text = result['text'].strip()
+            options = self._build_transcribe_options(language=language, **kwargs)
+            result = self._run_transcription(model, audio_path, options)
+
+            text = result['text']
             if not text:
                 raise TranscriptionError("文字起こし結果が空でした")
             
@@ -313,31 +366,18 @@ class WhisperService:
             
             logger.info(f"Whisperセグメント文字起こし開始: {os.path.basename(audio_path)}")
             
-            # 文字起こしオプション
-            options = {
-                'language': language,
-                'task': 'transcribe',
-                'verbose': None,  # Noneでtqdmを完全に無効化
-                'fp16': self.device == 'cuda',
-            }
-            options.update(kwargs)
-            
-            # 文字起こし実行
-            result = model.transcribe(audio_path, **options)
-            
-            if not result or 'text' not in result:
-                raise TranscriptionError("Whisperからの応答が不正です")
+            options = self._build_transcribe_options(language=language, **kwargs)
+            result = self._run_transcription(model, audio_path, options)
             
             # セグメントごとの詳細情報を構築
             segments_info = []
-            if 'segments' in result:
-                for seg in result['segments']:
-                    segments_info.append({
-                        'start': seg['start'],
-                        'end': seg['end'],
-                        'text': seg['text'].strip(),
-                        'id': seg.get('id', 0)
-                    })
+            for seg in result.get('segments', []):
+                segments_info.append({
+                    'start': seg['start'],
+                    'end': seg['end'],
+                    'text': seg['text'],
+                    'id': seg.get('id', 0)
+                })
             
             # メタデータを構築
             metadata = {
@@ -349,7 +389,7 @@ class WhisperService:
                 'device': self.device
             }
             
-            text = result['text'].strip()
+            text = result['text']
             logger.info(f"Whisperセグメント文字起こし完了: セグメント数={len(segments_info)}")
             
             return text, metadata
@@ -376,22 +416,13 @@ class WhisperService:
             else:
                 initial_prompt = f"これは音声の中間部分（{segment_num}/{total_segments}）です。"
             
-            # 文字起こしオプション
-            options = {
-                'language': language,
-                'task': 'transcribe',
-                'verbose': None,  # Noneでtqdmを完全に無効化
-                'fp16': self.device == 'cuda',
-                'initial_prompt': initial_prompt,  # コンテキストヒント
-            }
-            
-            # 文字起こし実行
-            result = model.transcribe(segment_file, **options)
-            
-            if not result or 'text' not in result:
-                raise TranscriptionError(f"セグメント {segment_num} の文字起こし結果が不正です")
-            
-            text = result['text'].strip()
+            options = self._build_transcribe_options(
+                language=language,
+                initial_prompt=initial_prompt
+            )
+            result = self._run_transcription(model, segment_file, options)
+
+            text = result['text']
             if not text:
                 # 空の結果の場合は警告のみ
                 logger.warning(f"セグメント {segment_num} の文字起こし結果が空でした")
@@ -448,32 +479,34 @@ class WhisperService:
     
     def test_whisper_availability(self) -> Tuple[bool, str]:
         """Whisperの利用可能性をテスト"""
+        temp_path = None
         try:
             # 小さいモデルでテスト
             logger.info("Whisper利用可能性テスト開始")
             
             # tinyモデルをロード（最小サイズ）
-            test_model = whisper.load_model('tiny', device=self.device)
+            test_model = self.load_model('tiny', force_reload=True)
             
             # 簡単なテスト音声を作成（無音）
-            import tempfile
             import wave
             
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                temp_path = tmp.name
                 # 1秒の無音WAVファイルを作成
-                with wave.open(tmp.name, 'wb') as wav:
+                with wave.open(temp_path, 'wb') as wav:
                     wav.setnchannels(1)  # モノラル
                     wav.setsampwidth(2)  # 16bit
                     wav.setframerate(16000)  # 16kHz
                     wav.writeframes(np.zeros(16000, dtype=np.int16).tobytes())
                 
                 # テスト文字起こし
-                result = test_model.transcribe(tmp.name, language='ja')
-                
-                # 一時ファイルを削除
-                os.unlink(tmp.name)
+                self._run_transcription(
+                    test_model,
+                    temp_path,
+                    self._build_transcribe_options(language='ja')
+                )
             
-            device_info = f"GPU ({torch.cuda.get_device_name(0)})" if self.device == 'cuda' else "CPU"
+            device_info = self.get_device_info()
             message = f"Whisper利用可能 (デバイス: {device_info})"
             logger.info(message)
             return True, message
@@ -482,6 +515,12 @@ class WhisperService:
             error_msg = f"Whisper利用不可: {str(e)}"
             logger.error(error_msg)
             return False, error_msg
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    logger.debug(f"テスト用一時ファイルの削除に失敗: {temp_path}")
     
     def get_device_info(self) -> str:
         """デバイス情報を取得"""

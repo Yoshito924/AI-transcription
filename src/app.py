@@ -473,14 +473,14 @@ class TranscriptionApp:
                 "（この機能は今後処理されたファイルに対して利用可能です）"
             )
 
-    def _on_history_update(self):
+    def _on_history_update(self, output_file=None):
         """処理完了時のコールバック - メタデータ保存 + 履歴更新"""
-        if self.controller.current_file:
-            files = self.processor.get_output_files()
-            if files:
-                latest_output = files[0][0]  # 最新の出力ファイル名
+        if self.controller.current_file and output_file:
+            output_dir = os.path.abspath(os.path.dirname(output_file))
+            if output_dir == os.path.abspath(self.output_dir):
+                output_name = os.path.basename(output_file)
                 source_file = self.controller.current_file
-                self.history_metadata[latest_output] = {
+                self.history_metadata[output_name] = {
                     'source_file': os.path.abspath(source_file),
                     'source_dir': os.path.dirname(os.path.abspath(source_file))
                 }
