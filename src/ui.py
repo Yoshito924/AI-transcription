@@ -6,6 +6,7 @@
 カード・セクションヘッダー・ダークログ・キャンバスD&Dを採用
 """
 
+import math
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 
@@ -16,6 +17,83 @@ from .constants import (
     CARD_PADDING, SECTION_SPACING, MAIN_PADDING_X,
     MAIN_PADDING_Y, QUEUE_LISTBOX_HEIGHT
 )
+
+
+def _bind_dynamic_wraplength(label, padding=0):
+    """ラベルの wraplength を親ウィジェットの幅に追従させる"""
+    def _update(event=None):
+        parent = label.winfo_parent()
+        parent_widget = label.nametowidget(parent)
+        w = parent_widget.winfo_width()
+        if w > 1:
+            label.config(wraplength=max(100, w - padding * 2 - 10))
+    label.bind('<Configure>', _update)
+
+
+def _create_scrollable_frame(parent, bg):
+    """スクロール可能なフレームを作成。(outer_frame, inner_frame) を返す。
+
+    outer_frame を親にpackし、inner_frame の中にコンテンツを配置する。
+    マウスホイールでスクロールでき、コンテンツが収まる場合はスクロールバーを非表示にする。
+    """
+    outer = tk.Frame(parent, bg=bg)
+
+    canvas = tk.Canvas(outer, bg=bg, highlightthickness=0, bd=0)
+    scrollbar = ttk.Scrollbar(
+        outer, orient=tk.VERTICAL, command=canvas.yview,
+        style='Modern.Vertical.TScrollbar'
+    )
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    # スクロールバーは必要時のみ表示（初期非表示）
+
+    inner = tk.Frame(canvas, bg=bg)
+    canvas_window = canvas.create_window((0, 0), window=inner, anchor='nw')
+
+    def _on_inner_configure(event=None):
+        canvas.configure(scrollregion=canvas.bbox('all'))
+        _update_scrollbar_visibility()
+
+    def _on_canvas_configure(event):
+        canvas.itemconfig(canvas_window, width=event.width)
+        _update_scrollbar_visibility()
+
+    def _update_scrollbar_visibility():
+        canvas.update_idletasks()
+        content_h = inner.winfo_reqheight()
+        viewport_h = canvas.winfo_height()
+        if content_h > viewport_h + 2:
+            if not scrollbar.winfo_ismapped():
+                scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        else:
+            if scrollbar.winfo_ismapped():
+                scrollbar.pack_forget()
+            canvas.yview_moveto(0)
+
+    def _on_mousewheel(event):
+        # コンテンツが収まっている場合はスクロールしない
+        content_h = inner.winfo_reqheight()
+        viewport_h = canvas.winfo_height()
+        if content_h <= viewport_h + 2:
+            return
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+
+    def _bind_wheel(event=None):
+        canvas.bind_all('<MouseWheel>', _on_mousewheel)
+
+    def _unbind_wheel(event=None):
+        canvas.unbind_all('<MouseWheel>')
+
+    canvas.bind('<Enter>', _bind_wheel)
+    canvas.bind('<Leave>', _unbind_wheel)
+    inner.bind('<Configure>', _on_inner_configure)
+    canvas.bind('<Configure>', _on_canvas_configure)
+
+    outer._scroll_canvas = canvas
+    outer._scroll_inner = inner
+
+    return outer, inner
 
 
 def setup_ui(app):
@@ -37,155 +115,188 @@ def setup_ui(app):
     main_container = tk.Frame(root, bg=theme.colors['background'])
     main_container.pack(fill=tk.BOTH, expand=True, padx=MAIN_PADDING_X, pady=MAIN_PADDING_Y)
 
-    # アプリケーションヘッダー
-    app_header = _create_app_header(main_container, theme, widgets)
-    app_header.pack(fill=tk.X, pady=(0, 8))
-
-    # タブ（文字起こし / API設定・使用量）
-    notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
-    notebook.pack(fill=tk.X, pady=(0, SECTION_SPACING))
-
-    # タブ1: 文字起こし
-    file_tab = tk.Frame(notebook, bg=theme.colors['surface'])
-    notebook.add(file_tab, text='  文字起こし  ')
-    file_section = create_file_section(file_tab, app, theme, widgets)
-    file_section.pack(fill=tk.X)
-
-    # タブ2: API設定・使用量
-    settings_tab = tk.Frame(notebook, bg=theme.colors['surface'])
-    notebook.add(settings_tab, text='  API設定・使用量  ')
-    settings_content = tk.Frame(settings_tab, bg=theme.colors['surface'])
-    settings_content.pack(fill=tk.X, padx=8, pady=8)
-    api_section = create_api_section(settings_content, app, theme, widgets)
-    api_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-    usage_section = create_usage_section(settings_content, app, theme, widgets)
-    usage_section.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8, 0))
-
-    # 処理履歴とログを横並びに（ドラッグで幅変更可能）
-    paned = tk.PanedWindow(
+    # === 全体: 左右をドラッグで調整できる横PanedWindow ===
+    main_paned = tk.PanedWindow(
         main_container, orient=tk.HORIZONTAL,
         bg=theme.colors['background'],
+        sashwidth=8, sashrelief='flat',
+        showhandle=True, handlesize=10, handlepad=6,
+        opaqueresize=True
+    )
+    main_paned.pack(fill=tk.BOTH, expand=True)
+
+    work_pane = tk.Frame(main_paned, bg=theme.colors['background'])
+    side_pane = tk.Frame(main_paned, bg=theme.colors['background'])
+
+    main_paned.add(work_pane, minsize=480)
+    main_paned.add(side_pane, minsize=280)
+
+    # === 左側: 作業タブ（折りたたみ可能） ===
+    accordion_state = {'expanded': True}
+
+    # アコーディオンのトグルバー
+    toggle_bar = tk.Frame(
+        work_pane,
+        bg=theme.colors['surface_variant'],
+        cursor='hand2'
+    )
+    toggle_bar.pack(fill=tk.X, pady=(0, 2))
+
+    toggle_inner = tk.Frame(toggle_bar, bg=theme.colors['surface_variant'])
+    toggle_inner.pack(fill=tk.X, padx=10, pady=4)
+
+    toggle_arrow = tk.Label(
+        toggle_inner,
+        text='\u25bc',
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    toggle_arrow.pack(side=tk.LEFT, padx=(0, 8))
+
+    toggle_label = tk.Label(
+        toggle_inner,
+        text='作業パネルを閉じる',
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    toggle_label.pack(side=tk.LEFT)
+
+    # 上部コンテンツ（折りたたみ対象）
+    upper_frame = tk.Frame(work_pane, bg=theme.colors['background'])
+    upper_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+
+    # タブ（文字起こし / 録音 / API設定・使用量）
+    notebook = ttk.Notebook(upper_frame, style='Modern.TNotebook')
+    notebook.pack(fill=tk.BOTH, expand=True, pady=(0, SECTION_SPACING))
+
+    # タブ1: 文字起こし（スクロール可能）
+    file_tab = tk.Frame(notebook, bg=theme.colors['surface'])
+    notebook.add(file_tab, text='文字起こし')
+    file_scroll_outer, file_scroll_inner = _create_scrollable_frame(
+        file_tab, theme.colors['surface']
+    )
+    file_scroll_outer.pack(fill=tk.BOTH, expand=True)
+    file_section = create_file_section(file_scroll_inner, app, theme, widgets)
+    file_section.pack(fill=tk.X)
+
+    # タブ2: 録音（スクロール可能）
+    recording_tab = tk.Frame(notebook, bg=theme.colors['surface'])
+    notebook.add(recording_tab, text='録音')
+    recording_scroll_outer, recording_scroll_inner = _create_scrollable_frame(
+        recording_tab, theme.colors['surface']
+    )
+    recording_scroll_outer.pack(fill=tk.BOTH, expand=True)
+    recording_section = create_recording_section(recording_scroll_inner, app, theme, widgets)
+    recording_section.pack(fill=tk.X)
+
+    # タブ3: API設定・使用量（スクロール可能 + レスポンシブ横並び/縦積み切替）
+    settings_tab = tk.Frame(notebook, bg=theme.colors['surface'])
+    notebook.add(settings_tab, text='接続・使用量')
+    settings_scroll_outer, settings_scroll_inner = _create_scrollable_frame(
+        settings_tab, theme.colors['surface']
+    )
+    settings_scroll_outer.pack(fill=tk.BOTH, expand=True)
+    settings_content = tk.Frame(settings_scroll_inner, bg=theme.colors['surface'])
+    settings_content.pack(fill=tk.X, padx=6, pady=6)
+    api_section = create_api_section(settings_content, app, theme, widgets)
+    usage_section = create_usage_section(settings_content, app, theme, widgets)
+
+    # 幅に応じて横並び/縦積みを切替
+    _settings_layout_state = {'is_horizontal': None}
+
+    def _relayout_settings(event=None):
+        w = settings_content.winfo_width()
+        threshold = 640
+        want_horizontal = w >= threshold
+
+        if _settings_layout_state['is_horizontal'] == want_horizontal:
+            return
+        _settings_layout_state['is_horizontal'] = want_horizontal
+
+        api_section.pack_forget()
+        usage_section.pack_forget()
+
+        if want_horizontal:
+            api_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+            usage_section.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8, 0))
+        else:
+            api_section.pack(fill=tk.X, pady=(0, 8))
+            usage_section.pack(fill=tk.X, pady=(8, 0))
+
+    settings_content.bind('<Configure>', _relayout_settings)
+
+    # アコーディオンのトグル処理
+    def _toggle_accordion(event=None):
+        if accordion_state['expanded']:
+            upper_frame.pack_forget()
+            toggle_arrow.config(text='\u25b6')
+            toggle_label.config(text='作業パネルを開く')
+            accordion_state['expanded'] = False
+        else:
+            # toggle_bar の直後に upper_frame を挿入
+            upper_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 6), after=toggle_bar)
+            toggle_arrow.config(text='\u25bc')
+            toggle_label.config(text='作業パネルを閉じる')
+            accordion_state['expanded'] = True
+
+    # バー全体をクリック可能に
+    for w in (toggle_bar, toggle_inner, toggle_arrow, toggle_label):
+        w.bind('<Button-1>', _toggle_accordion)
+
+    # ホバー効果
+    def _toggle_enter(event=None):
+        for w in (toggle_bar, toggle_inner, toggle_arrow, toggle_label):
+            w.config(bg=theme.colors['surface_emphasis'])
+    def _toggle_leave(event=None):
+        for w in (toggle_bar, toggle_inner, toggle_arrow, toggle_label):
+            w.config(bg=theme.colors['surface_variant'])
+
+    toggle_bar.bind('<Enter>', _toggle_enter)
+    toggle_bar.bind('<Leave>', _toggle_leave)
+
+    # === 右側: 処理履歴とログを上下に分割 ===
+    paned = tk.PanedWindow(
+        side_pane, orient=tk.VERTICAL,
+        bg=theme.colors['background'],
         sashwidth=6, sashrelief='flat',
+        showhandle=True, handlesize=8, handlepad=4,
         opaqueresize=True
     )
     paned.pack(fill=tk.BOTH, expand=True)
 
     history_section = create_history_section(paned, app, theme, widgets)
-    paned.add(history_section, stretch='always', minsize=250)
+    paned.add(history_section, stretch='always', minsize=220)
 
     log_section = create_log_section(paned, app, theme, widgets)
-    paned.add(log_section, stretch='always', minsize=200)
+    paned.add(log_section, stretch='always', minsize=180)
 
-    # 初期比率を 3:2 に設定
-    def _set_initial_sash(event=None):
+    # 右側PanedWindow の初期比率を設定
+    def _set_initial_side_sash(event=None):
         paned.update_idletasks()
-        total = paned.winfo_width()
-        if total > 10:
-            paned.sash_place(0, int(total * 0.6), 0)
+        total_h = paned.winfo_height()
+        if total_h > 10:
+            paned.sash_place(0, 0, int(total_h * 0.58))
             paned.unbind('<Map>')
-    paned.bind('<Map>', _set_initial_sash)
+    paned.bind('<Map>', _set_initial_side_sash)
+
+    # 全体の左右比率を設定
+    def _set_initial_main_sash(event=None):
+        main_paned.update_idletasks()
+        total_w = main_paned.winfo_width()
+        if total_w > 10:
+            main_paned.sash_place(0, int(total_w * 0.70), 0)
+            main_paned.unbind('<Map>')
+    main_paned.bind('<Map>', _set_initial_main_sash)
 
     # UI要素を収集
     ui_elements = collect_ui_elements(
-        api_section, file_section, usage_section, history_section, log_section
+        api_section, file_section, recording_section, usage_section, history_section, log_section
     )
 
     return ui_elements
 
-
-def _create_app_header(parent, theme, widgets):
-    """アプリケーションヘッダー"""
-    frame = tk.Frame(
-        parent,
-        bg=theme.colors['hero_bg'],
-        highlightbackground=theme.colors['hero_border'],
-        highlightthickness=1,
-        bd=0
-    )
-
-    content = tk.Frame(frame, bg=theme.colors['hero_bg'])
-    content.pack(fill=tk.X, padx=22, pady=18)
-
-    left = tk.Frame(content, bg=theme.colors['hero_bg'])
-    left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-    tk.Label(
-        left,
-        text="AI TRANSCRIPTION STUDIO",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['secondary_light'],
-        bg=theme.colors['hero_bg']
-    ).pack(anchor='w')
-
-    tk.Label(
-        left,
-        text="音声の取り込みから書き起こしまでを、一枚で。",
-        font=theme.fonts['app_title'],
-        fg=theme.colors['text_on_dark'],
-        bg=theme.colors['hero_bg']
-    ).pack(anchor='w', pady=(6, 4))
-
-    tk.Label(
-        left,
-        text="Gemini / Whisper / Whisper API を切り替えながら、単発処理とキュー処理を同じ導線で回せます。",
-        font=theme.fonts['body'],
-        fg='#D7E0E4',
-        bg=theme.colors['hero_bg']
-    ).pack(anchor='w')
-
-    badges = tk.Frame(left, bg=theme.colors['hero_bg'])
-    badges.pack(anchor='w', pady=(12, 0))
-
-    widgets.create_pill_label(
-        badges, "Cloud Gemini", tone='dark',
-        bg=theme.colors['hero_surface']
-    ).pack(side=tk.LEFT, padx=(0, 8))
-    widgets.create_pill_label(
-        badges, "Local Whisper", tone='dark',
-        bg=theme.colors['hero_surface']
-    ).pack(side=tk.LEFT, padx=(0, 8))
-    widgets.create_pill_label(
-        badges, "Queue Ready", tone='dark',
-        bg=theme.colors['hero_surface']
-    ).pack(side=tk.LEFT)
-
-    right = tk.Frame(
-        content,
-        bg=theme.colors['hero_surface'],
-        highlightbackground=theme.colors['hero_border'],
-        highlightthickness=1,
-        bd=0
-    )
-    right.pack(side=tk.RIGHT, padx=(18, 0))
-
-    right_inner = tk.Frame(right, bg=theme.colors['hero_surface'])
-    right_inner.pack(padx=16, pady=14)
-
-    tk.Label(
-        right_inner,
-        text="Workflow",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['secondary_light'],
-        bg=theme.colors['hero_surface']
-    ).pack(anchor='w')
-
-    tk.Label(
-        right_inner,
-        text="取込 → 処理 → 保存",
-        font=theme.fonts['heading'],
-        fg=theme.colors['text_on_dark'],
-        bg=theme.colors['hero_surface']
-    ).pack(anchor='w', pady=(6, 4))
-
-    tk.Label(
-        right_inner,
-        text="ファイルを置いて、そのまま走らせる前提のUIです。",
-        font=theme.fonts['caption'],
-        fg='#D7E0E4',
-        bg=theme.colors['hero_surface']
-    ).pack(anchor='w')
-
-    return frame
 
 
 def create_api_section(parent, app, theme, widgets):
@@ -205,15 +316,17 @@ def create_api_section(parent, app, theme, widgets):
     )
     api_status.pack(side=tk.RIGHT)
 
-    tk.Label(
+    api_desc = tk.Label(
         card,
         text="利用するエンジンに応じて認証情報を登録します。Gemini は要約やタイトル生成、Whisper API は OpenAI 側の音声認識に使います。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface'],
         justify='left',
-        wraplength=420
-    ).pack(anchor='w', padx=CARD_PADDING, pady=(0, 12))
+        anchor='w'
+    )
+    api_desc.pack(anchor='w', fill=tk.X, padx=CARD_PADDING, pady=(0, 12))
+    _bind_dynamic_wraplength(api_desc, CARD_PADDING)
 
     gemini_panel = tk.Frame(
         card,
@@ -342,20 +455,104 @@ def create_api_section(parent, app, theme, widgets):
 def create_file_section(parent, app, theme, widgets):
     """ファイル入力セクション"""
     frame = widgets.create_card_frame(parent)
-    pad = 16
+    pad = 12
 
     header_frame = tk.Frame(frame, bg=theme.colors['surface'])
     header_frame.pack(fill=tk.X, padx=pad, pady=(pad, 8))
 
-    widgets.create_section_header(header_frame, "文字起こし設定").pack(
+    widgets.create_section_header(header_frame, "作業フロー").pack(
         side=tk.LEFT, fill=tk.X, expand=True
     )
     widgets.create_pill_label(
-        header_frame, "キュー対応", tone='success'
+        header_frame, "3ステップ", tone='success'
     ).pack(side=tk.RIGHT)
 
+    intro_label = tk.Label(
+        frame,
+        text="既存ファイルの文字起こし用です。マイク録音は「録音」タブに分けています。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface'],
+        justify='left',
+        anchor='w'
+    )
+    intro_label.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    _bind_dynamic_wraplength(intro_label, pad)
+
+    step_strip = tk.Frame(frame, bg=theme.colors['surface'])
+    step_strip.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    step_strip.grid_columnconfigure(0, weight=1)
+    step_strip.grid_columnconfigure(1, weight=1)
+    step_strip.grid_columnconfigure(2, weight=1)
+
+    def _create_step_card(parent_widget, title, body, accent):
+        card = tk.Frame(
+            parent_widget,
+            bg=theme.colors['surface_variant'],
+            highlightbackground=theme.colors['card_border'],
+            highlightthickness=1,
+            bd=0
+        )
+        stripe = tk.Frame(card, bg=accent, height=4)
+        stripe.pack(fill=tk.X)
+        body_frame = tk.Frame(card, bg=theme.colors['surface_variant'])
+        body_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+        tk.Label(
+            body_frame,
+            text=title,
+            font=theme.fonts['caption_bold'],
+            fg=theme.colors['text_primary'],
+            bg=theme.colors['surface_variant']
+        ).pack(anchor='w')
+        text_label = tk.Label(
+            body_frame,
+            text=body,
+            font=theme.fonts['caption'],
+            fg=theme.colors['text_secondary'],
+            bg=theme.colors['surface_variant'],
+            justify='left',
+            anchor='w'
+        )
+        text_label.pack(fill=tk.X, pady=(6, 0))
+        _bind_dynamic_wraplength(text_label, 12)
+        return card
+
+    _create_step_card(
+        step_strip,
+        "1. ファイルを追加",
+        "音声や動画ファイルをドラッグ&ドロップ、または選択します。",
+        theme.colors['error']
+    ).grid(row=0, column=0, sticky='ew', padx=(0, 6))
+    _create_step_card(
+        step_strip,
+        "2. 処理条件を決める",
+        "エンジンと保存先だけ確認すれば実行できます。",
+        theme.colors['primary']
+    ).grid(row=0, column=1, sticky='ew', padx=6)
+    _create_step_card(
+        step_strip,
+        "3. 開始する",
+        "キューにたまったファイルをまとめて文字起こしします。",
+        theme.colors['warning']
+    ).grid(row=0, column=2, sticky='ew', padx=(6, 0))
+
+    quick_action_row = tk.Frame(frame, bg=theme.colors['surface'])
+    quick_action_row.pack(fill=tk.X, padx=pad, pady=(0, 10))
+
+    quick_file_btn = widgets.create_icon_button(
+        quick_action_row, "ファイルを追加", ICONS['folder'], 'Primary',
+        command=app.browse_file
+    )
+    quick_file_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+    quick_run_btn = widgets.create_icon_button(
+        quick_action_row, "文字起こし開始", ICONS['play'], 'Secondary',
+        command=lambda: app.start_process("transcription")
+    )
+    quick_run_btn.pack(side=tk.LEFT)
+
     config_strip = tk.Frame(frame, bg=theme.colors['surface'])
-    config_strip.pack(fill=tk.X, padx=pad, pady=(0, 10))
+    config_strip.pack(fill=tk.X, padx=pad, pady=(0, 8))
 
     left_panel = tk.Frame(
         config_strip,
@@ -364,7 +561,6 @@ def create_file_section(parent, app, theme, widgets):
         highlightthickness=1,
         bd=0
     )
-    left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
     right_panel = tk.Frame(
         config_strip,
@@ -373,14 +569,37 @@ def create_file_section(parent, app, theme, widgets):
         highlightthickness=1,
         bd=0
     )
-    right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+
+    # 幅に応じて横並び/縦積みを切替
+    _config_layout_state = {'is_horizontal': None}
+
+    def _relayout_config(event=None):
+        w = config_strip.winfo_width()
+        threshold = 540
+        want_horizontal = w >= threshold
+
+        if _config_layout_state['is_horizontal'] == want_horizontal:
+            return
+        _config_layout_state['is_horizontal'] = want_horizontal
+
+        left_panel.pack_forget()
+        right_panel.pack_forget()
+
+        if want_horizontal:
+            left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+            right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+        else:
+            left_panel.pack(fill=tk.X, pady=(0, 6))
+            right_panel.pack(fill=tk.X, pady=(6, 0))
+
+    config_strip.bind('<Configure>', _relayout_config)
 
     left_inner = tk.Frame(left_panel, bg=theme.colors['surface_variant'])
-    left_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+    left_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
     tk.Label(
         left_inner,
-        text="エンジン選択",
+        text="エンジン",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
@@ -390,7 +609,7 @@ def create_file_section(parent, app, theme, widgets):
     engine_var = tk.StringVar(value=saved_engine)
 
     engine_row = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
-    engine_row.pack(fill=tk.X, pady=(8, 10))
+    engine_row.pack(fill=tk.X, pady=(6, 8))
 
     for text, value in [
         ("Gemini", "gemini"),
@@ -458,25 +677,27 @@ def create_file_section(parent, app, theme, widgets):
     whisper_model_info.pack(anchor='w', pady=(6, 0))
 
     right_inner = tk.Frame(right_panel, bg=theme.colors['surface_variant'])
-    right_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+    right_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
     tk.Label(
         right_inner,
-        text="保存と処理モード",
+        text="保存先",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
     ).pack(anchor='w')
 
-    tk.Label(
+    save_desc = tk.Label(
         right_inner,
         text="出力先は複数指定できます。どちらもオフにした場合は output に戻します。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant'],
-        wraplength=340,
-        justify='left'
-    ).pack(anchor='w', pady=(2, 8))
+        justify='left',
+        anchor='w'
+    )
+    save_desc.pack(anchor='w', fill=tk.X, pady=(2, 6))
+    _bind_dynamic_wraplength(save_desc, 24)
 
     save_to_output_var = tk.BooleanVar(value=app.config.get("save_to_output_dir", True))
     save_to_source_var = tk.BooleanVar(value=app.config.get("save_to_source_dir", False))
@@ -494,7 +715,7 @@ def create_file_section(parent, app, theme, widgets):
     ).pack(anchor='w', pady=(4, 0))
 
     summary_grid = tk.Frame(frame, bg=theme.colors['surface'])
-    summary_grid.pack(fill=tk.X, padx=pad, pady=(0, 10))
+    summary_grid.pack(fill=tk.X, padx=pad, pady=(0, 8))
     summary_grid.grid_columnconfigure(0, weight=1)
     summary_grid.grid_columnconfigure(1, weight=1)
     summary_grid.grid_columnconfigure(2, weight=1)
@@ -518,20 +739,32 @@ def create_file_section(parent, app, theme, widgets):
     drop_wrapper.pack(fill=tk.X, padx=pad, pady=(0, 8))
 
     drop_inner = tk.Frame(drop_wrapper, bg=theme.colors['surface_variant'])
-    drop_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+    drop_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    drop_header = tk.Frame(drop_inner, bg=theme.colors['surface_variant'])
+    drop_header.pack(fill=tk.X, pady=(0, 6))
 
     tk.Label(
-        drop_inner,
-        text="ファイル投入",
+        drop_header,
+        text="既存ファイルを追加",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
-    ).pack(anchor='w', pady=(0, 8))
+    ).pack(side=tk.LEFT)
+
+    widgets.create_pill_label(
+        drop_header,
+        "クリックまたはドラッグ",
+        tone='info',
+        bg=theme.colors['surface'],
+        fg=theme.colors['primary']
+    ).pack(side=tk.RIGHT)
 
     drop_container = widgets.create_drag_drop_canvas(
         drop_inner,
-        "ここをクリックしてファイルを選択  /  ドラッグ&ドロップ",
-        height=96
+        title="クリックしてファイルを選択",
+        subtitle="またはこの欄にドラッグ&ドロップ",
+        height=128
     )
     drop_container.pack(fill=tk.X)
 
@@ -542,11 +775,11 @@ def create_file_section(parent, app, theme, widgets):
     queue_frame = widgets.create_card_frame(frame)
 
     queue_header = tk.Frame(queue_frame, bg=theme.colors['surface'])
-    queue_header.pack(fill=tk.X, padx=12, pady=(10, 6))
+    queue_header.pack(fill=tk.X, padx=10, pady=(8, 4))
 
     queue_count_label = tk.Label(
         queue_header,
-        text="待機ファイル: 0件",
+        text="現在のキュー: 0件",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface']
@@ -578,7 +811,13 @@ def create_file_section(parent, app, theme, widgets):
         borderwidth=1,
         highlightthickness=0
     )
-    queue_listbox.pack(fill=tk.X, padx=12, pady=(0, 12))
+    queue_listbox.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+    # 入力導線を先に見せるため、詳細設定はファイル追加の後ろへ並べ直す
+    config_strip.pack_forget()
+    summary_grid.pack_forget()
+    config_strip.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    summary_grid.pack(fill=tk.X, padx=pad, pady=(0, 8))
 
     status_card = tk.Frame(
         frame,
@@ -587,10 +826,10 @@ def create_file_section(parent, app, theme, widgets):
         highlightthickness=1,
         bd=0
     )
-    status_card.pack(fill=tk.X, padx=pad, pady=(0, 10))
+    status_card.pack(fill=tk.X, padx=pad, pady=(0, 8))
 
     status_inner = tk.Frame(status_card, bg=theme.colors['surface_variant'])
-    status_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+    status_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
     top_info = tk.Frame(status_inner, bg=theme.colors['surface_variant'])
     top_info.pack(fill=tk.X)
@@ -618,7 +857,7 @@ def create_file_section(parent, app, theme, widgets):
 
     status_label = tk.Label(
         status_group,
-        text="準備完了",
+        text="開始待ち",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
@@ -626,11 +865,11 @@ def create_file_section(parent, app, theme, widgets):
     status_label.pack(side=tk.LEFT)
 
     progress_caption = tk.Frame(status_inner, bg=theme.colors['surface_variant'])
-    progress_caption.pack(fill=tk.X, pady=(10, 4))
+    progress_caption.pack(fill=tk.X, pady=(8, 4))
 
     tk.Label(
         progress_caption,
-        text="進行状況",
+        text="実行状況",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
@@ -743,6 +982,689 @@ def create_file_section(parent, app, theme, widgets):
     return frame
 
 
+def create_recording_section(parent, app, theme, widgets):
+    """録音専用タブを作成する"""
+    frame = tk.Frame(parent, bg=theme.colors['surface'])
+    pad = 12
+
+    header_frame = tk.Frame(frame, bg=theme.colors['surface'])
+    header_frame.pack(fill=tk.X, padx=pad, pady=(pad, 8))
+
+    widgets.create_section_header(header_frame, "録音").pack(
+        side=tk.LEFT, fill=tk.X, expand=True
+    )
+    widgets.create_pill_label(
+        header_frame, "マイク専用", tone='warning'
+    ).pack(side=tk.RIGHT)
+
+    intro_label = tk.Label(
+        frame,
+        text="電話や会話をその場で録音し、保存後そのままキューへ回せます。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface'],
+        justify='left',
+        anchor='w'
+    )
+    intro_label.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    _bind_dynamic_wraplength(intro_label, pad)
+
+    recording_widgets = _create_recording_card(frame, app, theme, widgets, pad)
+
+    frame.recording_status_label = recording_widgets['recording_status_label']
+    frame.recording_badge_label = recording_widgets['recording_badge_label']
+    frame.recording_device_label = recording_widgets['recording_device_label']
+    frame.recording_timer_label = recording_widgets['recording_timer_label']
+    frame.recording_folder_label = recording_widgets['recording_folder_label']
+    frame.record_button = recording_widgets['record_button']
+    frame.stop_record_button = recording_widgets['stop_record_button']
+    frame.queue_recordings_button = recording_widgets['queue_recordings_button']
+    frame.choose_recording_folder_button = recording_widgets['choose_recording_folder_button']
+    frame.open_recording_folder_button = recording_widgets['open_recording_folder_button']
+    frame.recording_device_combo = recording_widgets['recording_device_combo']
+    frame.recording_channel_combo = recording_widgets['recording_channel_combo']
+    frame.refresh_recording_inputs_button = recording_widgets['refresh_recording_inputs_button']
+    frame.recording_gain_scale = recording_widgets['recording_gain_scale']
+    frame.recording_visual_canvas = recording_widgets['recording_visual_canvas']
+
+    return frame
+
+
+def _create_recording_card(parent, app, theme, widgets, pad):
+    """録音UIカードを作成する"""
+    card = tk.Frame(
+        parent,
+        bg=theme.colors['hero_bg'],
+        highlightbackground=theme.colors['hero_border'],
+        highlightthickness=1,
+        bd=0
+    )
+    card.pack(fill=tk.X, padx=pad, pady=(0, 8))
+
+    inner = tk.Frame(card, bg=theme.colors['hero_bg'])
+    inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+    header = tk.Frame(inner, bg=theme.colors['hero_bg'])
+    header.pack(fill=tk.X)
+
+    tk.Label(
+        header,
+        text="その場で録音",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['secondary_light'],
+        bg=theme.colors['hero_bg']
+    ).pack(side=tk.LEFT)
+
+    recording_badge_label = tk.Label(
+        header,
+        text="STANDBY",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['info'],
+        bg=theme.colors['info_soft'],
+        padx=10,
+        pady=4
+    )
+    recording_badge_label.pack(side=tk.RIGHT)
+
+    desc = tk.Label(
+        inner,
+        text="突然の電話や会話をそのまま録音する入口です。止めるとすぐキューへ回せます。",
+        font=theme.fonts['caption'],
+        fg='#D7E0E4',
+        bg=theme.colors['hero_bg'],
+        justify='left',
+        anchor='w'
+    )
+    desc.pack(anchor='w', fill=tk.X, pady=(6, 10))
+    _bind_dynamic_wraplength(desc, 28)
+
+    action_shell = tk.Frame(
+        inner,
+        bg=theme.colors['hero_surface'],
+        highlightbackground=theme.colors['hero_border'],
+        highlightthickness=1,
+        bd=0
+    )
+    action_shell.pack(fill=tk.X, pady=(0, 10))
+
+    action_inner = tk.Frame(action_shell, bg=theme.colors['hero_surface'])
+    action_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+    action_header = tk.Frame(action_inner, bg=theme.colors['hero_surface'])
+    action_header.pack(fill=tk.X)
+
+    tk.Label(
+        action_header,
+        text="クイック操作",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['secondary_light'],
+        bg=theme.colors['hero_surface']
+    ).pack(side=tk.LEFT)
+
+    tk.Label(
+        action_header,
+        text="まずここから",
+        font=theme.fonts['caption'],
+        fg='#C9D8DE',
+        bg=theme.colors['hero_surface']
+    ).pack(side=tk.RIGHT)
+
+    controls = tk.Frame(action_inner, bg=theme.colors['hero_surface'])
+    controls.pack(fill=tk.X, pady=(8, 0))
+    controls.grid_columnconfigure(0, weight=1)
+    controls.grid_columnconfigure(1, weight=1)
+    controls.grid_columnconfigure(2, weight=1)
+
+    record_button = widgets.create_icon_button(
+        controls, "録音開始", ICONS['microphone'], 'Primary',
+        command=app.start_recording
+    )
+    record_button.idle_text = f"{ICONS['microphone']} 録音開始"
+    record_button.active_text = f"{ICONS['microphone']} 録音中..."
+
+    stop_record_button = widgets.create_icon_button(
+        controls, "停止して保存", ICONS['stop'], 'Secondary',
+        command=app.stop_recording
+    )
+    stop_record_button.idle_text = f"{ICONS['stop']} 停止して保存"
+    stop_record_button.active_text = f"{ICONS['stop']} 保存して停止"
+
+    queue_recordings_button = widgets.create_icon_button(
+        controls, "録音をキュー追加", ICONS['plus'], 'Secondary',
+        command=app.add_recordings_to_queue
+    )
+
+    action_layout_state = {'wide': None}
+
+    def _relayout_action_controls(event=None):
+        width = controls.winfo_width()
+        want_wide = width >= 660
+        if action_layout_state['wide'] == want_wide:
+            return
+        action_layout_state['wide'] = want_wide
+
+        for button in (record_button, stop_record_button, queue_recordings_button):
+            button.grid_forget()
+
+        if want_wide:
+            record_button.grid(row=0, column=0, sticky='ew', padx=(0, 6))
+            stop_record_button.grid(row=0, column=1, sticky='ew', padx=6)
+            queue_recordings_button.grid(row=0, column=2, sticky='ew', padx=(6, 0))
+        else:
+            record_button.grid(row=0, column=0, sticky='ew', padx=(0, 4))
+            stop_record_button.grid(row=0, column=1, sticky='ew', padx=(4, 0))
+            queue_recordings_button.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(8, 0))
+
+    controls.bind('<Configure>', _relayout_action_controls)
+    controls.after_idle(_relayout_action_controls)
+
+    main_strip = tk.Frame(inner, bg=theme.colors['hero_bg'])
+    main_strip.pack(fill=tk.X)
+
+    left_panel = tk.Frame(
+        main_strip,
+        bg=theme.colors['hero_surface'],
+        highlightbackground=theme.colors['hero_border'],
+        highlightthickness=1,
+        bd=0
+    )
+
+    right_panel = tk.Frame(
+        main_strip,
+        bg=theme.colors['hero_surface'],
+        highlightbackground=theme.colors['hero_border'],
+        highlightthickness=1,
+        bd=0
+    )
+
+    layout_state = {'horizontal': None}
+
+    def _relayout_recording(event=None):
+        width = main_strip.winfo_width()
+        want_horizontal = width >= 720
+        if layout_state['horizontal'] == want_horizontal:
+            return
+        layout_state['horizontal'] = want_horizontal
+
+        left_panel.pack_forget()
+        right_panel.pack_forget()
+
+        if want_horizontal:
+            left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+            right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+        else:
+            left_panel.pack(fill=tk.X, pady=(0, 6))
+            right_panel.pack(fill=tk.X)
+
+    main_strip.bind('<Configure>', _relayout_recording)
+
+    left_inner = tk.Frame(left_panel, bg=theme.colors['hero_surface'])
+    left_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+    tk.Label(
+        left_inner,
+        text="録音タイマー",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['secondary_light'],
+        bg=theme.colors['hero_surface']
+    ).pack(anchor='w')
+
+    recording_timer_label = tk.Label(
+        left_inner,
+        textvariable=app.recording_elapsed_var,
+        font=(theme.fonts['app_title'][0], 22),
+        fg=theme.colors['text_on_dark'],
+        bg=theme.colors['hero_surface']
+    )
+    recording_timer_label.pack(anchor='w', pady=(6, 4))
+
+    recording_status_label = tk.Label(
+        left_inner,
+        textvariable=app.recording_status_var,
+        font=theme.fonts['heading'],
+        fg=theme.colors['text_on_dark'],
+        bg=theme.colors['hero_surface']
+    )
+    recording_status_label.pack(anchor='w')
+
+    recording_hint_label = tk.Label(
+        left_inner,
+        textvariable=app.recording_hint_var,
+        font=theme.fonts['caption'],
+        fg='#D7E0E4',
+        bg=theme.colors['hero_surface'],
+        justify='left',
+        anchor='w'
+    )
+    recording_hint_label.pack(anchor='w', fill=tk.X, pady=(8, 0))
+    _bind_dynamic_wraplength(recording_hint_label, 14)
+
+    metrics_row = tk.Frame(left_inner, bg=theme.colors['hero_surface'])
+    metrics_row.pack(fill=tk.X, pady=(10, 0))
+    metrics_row.grid_columnconfigure(0, weight=1)
+    metrics_row.grid_columnconfigure(1, weight=1)
+    metrics_row.grid_columnconfigure(2, weight=1)
+
+    def _create_dark_metric(parent_widget, title, value_var):
+        tile = tk.Frame(
+            parent_widget,
+            bg='#2A5463',
+            highlightbackground=theme.colors['hero_border'],
+            highlightthickness=1,
+            bd=0
+        )
+        tk.Label(
+            tile,
+            text=title,
+            font=theme.fonts['caption_bold'],
+            fg='#C9D8DE',
+            bg='#2A5463'
+        ).pack(anchor='w', padx=8, pady=(7, 0))
+        value = tk.Label(
+            tile,
+            textvariable=value_var,
+            font=theme.fonts['body_bold'],
+            fg=theme.colors['text_on_dark'],
+            bg='#2A5463',
+            justify='left',
+            anchor='w'
+        )
+        value.pack(anchor='w', fill=tk.X, padx=8, pady=(3, 7))
+        return tile, value
+
+    input_tile, input_value = _create_dark_metric(metrics_row, "INPUT", app.recording_level_var)
+    input_tile.grid(row=0, column=0, sticky='ew', padx=(0, 6))
+
+    peak_tile, peak_value = _create_dark_metric(metrics_row, "PEAK", app.recording_peak_var)
+    peak_tile.grid(row=0, column=1, sticky='ew', padx=6)
+
+    format_tile, format_value = _create_dark_metric(metrics_row, "FORMAT", app.recording_format_var)
+    format_tile.grid(row=0, column=2, sticky='ew', padx=(6, 0))
+    _bind_dynamic_wraplength(format_value, 10)
+
+    right_inner = tk.Frame(right_panel, bg=theme.colors['hero_surface'])
+    right_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+    visual_header = tk.Frame(right_inner, bg=theme.colors['hero_surface'])
+    visual_header.pack(fill=tk.X)
+
+    tk.Label(
+        visual_header,
+        text="入力レベル",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['secondary_light'],
+        bg=theme.colors['hero_surface']
+    ).pack(side=tk.LEFT)
+
+    tk.Label(
+        visual_header,
+        text="LEVEL / PEAK",
+        font=theme.fonts['caption'],
+        fg='#C9D8DE',
+        bg=theme.colors['hero_surface']
+    ).pack(side=tk.RIGHT)
+
+    visual_shell = tk.Frame(
+        right_inner,
+        bg=theme.colors['log_bg'],
+        highlightbackground=theme.colors['hero_border'],
+        highlightthickness=1,
+        bd=0
+    )
+    visual_shell.pack(fill=tk.BOTH, expand=True, pady=(8, 8))
+
+    recording_visual_canvas = tk.Canvas(
+        visual_shell,
+        bg=theme.colors['log_bg'],
+        highlightthickness=0,
+        height=124
+    )
+    recording_visual_canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+    def _draw_recording_visual(level=0.0, peak=0.0, is_active=False, phase=0.0,
+                               spectrum_bins=None, waveform_points=None, is_live=False):
+        canvas = recording_visual_canvas
+        canvas.delete('all')
+
+        width = max(canvas.winfo_width(), 260)
+        height = max(canvas.winfo_height(), 124)
+        left_pad = 18
+        right_pad = 18
+        meter_y0 = 34
+        meter_height = 24
+        meter_y1 = meter_y0 + meter_height
+        usable_width = max(80, width - left_pad - right_pad)
+
+        meter_bg = '#29333A'
+        grid_color = '#3C4E56'
+        text_soft = '#C9D8DE'
+        level_pct = int(max(0, min(100, round(level * 100))))
+        peak_pct = int(max(0, min(100, round(peak * 100))))
+        if not is_live:
+            status_text = "待機中: マイク監視"
+        elif level_pct < 8:
+            status_text = "かなり小さい: レベルを上げる"
+        elif level_pct < 30:
+            status_text = "小さめ: 少し上げる"
+        elif level_pct < 70:
+            status_text = "適正: このままでOK"
+        elif level_pct < 88:
+            status_text = "高め: 少し下げる"
+        else:
+            status_text = "大きすぎる: すぐ下げる"
+
+        canvas.create_text(
+            left_pad, 10,
+            text="INPUT LEVEL",
+            anchor='nw',
+            font=theme.fonts['caption_bold'],
+            fill=text_soft
+        )
+        canvas.create_text(
+            width - right_pad, 10,
+            text=f"PEAK {peak_pct:02d}%",
+            anchor='ne',
+            font=theme.fonts['caption_bold'],
+            fill=text_soft
+        )
+
+        green_end = left_pad + (usable_width * 0.68)
+        yellow_end = left_pad + (usable_width * 0.88)
+
+        canvas.create_rectangle(
+            left_pad, meter_y0, width - right_pad, meter_y1,
+            fill=meter_bg,
+            outline='#47606A',
+            width=1
+        )
+        canvas.create_rectangle(left_pad, meter_y0, green_end, meter_y1, fill='#284133', outline='')
+        canvas.create_rectangle(green_end, meter_y0, yellow_end, meter_y1, fill='#4A3C22', outline='')
+        canvas.create_rectangle(yellow_end, meter_y0, width - right_pad, meter_y1, fill='#4D2D29', outline='')
+
+        fill_x = left_pad + (usable_width * level)
+        if is_live:
+            if fill_x > left_pad:
+                if fill_x > yellow_end:
+                    canvas.create_rectangle(left_pad, meter_y0 + 3, green_end, meter_y1 - 3, fill='#67B47A', outline='')
+                    canvas.create_rectangle(green_end, meter_y0 + 3, yellow_end, meter_y1 - 3, fill='#E8A55B', outline='')
+                    canvas.create_rectangle(yellow_end, meter_y0 + 3, fill_x, meter_y1 - 3, fill='#D97761', outline='')
+                elif fill_x > green_end:
+                    canvas.create_rectangle(left_pad, meter_y0 + 3, green_end, meter_y1 - 3, fill='#67B47A', outline='')
+                    canvas.create_rectangle(green_end, meter_y0 + 3, fill_x, meter_y1 - 3, fill='#E8A55B', outline='')
+                else:
+                    canvas.create_rectangle(left_pad, meter_y0 + 3, fill_x, meter_y1 - 3, fill='#67B47A', outline='')
+        else:
+            pulse_width = usable_width * 0.18
+            pulse_center = left_pad + ((((phase * 38) % 100) / 100.0) * usable_width)
+            pulse_left = max(left_pad, pulse_center - (pulse_width / 2))
+            pulse_right = min(width - right_pad, pulse_center + (pulse_width / 2))
+            canvas.create_rectangle(
+                pulse_left, meter_y0 + 4, pulse_right, meter_y1 - 4,
+                fill='#5B7D88', outline=''
+            )
+
+        for tick in (0.0, 0.25, 0.5, 0.75, 0.9, 1.0):
+            x = left_pad + (usable_width * tick)
+            canvas.create_line(x, meter_y0, x, meter_y1, fill=grid_color)
+
+        peak_x = left_pad + (usable_width * peak)
+        canvas.create_line(
+            peak_x, meter_y0 - 4, peak_x, meter_y1 + 4,
+            fill='#F4D48C',
+            width=2
+        )
+
+        tick_values = [(0.0, "0"), (0.5, "50"), (0.9, "90"), (1.0, "100")]
+        for ratio, label in tick_values:
+            x = left_pad + (usable_width * ratio)
+            canvas.create_text(
+                x, meter_y1 + 6,
+                text=label,
+                anchor='n',
+                font=theme.fonts['caption'],
+                fill='#91A8B0'
+            )
+
+        if level_pct >= 88:
+            value_color = '#D97761'
+        elif level_pct >= 68:
+            value_color = '#E8A55B'
+        else:
+            value_color = '#8ED3A0' if is_live else '#9FD3E0'
+        canvas.create_text(
+            width - right_pad, meter_y0 + (meter_height / 2),
+            text=f"{level_pct:02d}%",
+            anchor='e',
+            font=theme.fonts['heading'],
+            fill=value_color
+        )
+
+        canvas.create_text(
+            left_pad, meter_y1 + 22,
+            text=status_text,
+            anchor='nw',
+            font=theme.fonts['body_bold'],
+            fill=value_color
+        )
+
+        footer_text = "Recording" if is_active else ("Mic Monitor" if is_live else "Standby")
+        canvas.create_text(
+            left_pad, height - 8,
+            text=footer_text,
+            anchor='sw',
+            font=theme.fonts['caption'],
+            fill=text_soft
+        )
+
+    recording_visual_canvas.draw_visual = _draw_recording_visual
+    recording_visual_canvas.bind(
+        '<Configure>',
+        lambda event: recording_visual_canvas.draw_visual(0.0, 0.0, False, 0.0, [], [], False)
+    )
+
+    recording_device_label = tk.Label(
+        right_inner,
+        textvariable=app.recording_device_var,
+        font=theme.fonts['caption'],
+        fg='#D7E0E4',
+        bg=theme.colors['hero_surface'],
+        justify='left',
+        anchor='w'
+    )
+    recording_device_label.pack(anchor='w', fill=tk.X)
+    _bind_dynamic_wraplength(recording_device_label, 12)
+
+    folder_shell = tk.Frame(
+        inner,
+        bg=theme.colors['surface'],
+        highlightbackground=theme.colors['card_border'],
+        highlightthickness=1,
+        bd=0
+    )
+    folder_shell.pack(fill=tk.X, pady=(10, 0))
+
+    folder_inner = tk.Frame(folder_shell, bg=theme.colors['surface'])
+    folder_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    folder_top = tk.Frame(folder_inner, bg=theme.colors['surface'])
+    folder_top.pack(fill=tk.X)
+
+    tk.Label(
+        folder_top,
+        text="録音保存先",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    ).pack(side=tk.LEFT)
+
+    ttk.Checkbutton(
+        folder_top,
+        text="停止後に自動でキューへ追加",
+        variable=app.auto_queue_recordings_var,
+        command=app.toggle_auto_queue_recordings,
+        style='Modern.TCheckbutton'
+    ).pack(side=tk.RIGHT)
+
+    source_row = tk.Frame(folder_inner, bg=theme.colors['surface'])
+    source_row.pack(fill=tk.X, pady=(6, 8))
+    source_row.grid_columnconfigure(0, weight=3)
+    source_row.grid_columnconfigure(1, weight=2)
+
+    device_column = tk.Frame(source_row, bg=theme.colors['surface'])
+    device_column.grid(row=0, column=0, sticky='ew', padx=(0, 6))
+
+    tk.Label(
+        device_column,
+        text="入力デバイス",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    ).pack(anchor='w')
+
+    recording_device_combo = ttk.Combobox(
+        device_column,
+        textvariable=app.recording_input_device_var,
+        values=[],
+        state='readonly',
+        style='Modern.TCombobox'
+    )
+    recording_device_combo.pack(fill=tk.X, pady=(4, 0))
+    recording_device_combo.bind('<<ComboboxSelected>>', app.on_recording_device_selected)
+
+    channel_column = tk.Frame(source_row, bg=theme.colors['surface'])
+    channel_column.grid(row=0, column=1, sticky='ew')
+    channel_column.grid_columnconfigure(0, weight=1)
+
+    channel_header = tk.Frame(channel_column, bg=theme.colors['surface'])
+    channel_header.pack(fill=tk.X)
+
+    tk.Label(
+        channel_header,
+        text="入力チャンネル",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    ).pack(side=tk.LEFT)
+
+    refresh_recording_inputs_button = widgets.create_icon_button(
+        channel_header, "更新", ICONS['refresh'], 'Secondary',
+        command=app.refresh_recording_inputs
+    )
+    refresh_recording_inputs_button.pack(side=tk.RIGHT)
+
+    recording_channel_combo = ttk.Combobox(
+        channel_column,
+        textvariable=app.recording_input_channels_var,
+        values=[],
+        state='readonly',
+        style='Modern.TCombobox'
+    )
+    recording_channel_combo.pack(fill=tk.X, pady=(4, 0))
+    recording_channel_combo.bind('<<ComboboxSelected>>', app.on_recording_channel_selected)
+
+    source_note = tk.Label(
+        folder_inner,
+        text="オーディオIFの 1-2 / 3-4 などはデバイス名と入力チャンネルの両方で切り替えます。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface'],
+        justify='left',
+        anchor='w'
+    )
+    source_note.pack(fill=tk.X, pady=(0, 8))
+    _bind_dynamic_wraplength(source_note, 4)
+
+    recording_folder_label = tk.Label(
+        folder_inner,
+        textvariable=app.recording_dir_var,
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface'],
+        justify='left',
+        anchor='w'
+    )
+    recording_folder_label.pack(anchor='w', fill=tk.X, pady=(6, 10))
+    _bind_dynamic_wraplength(recording_folder_label, 20)
+
+    gain_row = tk.Frame(folder_inner, bg=theme.colors['surface'])
+    gain_row.pack(fill=tk.X, pady=(0, 8))
+
+    gain_header = tk.Frame(gain_row, bg=theme.colors['surface'])
+    gain_header.pack(fill=tk.X)
+
+    tk.Label(
+        gain_header,
+        text="録音レベル",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    ).pack(side=tk.LEFT)
+
+    tk.Label(
+        gain_header,
+        textvariable=app.recording_gain_display_var,
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['primary'],
+        bg=theme.colors['surface']
+    ).pack(side=tk.RIGHT)
+
+    gain_scale = ttk.Scale(
+        gain_row,
+        from_=25,
+        to=250,
+        orient=tk.HORIZONTAL,
+        variable=app.recording_gain_percent_var,
+        command=app.on_recording_gain_change
+    )
+    gain_scale.pack(fill=tk.X, pady=(6, 2))
+    gain_scale.bind('<ButtonRelease-1>', app.persist_recording_gain)
+
+    gain_note = tk.Label(
+        gain_row,
+        text="保存音量に掛かるソフトゲインです。100%が原音、上げすぎると割れます。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface'],
+        justify='left',
+        anchor='w'
+    )
+    gain_note.pack(fill=tk.X)
+    _bind_dynamic_wraplength(gain_note, 4)
+
+    path_controls = tk.Frame(folder_inner, bg=theme.colors['surface'])
+    path_controls.pack(fill=tk.X, pady=(8, 0))
+
+    choose_recording_folder_button = widgets.create_icon_button(
+        path_controls, "保存先変更", ICONS['folder'], 'Secondary',
+        command=app.choose_recording_folder
+    )
+    choose_recording_folder_button.pack(side=tk.LEFT, padx=(0, 6))
+
+    open_recording_folder_button = widgets.create_icon_button(
+        path_controls, "録音フォルダを開く", ICONS['open'], 'Secondary',
+        command=app.open_recording_folder
+    )
+    open_recording_folder_button.pack(side=tk.LEFT)
+
+    return {
+        'recording_status_label': recording_status_label,
+        'recording_badge_label': recording_badge_label,
+        'recording_device_label': recording_device_label,
+        'recording_timer_label': recording_timer_label,
+        'recording_folder_label': recording_folder_label,
+        'record_button': record_button,
+        'stop_record_button': stop_record_button,
+        'queue_recordings_button': queue_recordings_button,
+        'choose_recording_folder_button': choose_recording_folder_button,
+        'open_recording_folder_button': open_recording_folder_button,
+        'recording_device_combo': recording_device_combo,
+        'recording_channel_combo': recording_channel_combo,
+        'refresh_recording_inputs_button': refresh_recording_inputs_button,
+        'recording_gain_scale': gain_scale,
+        'recording_visual_canvas': recording_visual_canvas,
+    }
+
+
 def create_history_section(parent, app, theme, widgets):
     """処理履歴セクションの作成"""
     card = widgets.create_card_frame(parent)
@@ -759,13 +1681,16 @@ def create_history_section(parent, app, theme, widgets):
     )
     refresh_btn.pack(side=tk.RIGHT)
 
-    tk.Label(
+    history_desc = tk.Label(
         card,
         text="出力済みテキストの一覧です。ダブルクリックで開けます。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface']
-    ).pack(anchor='w', padx=CARD_PADDING, pady=(0, 10))
+        bg=theme.colors['surface'],
+        anchor='w'
+    )
+    history_desc.pack(anchor='w', fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    _bind_dynamic_wraplength(history_desc, CARD_PADDING)
 
     tree_shell = tk.Frame(
         card,
@@ -792,9 +1717,9 @@ def create_history_section(parent, app, theme, widgets):
     history_tree.heading('date', text='日時')
     history_tree.heading('size', text='サイズ')
 
-    history_tree.column('filename', width=200)
-    history_tree.column('date', width=150)
-    history_tree.column('size', width=80)
+    history_tree.column('filename', width=200, minwidth=120, stretch=True)
+    history_tree.column('date', width=150, minwidth=100, stretch=False)
+    history_tree.column('size', width=80, minwidth=60, stretch=False)
 
     # 交互行色タグ
     history_tree.tag_configure('row_even', background=theme.colors['surface'])
@@ -866,13 +1791,16 @@ def create_usage_section(parent, app, theme, widgets):
     )
     refresh_btn.pack(side=tk.RIGHT)
 
-    tk.Label(
+    usage_desc = tk.Label(
         card,
         text="トークン数と料金は概算値です。ローカル Whisper はここには加算されません。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface']
-    ).pack(anchor='w', padx=CARD_PADDING, pady=(0, 10))
+        bg=theme.colors['surface'],
+        anchor='w'
+    )
+    usage_desc.pack(anchor='w', fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    _bind_dynamic_wraplength(usage_desc, CARD_PADDING)
 
     stats_grid = tk.Frame(card, bg=theme.colors['surface'])
     stats_grid.pack(fill=tk.BOTH, expand=True, padx=CARD_PADDING, pady=(0, CARD_PADDING))
@@ -912,13 +1840,16 @@ def create_log_section(parent, app, theme, widgets):
         header_frame, "LIVE", tone='info'
     ).pack(side=tk.RIGHT)
 
-    tk.Label(
+    log_desc = tk.Label(
         card,
         text="処理経過、使用モデル、エラー詳細をここに表示します。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface']
-    ).pack(anchor='w', padx=CARD_PADDING, pady=(0, 10))
+        bg=theme.colors['surface'],
+        anchor='w'
+    )
+    log_desc.pack(anchor='w', fill=tk.X, padx=CARD_PADDING, pady=(0, 10))
+    _bind_dynamic_wraplength(log_desc, CARD_PADDING)
 
     log_shell = tk.Frame(
         card,
@@ -968,7 +1899,7 @@ def setup_drag_drop(drop_area, drop_label, app):
         print(f"ドラッグ&ドロップの設定中にエラーが発生しました: {str(e)}")
 
 
-def collect_ui_elements(api_section, file_section, usage_section, history_section, log_section):
+def collect_ui_elements(api_section, file_section, recording_section, usage_section, history_section, log_section):
     """UI要素を収集して辞書として返す"""
     return {
         'api_entry': api_section.api_entry,
@@ -986,6 +1917,21 @@ def collect_ui_elements(api_section, file_section, usage_section, history_sectio
         'whisper_model_combo': file_section.whisper_model_combo,
         'save_to_output_var': file_section.save_to_output_var,
         'save_to_source_var': file_section.save_to_source_var,
+        'recording_status_label': recording_section.recording_status_label,
+        'recording_badge_label': recording_section.recording_badge_label,
+        'recording_device_label': recording_section.recording_device_label,
+        'recording_timer_label': recording_section.recording_timer_label,
+        'recording_folder_label': recording_section.recording_folder_label,
+        'record_button': recording_section.record_button,
+        'stop_record_button': recording_section.stop_record_button,
+        'queue_recordings_button': recording_section.queue_recordings_button,
+        'choose_recording_folder_button': recording_section.choose_recording_folder_button,
+        'open_recording_folder_button': recording_section.open_recording_folder_button,
+        'recording_device_combo': recording_section.recording_device_combo,
+        'recording_channel_combo': recording_section.recording_channel_combo,
+        'refresh_recording_inputs_button': recording_section.refresh_recording_inputs_button,
+        'recording_gain_scale': getattr(recording_section, 'recording_gain_scale', None),
+        'recording_visual_canvas': recording_section.recording_visual_canvas,
         'queue_frame': file_section.queue_frame,
         'queue_listbox': file_section.queue_listbox,
         'queue_count_label': file_section.queue_count_label,

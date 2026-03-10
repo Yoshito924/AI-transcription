@@ -78,13 +78,13 @@ class ModernTheme:
         self.fonts = self._get_system_fonts()
 
         self.sizes = {
-            'padding_small': 8,
-            'padding_medium': 16,
-            'padding_large': 24,
+            'padding_small': 6,
+            'padding_medium': 12,
+            'padding_large': 18,
             'border_radius': 6,
-            'button_height': 36,
-            'input_height': 40,
-            'header_height': 60,
+            'button_height': 32,
+            'input_height': 36,
+            'header_height': 52,
             'sidebar_width': 300,
         }
 
@@ -100,44 +100,44 @@ class ModernTheme:
 
         if system == "Windows":
             return {
-                'default': ('Segoe UI', 10),
-                'app_title': ('Segoe UI Semibold', 20),
-                'heading': ('Segoe UI Semibold', 15),
-                'subheading': ('Segoe UI Semibold', 11),
-                'body': ('Segoe UI', 10),
-                'body_bold': ('Segoe UI Semibold', 10),
-                'caption': ('Segoe UI', 9),
-                'caption_bold': ('Segoe UI Semibold', 9),
-                'button': ('Segoe UI Semibold', 10),
-                'button_large': ('Segoe UI Semibold', 13),
+                'default': ('Segoe UI', 9),
+                'app_title': ('Segoe UI Semibold', 18),
+                'heading': ('Segoe UI Semibold', 13),
+                'subheading': ('Segoe UI Semibold', 10),
+                'body': ('Segoe UI', 9),
+                'body_bold': ('Segoe UI Semibold', 9),
+                'caption': ('Segoe UI', 8),
+                'caption_bold': ('Segoe UI Semibold', 8),
+                'button': ('Segoe UI Semibold', 9),
+                'button_large': ('Segoe UI Semibold', 11),
                 'monospace': ('Consolas', 9),
             }
         elif system == "Darwin":
             return {
-                'default': ('SF Pro Display', 10),
-                'app_title': ('SF Pro Display', 20, 'bold'),
-                'heading': ('SF Pro Display', 15, 'bold'),
-                'subheading': ('SF Pro Display', 11, 'bold'),
-                'body': ('SF Pro Display', 10),
-                'body_bold': ('SF Pro Display', 10, 'bold'),
-                'caption': ('SF Pro Display', 9),
-                'caption_bold': ('SF Pro Display', 9, 'bold'),
-                'button': ('SF Pro Display', 10, 'bold'),
-                'button_large': ('SF Pro Display', 13, 'bold'),
+                'default': ('SF Pro Display', 9),
+                'app_title': ('SF Pro Display', 18, 'bold'),
+                'heading': ('SF Pro Display', 13, 'bold'),
+                'subheading': ('SF Pro Display', 10, 'bold'),
+                'body': ('SF Pro Display', 9),
+                'body_bold': ('SF Pro Display', 9, 'bold'),
+                'caption': ('SF Pro Display', 8),
+                'caption_bold': ('SF Pro Display', 8, 'bold'),
+                'button': ('SF Pro Display', 9, 'bold'),
+                'button_large': ('SF Pro Display', 11, 'bold'),
                 'monospace': ('SF Mono', 9),
             }
         else:
             return {
-                'default': ('Ubuntu', 10),
-                'app_title': ('Ubuntu', 20, 'bold'),
-                'heading': ('Ubuntu', 15, 'bold'),
-                'subheading': ('Ubuntu', 11, 'bold'),
-                'body': ('Ubuntu', 10),
-                'body_bold': ('Ubuntu', 10, 'bold'),
-                'caption': ('Ubuntu', 9),
-                'caption_bold': ('Ubuntu', 9, 'bold'),
-                'button': ('Ubuntu', 10, 'bold'),
-                'button_large': ('Ubuntu', 13, 'bold'),
+                'default': ('Ubuntu', 9),
+                'app_title': ('Ubuntu', 18, 'bold'),
+                'heading': ('Ubuntu', 13, 'bold'),
+                'subheading': ('Ubuntu', 10, 'bold'),
+                'body': ('Ubuntu', 9),
+                'body_bold': ('Ubuntu', 9, 'bold'),
+                'caption': ('Ubuntu', 8),
+                'caption_bold': ('Ubuntu', 8, 'bold'),
+                'button': ('Ubuntu', 9, 'bold'),
+                'button_large': ('Ubuntu', 11, 'bold'),
                 'monospace': ('Ubuntu Mono', 9),
             }
 
@@ -185,7 +185,7 @@ class ModernTheme:
                        focuscolor='none',
                        borderwidth=0,
                        relief='flat',
-                       padding=(14, 9))
+                       padding=(12, 7))
 
         style.map('Primary.TButton',
                  background=[('active', self.colors['primary_light']),
@@ -199,7 +199,7 @@ class ModernTheme:
                        focuscolor='none',
                        borderwidth=0,
                        relief='flat',
-                       padding=(24, 14))
+                       padding=(20, 10))
 
         style.map('Large.Primary.TButton',
                  background=[('active', self.colors['primary_light']),
@@ -212,7 +212,7 @@ class ModernTheme:
                        focuscolor='none',
                        borderwidth=1,
                        relief='solid',
-                       padding=(12, 8))
+                       padding=(10, 6))
 
         style.map('Secondary.TButton',
                  background=[('active', self.colors['button_hover']),
@@ -245,7 +245,7 @@ class ModernTheme:
                        borderwidth=1,
                        relief='solid',
                        insertcolor=self.colors['primary'],
-                       padding=(10, 8))
+                       padding=(8, 6))
 
         style.map('Modern.TEntry',
                  bordercolor=[('!active', self.colors['outline']),
@@ -288,7 +288,7 @@ class ModernTheme:
                        fieldbackground=self.colors['surface'],
                        borderwidth=1,
                        relief='solid',
-                       rowheight=30)
+                       rowheight=26)
 
         style.configure('Modern.Treeview.Heading',
                        background=self.colors['surface_variant'],
@@ -318,7 +318,7 @@ class ModernTheme:
                        fieldbackground=self.colors['surface'],
                        borderwidth=1,
                        relief='solid',
-                       padding=(8, 6))
+                       padding=(7, 5))
 
         style.map('Modern.TCombobox',
                  bordercolor=[('!active', self.colors['outline']),
@@ -336,7 +336,7 @@ class ModernTheme:
                        background=self.colors['surface_variant'],
                        foreground=self.colors['text_secondary'],
                        font=self.fonts['body_bold'],
-                       padding=[18, 10],
+                       padding=[14, 8],
                        borderwidth=0,
                        relief='flat')
 
@@ -345,8 +345,8 @@ class ModernTheme:
                            ('active', self.colors['button_hover'])],
                  foreground=[('selected', self.colors['text_primary']),
                            ('active', self.colors['text_primary'])],
-                 padding=[('selected', [18, 10]),
-                         ('!selected', [18, 10])])
+                 padding=[('selected', [14, 8]),
+                         ('!selected', [14, 8])])
 
     def _configure_toggle_styles(self, style):
         """ラジオボタンとチェックボックスの設定"""
@@ -355,7 +355,7 @@ class ModernTheme:
                        foreground=self.colors['text_primary'],
                        font=self.fonts['caption_bold'],
                        focuscolor='none',
-                       padding=(4, 4))
+                       padding=(2, 2))
 
         style.map('Modern.TRadiobutton',
                  background=[('active', self.colors['surface'])],
@@ -367,7 +367,7 @@ class ModernTheme:
                        foreground=self.colors['text_primary'],
                        font=self.fonts['caption'],
                        focuscolor='none',
-                       padding=(2, 2))
+                       padding=(1, 1))
 
         style.map('Modern.TCheckbutton',
                  background=[('active', self.colors['surface'])],
@@ -424,7 +424,7 @@ class ModernWidgets:
         stripe = tk.Frame(header_frame,
                          bg=self.theme.colors['primary'],
                          width=ACCENT_STRIPE_WIDTH)
-        stripe.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        stripe.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
         stripe.pack_propagate(False)
 
         label = tk.Label(header_frame,
@@ -453,8 +453,8 @@ class ModernWidgets:
             bg=bg or default_bg,
             fg=fg or default_fg,
             font=self.theme.fonts['caption_bold'],
-            padx=10,
-            pady=4,
+            padx=8,
+            pady=3,
             **kwargs
         )
 
@@ -480,7 +480,7 @@ class ModernWidgets:
         accent_bar.pack(fill=tk.X)
 
         body = tk.Frame(tile, bg=self.theme.colors['surface_variant'])
-        body.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        body.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
         title_label = tk.Label(
             body,
@@ -503,71 +503,249 @@ class ModernWidgets:
         tile.value_label = value_label
         return tile
 
-    def create_drag_drop_canvas(self, parent, text="ここをクリックして音声/動画ファイルを選択\nまたはファイルをドラッグ&ドロップ", height=110):
-        """Canvas使用の破線ボーダー付きドラッグ&ドロップエリアを作成"""
-        container = tk.Frame(parent, bg=self.theme.colors['surface'])
+    def create_drag_drop_canvas(
+        self,
+        parent,
+        text=None,
+        height=128,
+        title=None,
+        subtitle=None,
+        formats_text='MP3 / WAV / MP4 / MOV / M4A / FLAC'
+    ):
+        """Canvas使用のドラッグ&ドロップエリアを作成"""
+        default_title = "クリックしてファイルを選択"
+        default_subtitle = "またはこの欄にドラッグ&ドロップ"
+        normalized_text = (text or "").strip()
 
-        canvas = tk.Canvas(container,
-                          bg=self.theme.colors['drag_drop_bg'],
-                          highlightthickness=0,
-                          height=height,
-                          cursor='hand2')
+        if title is None and subtitle is None and normalized_text:
+            if any(token in normalized_text for token in ('ドラッグ', '/', '\n')):
+                title = default_title
+                subtitle = default_subtitle
+            else:
+                title = normalized_text
+                subtitle = default_subtitle
+        else:
+            title = title or default_title
+            subtitle = subtitle or default_subtitle
+
+        container = tk.Frame(parent, bg=self.theme.colors['surface_variant'])
+
+        canvas = tk.Canvas(
+            container,
+            bg=self.theme.colors['drag_drop_bg'],
+            highlightthickness=0,
+            height=height,
+            cursor='hand2'
+        )
         canvas.pack(fill=tk.X, expand=True)
+        canvas._hovering = False
+
+        def _draw_badge(x1, y1, x2, y2, fill, text_color, badge_text):
+            canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline='')
+            canvas.create_text(
+                (x1 + x2) / 2,
+                (y1 + y2) / 2,
+                text=badge_text,
+                font=self.theme.fonts['caption_bold'],
+                fill=text_color
+            )
 
         def _draw(event=None):
-            canvas.delete('all')
             w = canvas.winfo_width()
-            h = canvas.winfo_height()
-            if w < 2 or h < 2:
+            if w < 2:
                 return
 
-            pad = 6
+            compact = w < 620
+            stacked = w < 470
+            min_height = max(height, 168 if stacked else 148 if compact else height)
+            current_height = int(canvas.cget('height'))
+            if current_height < min_height:
+                canvas.configure(height=min_height)
+                return
+
+            canvas.delete('all')
+            h = canvas.winfo_height()
+            if h < 2:
+                return
+
+            hovered = canvas._hovering
+            canvas.configure(
+                bg=self.theme.colors['drag_drop_hover'] if hovered else self.theme.colors['drag_drop_bg']
+            )
+
+            panel_pad = 5
+            panel_x1 = panel_pad
+            panel_y1 = panel_pad
+            panel_x2 = w - panel_pad
+            panel_y2 = h - panel_pad
+            accent = self.theme.colors['primary_light'] if hovered else self.theme.colors['primary']
+            button_fill = self.theme.colors['primary_light'] if hovered else self.theme.colors['primary']
+            icon_fill = self.theme.colors['surface_emphasis'] if hovered else self.theme.colors['surface_variant']
+
             canvas.create_rectangle(
-                pad, pad, w - pad, h - pad,
-                outline=self.theme.colors['drag_drop_border'],
-                dash=(8, 4),
-                width=2
+                panel_x1,
+                panel_y1,
+                panel_x2,
+                panel_y2,
+                fill=self.theme.colors['surface'],
+                outline=self.theme.colors['card_border'],
+                width=1
+            )
+            canvas.create_rectangle(
+                panel_x1,
+                panel_y1,
+                panel_x2,
+                panel_y1 + 4,
+                fill=accent,
+                outline=''
             )
 
-            cy = h // 2 - 20
-            canvas.create_text(
-                w // 2, cy - 18,
-                text='DROP ZONE',
-                font=self.theme.fonts['caption_bold'],
-                fill=self.theme.colors['secondary']
+            left = panel_x1 + 16
+            right = panel_x2 - 16
+            top = panel_y1 + 12
+            badge_h = 20
+
+            _draw_badge(
+                left,
+                top,
+                left + 80,
+                top + badge_h,
+                self.theme.colors['badge_bg'],
+                self.theme.colors['badge_text'],
+                '音声 / 動画'
             )
 
+            if not compact:
+                _draw_badge(
+                    right - 70,
+                    top,
+                    right,
+                    top + badge_h,
+                    self.theme.colors['warning_soft'],
+                    self.theme.colors['warning'],
+                    '複数選択'
+                )
+
+            icon_size = 42
+            content_top = top + 34
+
+            if stacked:
+                icon_x1 = left
+                icon_y1 = content_top
+                icon_x2 = icon_x1 + icon_size
+                icon_y2 = icon_y1 + icon_size
+            else:
+                icon_x1 = left
+                icon_y1 = content_top + 2
+                icon_x2 = icon_x1 + icon_size
+                icon_y2 = icon_y1 + icon_size
+
+            canvas.create_oval(
+                icon_x1,
+                icon_y1,
+                icon_x2,
+                icon_y2,
+                fill=icon_fill,
+                outline=self.theme.colors['outline'],
+                width=1
+            )
             canvas.create_text(
-                w // 2, cy,
+                (icon_x1 + icon_x2) / 2,
+                (icon_y1 + icon_y2) / 2 - 1,
                 text='\u2191',
-                font=(self.theme.fonts['heading'][0], 20),
-                fill=self.theme.colors['primary']
+                font=(self.theme.fonts['heading'][0], 16, 'bold'),
+                fill=accent
             )
 
-            canvas.create_text(
-                w // 2, cy + 34,
-                text=text,
-                font=self.theme.fonts['body_bold'],
-                fill=self.theme.colors['text_primary'],
-                justify='center'
-            )
+            if stacked:
+                text_x = left
+                title_y = icon_y2 + 12
+                text_width = max(180, right - left)
+            else:
+                text_x = icon_x2 + 16
+                title_y = content_top
+                text_width = max(220, right - text_x)
 
-            canvas.create_text(
-                w // 2, cy + 56,
-                text='MP3 / WAV / MP4 / MOV / M4A / FLAC',
+            title_id = canvas.create_text(
+                text_x,
+                title_y,
+                text=title,
+                anchor='nw',
+                width=text_width,
+                font=self.theme.fonts['subheading'],
+                fill=self.theme.colors['text_primary']
+            )
+            title_bbox = canvas.bbox(title_id)
+            subtitle_y = title_bbox[3] + 8 if title_bbox else title_y + 24
+
+            subtitle_id = canvas.create_text(
+                text_x,
+                subtitle_y,
+                text=subtitle,
+                anchor='nw',
+                width=text_width,
                 font=self.theme.fonts['caption'],
-                fill=self.theme.colors['text_secondary'],
-                justify='center'
+                fill=self.theme.colors['text_secondary']
             )
+            subtitle_bbox = canvas.bbox(subtitle_id)
+
+            text_bottom = subtitle_bbox[3] if subtitle_bbox else subtitle_y + 18
+            content_bottom = max(icon_y2, text_bottom)
+
+            button_y1 = content_bottom + 16
+            button_y2 = button_y1 + 30
+            if stacked:
+                button_x1 = left
+                button_x2 = right
+            elif compact:
+                button_x1 = text_x
+                button_x2 = min(text_x + 160, right)
+            else:
+                button_x1 = text_x
+                button_x2 = min(text_x + 150, right)
+
+            canvas.create_rectangle(
+                button_x1,
+                button_y1,
+                button_x2,
+                button_y2,
+                fill=button_fill,
+                outline=button_fill,
+                width=1
+            )
+            canvas.create_text(
+                (button_x1 + button_x2) / 2,
+                (button_y1 + button_y2) / 2,
+                text='ファイルを選ぶ',
+                font=self.theme.fonts['caption_bold'],
+                fill=self.theme.colors['text_on_primary']
+            )
+
+            formats_y = button_y2 + 14
+            formats_id = canvas.create_text(
+                left,
+                formats_y,
+                text=f'対応形式  {formats_text}',
+                anchor='nw',
+                width=max(180, right - left),
+                font=self.theme.fonts['caption'],
+                fill=self.theme.colors['text_secondary']
+            )
+
+            formats_bbox = canvas.bbox(formats_id)
+            required_height = (formats_bbox[3] + 16 + panel_pad) if formats_bbox else min_height
+            if required_height > h:
+                canvas.configure(height=required_height)
+                return
 
         canvas.bind('<Configure>', _draw)
 
         def on_enter(event):
-            canvas.configure(bg=self.theme.colors['drag_drop_hover'])
+            canvas._hovering = True
             _draw()
 
         def on_leave(event):
-            canvas.configure(bg=self.theme.colors['drag_drop_bg'])
+            canvas._hovering = False
             _draw()
 
         canvas.bind('<Enter>', on_enter)
@@ -622,8 +800,8 @@ class ModernWidgets:
                        activeforeground=self.theme.colors['text_on_primary'],
                        relief='flat',
                        bd=0,
-                       padx=28,
-                       pady=14,
+                       padx=20,
+                       pady=10,
                        cursor='hand2',
                        command=command)
 
