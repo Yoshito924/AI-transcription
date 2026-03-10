@@ -7,10 +7,12 @@ import json
 from .constants import (
     DEFAULT_WINDOW_WIDTH, 
     DEFAULT_WINDOW_HEIGHT, 
+    DEFAULT_RECORDING_GAIN_PERCENT,
     CONFIG_DIR, 
     DATA_DIR, 
     CONFIG_FILE, 
-    PROMPT_FILE
+    PROMPT_FILE,
+    RECORDINGS_DIR
 )
 from .exceptions import ConfigurationError
 
@@ -28,12 +30,18 @@ class Config:
             "window_height": DEFAULT_WINDOW_HEIGHT,
             "window_x": None,
             "window_y": None,
+            "last_open_tab": "file",
             "api_key": "",  # Gemini API用
             "openai_api_key": "",  # OpenAI API用（Whisper API等）
             "transcription_engine": "gemini",  # "gemini" または "whisper" または "whisper-api"
             "whisper_model": "base",  # "tiny", "base", "small", "medium", "large", "turbo"
             "save_to_output_dir": True,
-            "save_to_source_dir": False
+            "save_to_source_dir": False,
+            "recording_dir": RECORDINGS_DIR,
+            "auto_queue_recordings": True,
+            "recording_gain_percent": DEFAULT_RECORDING_GAIN_PERCENT,
+            "recording_input_device": None,
+            "recording_input_channels": [1]
         }
         
         # デフォルト値で埋める

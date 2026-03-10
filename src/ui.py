@@ -170,10 +170,12 @@ def setup_ui(app):
     # タブ（文字起こし / 録音 / API設定・使用量）
     notebook = ttk.Notebook(upper_frame, style='Modern.TNotebook')
     notebook.pack(fill=tk.BOTH, expand=True, pady=(0, SECTION_SPACING))
+    tab_keys = []
 
     # タブ1: 文字起こし（スクロール可能）
     file_tab = tk.Frame(notebook, bg=theme.colors['surface'])
     notebook.add(file_tab, text='文字起こし')
+    tab_keys.append('file')
     file_scroll_outer, file_scroll_inner = _create_scrollable_frame(
         file_tab, theme.colors['surface']
     )
@@ -184,6 +186,7 @@ def setup_ui(app):
     # タブ2: 録音（スクロール可能）
     recording_tab = tk.Frame(notebook, bg=theme.colors['surface'])
     notebook.add(recording_tab, text='録音')
+    tab_keys.append('recording')
     recording_scroll_outer, recording_scroll_inner = _create_scrollable_frame(
         recording_tab, theme.colors['surface']
     )
@@ -194,6 +197,7 @@ def setup_ui(app):
     # タブ3: API設定・使用量（スクロール可能 + レスポンシブ横並び/縦積み切替）
     settings_tab = tk.Frame(notebook, bg=theme.colors['surface'])
     notebook.add(settings_tab, text='接続・使用量')
+    tab_keys.append('settings')
     settings_scroll_outer, settings_scroll_inner = _create_scrollable_frame(
         settings_tab, theme.colors['surface']
     )
@@ -226,6 +230,21 @@ def setup_ui(app):
             usage_section.pack(fill=tk.X, pady=(8, 0))
 
     settings_content.bind('<Configure>', _relayout_settings)
+
+    def _save_current_tab(event=None):
+        try:
+            current_index = notebook.index(notebook.select())
+        except tk.TclError:
+            return
+        if 0 <= current_index < len(tab_keys):
+            app.config.set("last_open_tab", tab_keys[current_index])
+            app.config.save()
+
+    saved_tab_key = app.config.get("last_open_tab", "file")
+    if saved_tab_key in tab_keys:
+        notebook.select(tab_keys.index(saved_tab_key))
+
+    notebook.bind('<<NotebookTabChanged>>', _save_current_tab)
 
     # アコーディオンのトグル処理
     def _toggle_accordion(event=None):
@@ -1158,6 +1177,42 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     controls.bind('<Configure>', _relayout_action_controls)
     controls.after_idle(_relayout_action_controls)
 
+    folder_actions = tk.Frame(action_inner, bg=theme.colors['hero_surface'])
+    folder_actions.pack(fill=tk.X, pady=(8, 0))
+    folder_actions.grid_columnconfigure(0, weight=1)
+    folder_actions.grid_columnconfigure(1, weight=1)
+
+    choose_recording_folder_button = widgets.create_icon_button(
+        folder_actions, "保存先変更", ICONS['folder'], 'Secondary',
+        command=app.choose_recording_folder
+    )
+    open_recording_folder_button = widgets.create_icon_button(
+        folder_actions, "録音フォルダを開く", ICONS['open'], 'Secondary',
+        command=app.open_recording_folder
+    )
+
+    folder_action_layout_state = {'wide': None}
+
+    def _relayout_folder_actions(event=None):
+        width = folder_actions.winfo_width()
+        want_wide = width >= 540
+        if folder_action_layout_state['wide'] == want_wide:
+            return
+        folder_action_layout_state['wide'] = want_wide
+
+        choose_recording_folder_button.grid_forget()
+        open_recording_folder_button.grid_forget()
+
+        if want_wide:
+            choose_recording_folder_button.grid(row=0, column=0, sticky='ew', padx=(0, 6))
+            open_recording_folder_button.grid(row=0, column=1, sticky='ew', padx=(6, 0))
+        else:
+            choose_recording_folder_button.grid(row=0, column=0, columnspan=2, sticky='ew')
+            open_recording_folder_button.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(8, 0))
+
+    folder_actions.bind('<Configure>', _relayout_folder_actions)
+    folder_actions.after_idle(_relayout_folder_actions)
+
     main_strip = tk.Frame(inner, bg=theme.colors['hero_bg'])
     main_strip.pack(fill=tk.X)
 
@@ -1630,21 +1685,6 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     )
     gain_note.pack(fill=tk.X)
     _bind_dynamic_wraplength(gain_note, 4)
-
-    path_controls = tk.Frame(folder_inner, bg=theme.colors['surface'])
-    path_controls.pack(fill=tk.X, pady=(8, 0))
-
-    choose_recording_folder_button = widgets.create_icon_button(
-        path_controls, "保存先変更", ICONS['folder'], 'Secondary',
-        command=app.choose_recording_folder
-    )
-    choose_recording_folder_button.pack(side=tk.LEFT, padx=(0, 6))
-
-    open_recording_folder_button = widgets.create_icon_button(
-        path_controls, "録音フォルダを開く", ICONS['open'], 'Secondary',
-        command=app.open_recording_folder
-    )
-    open_recording_folder_button.pack(side=tk.LEFT)
 
     return {
         'recording_status_label': recording_status_label,
