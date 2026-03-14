@@ -603,10 +603,10 @@ class TranscriptionApp:
             self.root.update_idletasks()
             
             try:
-                is_available, message = self.processor.whisper_service.test_whisper_availability()
+                is_available, message = self.processor.test_whisper_availability()
                 
                 if is_available:
-                    device_info = self.processor.whisper_service.get_device_info()
+                    device_info = self.processor.get_whisper_device_info()
                     if 'model_label' in self.ui_elements:
                         self.ui_elements['model_label'].config(text=f"Whisper ({device_info})")
                     

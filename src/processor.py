@@ -7,10 +7,12 @@ import json
 import shutil
 import datetime
 import tempfile
+import time
 import google.generativeai as genai
 
 from .constants import (
     MAX_AUDIO_SIZE_MB,
+    WHISPER_API_MAX_AUDIO_SIZE_MB,
     MAX_AUDIO_DURATION_SEC,
     AUDIO_MIME_TYPE,
     OUTPUT_DIR,
@@ -27,7 +29,7 @@ from .exceptions import (
     FileProcessingError
 )
 from .audio_processor import AudioProcessor
-from .api_utils import ApiUtils
+from .api_utils import ApiUtils, GENAI_SDK_LOCK
 from .whisper_service import WhisperService
 from .whisper_api_service import WhisperApiService
 from .text_merger import EnhancedTextMerger
@@ -47,8 +49,11 @@ class FileProcessor:
         self.output_dir = output_dir
         self.audio_processor = AudioProcessor()
         self.api_utils = ApiUtils()
-        self.whisper_service = WhisperService()
+        self.whisper_service = None
+        self.whisper_init_error = None
         self.whisper_api_service = None  # APIキーが設定されたときに初期化
+        self.last_transcription_model_name = None
+        self.last_warning = None
         self.text_merger = EnhancedTextMerger(
             overlap_threshold=SEGMENT_MERGE_CONFIG['overlap_threshold'],
             min_overlap_words=SEGMENT_MERGE_CONFIG['min_overlap_words'],
@@ -67,6 +72,30 @@ class FileProcessor:
     def test_api_connection(self, api_key):
         """GeminiAPIの接続テスト"""
         return self.api_utils.test_api_connection(api_key)
+
+    def get_whisper_service(self):
+        """Whisperサービスを必要時に初期化して返す"""
+        if self.whisper_service is not None:
+            return self.whisper_service
+
+        try:
+            self.whisper_service = WhisperService()
+            self.whisper_init_error = None
+            return self.whisper_service
+        except AudioProcessingError as e:
+            self.whisper_init_error = str(e)
+            logger.warning(f"Whisperサービスを初期化できません: {self.whisper_init_error}")
+            raise
+
+    def test_whisper_availability(self):
+        """Whisper利用可能性を確認する"""
+        service = self.get_whisper_service()
+        return service.test_whisper_availability()
+
+    def get_whisper_device_info(self):
+        """Whisperデバイス情報を返す"""
+        service = self.get_whisper_service()
+        return service.get_device_info()
 
     def _check_response_safety(self, response, segment_num=None):
         """Gemini APIレスポンスの安全性チェック
@@ -160,6 +189,8 @@ class FileProcessor:
                     progress_value_callback=None, gemini_api_key=None):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
+        self.last_transcription_model_name = None
+        self.last_warning = None
 
         def update_status(message):
             logger.info(message)
@@ -173,7 +204,7 @@ class FileProcessor:
         try:
             # 音声ファイルの準備（キャッシュ対応）
             update_progress(2)
-            audio_path, cached_segments, from_cache = self._prepare_audio_file(input_file, update_status)
+            audio_path, cached_segments, from_cache = self._prepare_audio_file(input_file, update_status, engine=engine)
             update_progress(10)
 
             # 文字起こし実行（エンジンに応じて分岐）
@@ -181,17 +212,20 @@ class FileProcessor:
             if engine == 'whisper':
                 transcription = self._perform_whisper_transcription(
                     audio_path, update_status, whisper_model, cached_segments,
-                    progress_callback=update_progress
+                    progress_callback=update_progress,
+                    cleanup_segments=not from_cache
                 )
             elif engine == 'whisper-api':
                 transcription = self._perform_whisper_api_transcription(
                     audio_path, api_key, update_status, cached_segments,
-                    progress_callback=update_progress
+                    progress_callback=update_progress,
+                    cleanup_segments=not from_cache
                 )
             else:  # gemini
                 transcription = self._perform_transcription(
                     audio_path, api_key, update_status, preferred_model, cached_segments,
-                    progress_callback=update_progress
+                    progress_callback=update_progress,
+                    cleanup_segments=not from_cache
                 )
             update_progress(85)
 
@@ -226,7 +260,7 @@ class FileProcessor:
             update_status(f"処理エラー: {str(e)}")
             raise FileProcessingError(f"ファイル処理に失敗しました: {str(e)}")
     
-    def _prepare_audio_file(self, input_file, update_status):
+    def _prepare_audio_file(self, input_file, update_status, engine='gemini'):
         """音声ファイルの準備（変換・圧縮・分割）
 
         キャッシュがあれば再利用、なければ処理してキャッシュに保存
@@ -258,24 +292,21 @@ class FileProcessor:
         update_status("音声ファイルを変換中...")
         audio_path = self.audio_processor.convert_audio(input_file)
 
-        # 長時間音声や大容量ファイルは分割が必要かチェック
+        # エンジンごとに、前処理段階で分割が必要かを判定
         file_size_mb = get_file_size_mb(audio_path)
-        needs_split = (
-            file_size_mb > MAX_AUDIO_SIZE_MB or
-            (audio_duration_sec and audio_duration_sec > MAX_AUDIO_DURATION_SEC)
-        )
+        is_too_long = bool(audio_duration_sec and audio_duration_sec > MAX_AUDIO_DURATION_SEC)
+        needs_split = False
+
+        if engine == 'whisper-api':
+            needs_split = file_size_mb > WHISPER_API_MAX_AUDIO_SIZE_MB or is_too_long
+        elif engine == 'gemini':
+            needs_split = is_too_long
+        elif engine == 'whisper':
+            needs_split = is_too_long
 
         segment_files = None
 
         if needs_split:
-            if file_size_mb > MAX_AUDIO_SIZE_MB:
-                update_status(f"ファイルサイズが大きいため圧縮を実行します")
-                audio_path = self.audio_processor.compress_audio(
-                    audio_path, MAX_AUDIO_SIZE_MB, update_status
-                )
-                if not audio_path:
-                    raise AudioProcessingError("音声ファイルの圧縮に失敗しました")
-
             # 分割処理
             update_status("音声ファイルを分割中...")
             segment_files = self.audio_processor.split_audio(audio_path, callback=update_status)
@@ -293,25 +324,110 @@ class FileProcessor:
                 logger.warning(f"キャッシュ保存エラー: {str(e)}")
 
         return audio_path, segment_files, False
-    
-    def _perform_transcription(self, audio_path, api_key, update_status, preferred_model=None, cached_segments=None, progress_callback=None):
-        """文字起こしを実行"""
-        # キャッシュされたセグメントがある場合は、それを使用
-        if cached_segments:
-            logger.info(f"キャッシュされたセグメントを使用: {len(cached_segments)}個")
-            return self._perform_segmented_transcription(
-                audio_path, api_key, update_status, preferred_model, cached_segments,
-                progress_callback=progress_callback
-            )
 
+    def _build_segment_error_summary(self, total_segments, segment_errors, successful_segments):
+        """セグメントエラーの要約を構築する"""
+        return {
+            'summary': {
+                'total_segments': total_segments,
+                'failed_segments': len(segment_errors),
+                'success_segments': successful_segments,
+                'success_rate': f"{(successful_segments / total_segments * 100):.1f}%" if total_segments else "0.0%"
+            },
+            'errors': segment_errors,
+            'recommendations': [
+                "失敗したセグメントはそのまま結果に混ぜず、成功分だけを残します。",
+                "エラーの詳細はセグメント別ログまたは要約JSONを確認してください。",
+                "エラーが続く場合は、音声品質・APIキー・モデル設定を確認してください。"
+            ]
+        }
+
+    def _save_segment_error_summary(self, audio_path, error_summary):
+        """セグメントエラー要約を保存する"""
+        try:
+            audio_dir = os.path.dirname(audio_path) if audio_path else OUTPUT_DIR
+            if audio_dir and os.path.exists(audio_dir):
+                error_summary_path = os.path.join(
+                    audio_dir,
+                    f"transcription_errors_{get_timestamp()}.json"
+                )
+                with open(error_summary_path, 'w', encoding='utf-8') as f:
+                    json.dump(error_summary, f, ensure_ascii=False, indent=2)
+                logger.info(f"エラーサマリーを保存: {error_summary_path}")
+        except Exception as e:
+            logger.error(f"エラーサマリーの保存に失敗: {str(e)}")
+
+    def _re_raise_segment_failure(self, exception, warning_message):
+        """全セグメント失敗時に元例外の種類を保って再送出する"""
+        root_message = getattr(exception, 'user_message', str(exception))
+        combined_message = f"{warning_message}\n\n原因: {root_message}"
+        error_code = getattr(exception, 'error_code', None) or "ALL_SEGMENTS_FAILED"
+        solution = getattr(exception, 'solution', None) or "詳細はエラーサマリーJSONとログを確認してください。"
+
+        if isinstance(exception, ApiConnectionError):
+            raise ApiConnectionError(str(exception), error_code=error_code, user_message=combined_message, solution=solution) from exception
+        if isinstance(exception, AudioProcessingError):
+            raise AudioProcessingError(str(exception), error_code=error_code, user_message=combined_message, solution=solution) from exception
+        if isinstance(exception, FileProcessingError):
+            raise FileProcessingError(str(exception), error_code=error_code, user_message=combined_message, solution=solution) from exception
+        if isinstance(exception, TranscriptionError):
+            raise TranscriptionError(str(exception), error_code=error_code, user_message=combined_message, solution=solution) from exception
+
+        raise TranscriptionError(
+            str(exception),
+            error_code="ALL_SEGMENTS_FAILED",
+            user_message=combined_message,
+            solution=solution
+        ) from exception
+
+    def _handle_segment_errors(self, audio_path, total_segments, segment_errors, successful_segments,
+                               update_status, fatal_exception=None):
+        """セグメント失敗時の警告またはエラーを処理する"""
+        if not segment_errors:
+            return
+
+        error_summary = self._build_segment_error_summary(total_segments, segment_errors, successful_segments)
+        logger.warning(f"セグメント処理エラーサマリー: {json.dumps(error_summary, ensure_ascii=False)}")
+        self._save_segment_error_summary(audio_path, error_summary)
+
+        warning_message = (
+            "一部のセグメントで文字起こしに失敗しました。\n"
+            f"- 成功: {error_summary['summary']['success_segments']}/{error_summary['summary']['total_segments']}\n"
+            f"- 失敗: {error_summary['summary']['failed_segments']}/{error_summary['summary']['total_segments']}\n"
+            "失敗した区間は出力から除外されています。"
+        )
+
+        if successful_segments > 0:
+            self.last_warning = warning_message
+            update_status(warning_message)
+            return
+
+        if fatal_exception is not None:
+            self._re_raise_segment_failure(fatal_exception, warning_message)
+
+        raise TranscriptionError(
+            "全セグメントの文字起こしに失敗しました",
+            error_code="ALL_SEGMENTS_FAILED",
+            user_message=warning_message,
+            solution="詳細はエラーサマリーJSONとログを確認してください。"
+        )
+
+    def _perform_transcription(self, audio_path, api_key, update_status, preferred_model=None,
+                               cached_segments=None, progress_callback=None, cleanup_segments=True):
+        """文字起こしを実行"""
         # ファイルサイズと長さを再チェック
         file_size_mb = get_file_size_mb(audio_path)
         audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
+        needs_split = bool(audio_duration_sec and audio_duration_sec > MAX_AUDIO_DURATION_SEC)
 
-        needs_split = (
-            file_size_mb > MAX_AUDIO_SIZE_MB or
-            (audio_duration_sec and audio_duration_sec > MAX_AUDIO_DURATION_SEC)
-        )
+        # Gemini は 20MB 超で Files API を使うので、サイズだけでは分割しない
+        if cached_segments and needs_split:
+            logger.info(f"キャッシュされたセグメントを使用: {len(cached_segments)}個")
+            return self._perform_segmented_transcription(
+                audio_path, api_key, update_status, preferred_model, cached_segments,
+                progress_callback=progress_callback,
+                cleanup_segments=cleanup_segments
+            )
 
         if needs_split:
             logger.info(f"ファイル分割処理を実行: サイズ={file_size_mb:.2f}MB, 長さ={audio_duration_sec}s")
@@ -328,14 +444,16 @@ class FileProcessor:
                 progress_callback(80)
             return result
     
-    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='base', cached_segments=None, progress_callback=None):
+    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='base',
+                                       cached_segments=None, progress_callback=None, cleanup_segments=True):
         """Whisperを使用した文字起こしを実行"""
         # キャッシュされたセグメントがある場合は、それを使用
         if cached_segments:
             logger.info(f"キャッシュされたセグメントを使用: {len(cached_segments)}個")
             return self._perform_whisper_segmented_transcription(
                 audio_path, update_status, whisper_model, cached_segments,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                cleanup_segments=cleanup_segments
             )
 
         # ファイルサイズと長さをチェック
@@ -360,21 +478,33 @@ class FileProcessor:
                 progress_callback(80)
             return result
     
-    def _perform_whisper_api_transcription(self, audio_path, api_key, update_status, cached_segments=None, progress_callback=None):
+    def _perform_whisper_api_transcription(self, audio_path, api_key, update_status,
+                                           cached_segments=None, progress_callback=None,
+                                           cleanup_segments=True):
         """OpenAI Whisper APIを使用した文字起こしを実行"""
         # Whisper APIサービスの初期化
         if not self.whisper_api_service or self.whisper_api_service.api_key != api_key:
             self.whisper_api_service = WhisperApiService(api_key=api_key)
-        
+
+        if cached_segments:
+            return self._perform_whisper_api_segmented_transcription(
+                audio_path,
+                update_status,
+                cached_segments=cached_segments,
+                progress_callback=progress_callback,
+                cleanup_segments=cleanup_segments
+            )
+
         # ファイルサイズをチェック（Whisper APIは25MB以下）
         file_size_mb = get_file_size_mb(audio_path)
         audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
-        
-        if file_size_mb > 25:
-            raise AudioProcessingError(
-                f"ファイルサイズが大きすぎます（{file_size_mb:.2f}MB）。"
-                "Whisper APIは25MB以下のファイルをサポートしています。"
-                "ファイルを分割するか、ローカルのWhisperを使用してください。"
+
+        if file_size_mb > WHISPER_API_MAX_AUDIO_SIZE_MB:
+            update_status("Whisper APIの上限を超えるため、分割して処理します...")
+            return self._perform_whisper_api_segmented_transcription(
+                audio_path,
+                update_status,
+                progress_callback=progress_callback
             )
         
         logger.info(f"Whisper API文字起こし開始: サイズ={file_size_mb:.2f}MB, 長さ={format_duration(audio_duration_sec)}")
@@ -402,27 +532,131 @@ class FileProcessor:
             logger.error(f"Whisper API文字起こしエラー: {str(e)}")
             raise TranscriptionError(f"Whisper API文字起こしに失敗しました: {str(e)}")
 
+    def _perform_whisper_api_segmented_transcription(self, audio_path, update_status,
+                                                     cached_segments=None, progress_callback=None,
+                                                     cleanup_segments=True):
+        """Whisper APIで分割セグメントを順次文字起こしする"""
+        if cached_segments:
+            segment_files = cached_segments
+            update_status(f"キャッシュされたセグメントをWhisper APIで処理します ({len(segment_files)}個)")
+        else:
+            update_status("Whisper API用に音声ファイルを分割中...")
+            segment_files = self.audio_processor.split_audio(audio_path, callback=update_status)
+            if not segment_files:
+                raise AudioProcessingError("音声ファイルの分割に失敗しました")
+
+        segment_transcriptions = []
+        segment_info = []
+        segment_errors = []
+        first_exception = None
+        total = len(segment_files)
+
+        try:
+            for i, segment_file in enumerate(segment_files):
+                update_status(f"セグメント {i+1}/{total} をWhisper APIで処理中")
+                if progress_callback:
+                    pct = 10 + int((i / total) * 70)
+                    progress_callback(pct)
+
+                try:
+                    text, metadata = self.whisper_api_service.transcribe(segment_file, language='ja')
+                except Exception as e:
+                    if first_exception is None:
+                        first_exception = e
+                    error_category, error_detail = self._classify_segment_error(
+                        e, i + 1, segment_file, total, 'whisper-1'
+                    )
+                    segment_errors.append({
+                        'segment_index': i + 1,
+                        'error_text': f"[セグメント {i+1} 処理エラー: {error_category} - {error_detail}]",
+                        'error_category': error_category,
+                        'error_detail': error_detail
+                    })
+                    continue
+
+                segment_transcriptions.append(text)
+                segment_info.append({
+                    'segment_index': i,
+                    'total_segments': total,
+                    'file_path': segment_file,
+                    'metadata': metadata
+                })
+        finally:
+            if cleanup_segments:
+                self._cleanup_segments(segment_files, audio_path)
+
+        self._handle_segment_errors(
+            audio_path,
+            total,
+            segment_errors,
+            len(segment_transcriptions),
+            update_status,
+            fatal_exception=first_exception
+        )
+
+        update_status("セグメントを統合中...")
+        merged_text = self.text_merger.merge_segments_with_context(segment_transcriptions, segment_info)
+        update_status("セグメント統合完了")
+        return merged_text
+
+    def _upload_gemini_audio_file(self, audio_path, update_status):
+        """Gemini Files API に音声をアップロードして利用可能状態まで待つ"""
+        update_status("Gemini Files API に音声をアップロード中...")
+
+        with GENAI_SDK_LOCK:
+            uploaded_file = genai.upload_file(audio_path, mime_type=AUDIO_MIME_TYPE)
+
+        state = getattr(uploaded_file, 'state', None)
+        if state == genai.protos.File.State.ACTIVE:
+            return uploaded_file
+
+        for _ in range(120):
+            time.sleep(2)
+            with GENAI_SDK_LOCK:
+                uploaded_file = genai.get_file(uploaded_file.name)
+            state = getattr(uploaded_file, 'state', None)
+
+            if state == genai.protos.File.State.ACTIVE:
+                update_status("Gemini Files API の音声準備が完了しました")
+                return uploaded_file
+            if state == genai.protos.File.State.FAILED:
+                raise TranscriptionError("Gemini Files API で音声ファイルの処理に失敗しました")
+
+        raise TranscriptionError("Gemini Files API の音声処理がタイムアウトしました")
+
+    def _delete_gemini_audio_file(self, uploaded_file):
+        """Gemini Files API の一時ファイルを削除する"""
+        if not uploaded_file:
+            return
+        try:
+            with GENAI_SDK_LOCK:
+                genai.delete_file(uploaded_file)
+        except Exception as e:
+            logger.warning(f"Gemini Files API 一時ファイルの削除に失敗: {str(e)}")
+
     def _perform_single_transcription(self, audio_path, api_key, update_status, preferred_model=None):
         """単一ファイルの文字起こし"""
-        genai.configure(api_key=api_key)
-        model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
+        with GENAI_SDK_LOCK:
+            genai.configure(api_key=api_key)
+            model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
 
         # 音声の長さを取得（料金計算用）
         audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
+        file_size_mb = get_file_size_mb(audio_path)
+        self.last_transcription_model_name = model_name
 
         # モデル名を目立つように表示
         logger.info(f"✓ 選択されたモデル: {model_name}")
         update_status(f"✓ 使用モデル: {model_name}")
         update_status(f"音声ファイルから文字起こし中...")
 
-        model = genai.GenerativeModel(
-            model_name,
-            generation_config=AI_GENERATION_CONFIG,
-            safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 文字起こし用に安全性フィルターを緩和
-        )
-
-        with open(audio_path, 'rb') as audio_file:
-            audio_data = audio_file.read()
+        with GENAI_SDK_LOCK:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(
+                model_name,
+                generation_config=AI_GENERATION_CONFIG,
+                safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 文字起こし用に安全性フィルターを緩和
+            )
 
         prompt = """この音声の文字起こしを日本語でお願いします。以下の点を守って正確に書き起こしてください：
 
@@ -434,12 +668,23 @@ class FileProcessor:
 
 正確性と一貫性を最優先にしてください。"""
 
-        parts = [
-            {"inline_data": {"mime_type": AUDIO_MIME_TYPE, "data": audio_data}},
-            {"text": prompt}
-        ]
+        uploaded_file = None
+        try:
+            if file_size_mb > MAX_AUDIO_SIZE_MB:
+                uploaded_file = self._upload_gemini_audio_file(audio_path, update_status)
+                parts = [uploaded_file, prompt]
+            else:
+                with open(audio_path, 'rb') as audio_file:
+                    audio_data = audio_file.read()
+                parts = [
+                    {"inline_data": {"mime_type": AUDIO_MIME_TYPE, "data": audio_data}},
+                    {"text": prompt}
+                ]
 
-        response = model.generate_content(parts)
+            with GENAI_SDK_LOCK:
+                response = model.generate_content(parts)
+        finally:
+            self._delete_gemini_audio_file(uploaded_file)
 
         # レスポンスの安全性チェック
         self._check_response_safety(response)
@@ -457,10 +702,13 @@ class FileProcessor:
 
         return response.text
     
-    def _perform_segmented_transcription(self, audio_path, api_key, update_status, preferred_model=None, cached_segments=None, progress_callback=None):
+    def _perform_segmented_transcription(self, audio_path, api_key, update_status, preferred_model=None,
+                                        cached_segments=None, progress_callback=None, cleanup_segments=True):
         """分割された音声ファイルの文字起こし（スマート統合付き）"""
-        genai.configure(api_key=api_key)
-        model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
+        with GENAI_SDK_LOCK:
+            genai.configure(api_key=api_key)
+            model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
+        self.last_transcription_model_name = model_name
 
         # モデル名を目立つように表示
         logger.info(f"✓ 選択されたモデル: {model_name}")
@@ -482,16 +730,19 @@ class FileProcessor:
             update_status(f"{len(segment_files)}個のセグメントに分割しました")
         
         # モデルインスタンスを一度だけ生成（全セグメントで共有）
-        model = genai.GenerativeModel(
-            model_name,
-            generation_config=AI_GENERATION_CONFIG,
-            safety_settings=SAFETY_SETTINGS_TRANSCRIPTION
-        )
+        with GENAI_SDK_LOCK:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(
+                model_name,
+                generation_config=AI_GENERATION_CONFIG,
+                safety_settings=SAFETY_SETTINGS_TRANSCRIPTION
+            )
 
         segment_transcriptions = []
         segment_info = []
         segment_costs = []
         segment_errors = []  # エラー情報を記録
+        first_exception = None
 
         try:
             total = len(segment_files)
@@ -503,79 +754,43 @@ class FileProcessor:
                     progress_callback(pct)
 
                 # セグメントの文字起こし（改善版）
-                result = self._transcribe_segment_enhanced(
+                segment_transcription, cost_info, error_info = self._transcribe_segment_enhanced(
                     segment_file, api_key, i+1, total, model_name, model=model
                 )
-
-                if isinstance(result, tuple):
-                    segment_transcription, cost_info = result
-                    if cost_info:
-                        segment_costs.append(cost_info)
-                else:
-                    segment_transcription = result
+                if cost_info:
+                    segment_costs.append(cost_info)
 
                 # エラーチェック: エラーテキストは結果に含めない
-                if isinstance(segment_transcription, str) and "処理エラー" in segment_transcription:
+                if error_info is not None:
+                    if first_exception is None:
+                        first_exception = error_info['exception']
                     segment_errors.append({
                         'segment_index': i+1,
-                        'error_text': segment_transcription
+                        'error_text': segment_transcription,
+                        'error_category': error_info['category'],
+                        'error_detail': error_info['detail']
                     })
                     logger.warning(f"セグメント {i+1} をスキップ: {segment_transcription}")
                 else:
                     segment_transcriptions.append(segment_transcription)
-                
-                # セグメント情報を記録（将来の拡張用）
-                segment_info.append({
-                    'segment_index': i,
-                    'total_segments': len(segment_files),
-                    'file_path': segment_file
-                })
+                    segment_info.append({
+                        'segment_index': i,
+                        'total_segments': len(segment_files),
+                        'file_path': segment_file
+                    })
         
         finally:
-            # セグメントファイルをクリーンアップ
-            self._cleanup_segments(segment_files, audio_path)
-            
-            # エラーサマリーを記録
-            if segment_errors:
-                error_summary = {
-                    'summary': {
-                        'total_segments': len(segment_files),
-                        'failed_segments': len(segment_errors),
-                        'success_segments': len(segment_files) - len(segment_errors),
-                        'success_rate': f"{((len(segment_files) - len(segment_errors)) / len(segment_files) * 100):.1f}%"
-                    },
-                    'errors': segment_errors,
-                    'recommendations': [
-                        "エラーが発生したセグメントは文字起こし結果に含まれていません。",
-                        "エラーの詳細は各セグメントのエラーログファイルを確認してください。",
-                        "エラーが続く場合は、音声ファイルの内容や品質を確認してください。"
-                    ]
-                }
-                logger.warning(f"セグメント処理エラーサマリー: {json.dumps(error_summary, ensure_ascii=False)}")
+            if cleanup_segments:
+                self._cleanup_segments(segment_files, audio_path)
 
-                # ユーザーにエラーサマリーを表示
-                update_status(
-                    f"\n⚠️ 一部のセグメントでエラーが発生しました:\n"
-                    f"- 成功: {error_summary['summary']['success_segments']}/{error_summary['summary']['total_segments']}\n"
-                    f"- 失敗: {error_summary['summary']['failed_segments']}/{error_summary['summary']['total_segments']}\n"
-                    f"詳細はエラーログファイルを確認してください。"
-                )
-
-                # エラーサマリーをファイルに保存
-                try:
-                    audio_dir = os.path.dirname(audio_path) if audio_path else OUTPUT_DIR
-                    if audio_dir and os.path.exists(audio_dir):
-                        error_summary_path = os.path.join(
-                            audio_dir,
-                            f"transcription_errors_{get_timestamp()}.json"
-                        )
-                        with open(error_summary_path, 'w', encoding='utf-8') as f:
-                            json.dump(error_summary, f, ensure_ascii=False, indent=2)
-                        logger.info(f"エラーサマリーを保存: {error_summary_path}")
-                    else:
-                        logger.warning(f"エラーサマリーの保存先ディレクトリが見つかりません: {audio_dir}")
-                except Exception as e:
-                    logger.error(f"エラーサマリーの保存に失敗: {str(e)}")
+        self._handle_segment_errors(
+            audio_path,
+            len(segment_files),
+            segment_errors,
+            len(segment_transcriptions),
+            update_status,
+            fatal_exception=first_exception
+        )
         
         # セグメントごとのコスト情報を集計
         if segment_costs:
@@ -614,11 +829,13 @@ class FileProcessor:
 
             # モデルインスタンスが渡されない場合のみ生成
             if model is None:
-                model = genai.GenerativeModel(
-                    model_name,
-                    generation_config=AI_GENERATION_CONFIG,
-                    safety_settings=SAFETY_SETTINGS_TRANSCRIPTION
-                )
+                with GENAI_SDK_LOCK:
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel(
+                        model_name,
+                        generation_config=AI_GENERATION_CONFIG,
+                        safety_settings=SAFETY_SETTINGS_TRANSCRIPTION
+                    )
 
             with open(segment_file, 'rb') as audio_file:
                 audio_data = audio_file.read()
@@ -650,7 +867,8 @@ class FileProcessor:
                 {"text": prompt}
             ]
 
-            response = model.generate_content(parts)
+            with GENAI_SDK_LOCK:
+                response = model.generate_content(parts)
 
             # レスポンスの安全性チェック
             self._check_response_safety(response, segment_num=segment_num)
@@ -667,11 +885,18 @@ class FileProcessor:
                     is_audio_input=True, audio_duration_seconds=segment_duration_sec
                 )
 
-            return response.text.strip(), segment_cost_info
-            
+            return response.text.strip(), segment_cost_info, None
         except Exception as e:
             error_category, error_detail = self._classify_segment_error(e, segment_num, segment_file, total_segments, model_name)
-            return f"[セグメント {segment_num} 処理エラー: {error_category} - {error_detail}]", None
+            return (
+                f"[セグメント {segment_num} 処理エラー: {error_category} - {error_detail}]",
+                None,
+                {
+                    'exception': e,
+                    'category': error_category,
+                    'detail': error_detail
+                }
+            )
 
     def _classify_segment_error(self, exception, segment_num, segment_file, total_segments, model_name):
         """セグメント処理エラーを分類し、ログに記録する
@@ -690,7 +915,15 @@ class FileProcessor:
 
         error_str = str(exception).lower()
 
-        if 'audio input modality is not enabled' in error_str or 'audio input is not supported' in error_str:
+        if isinstance(exception, TranscriptionError) and exception.error_code == "COPYRIGHT_CONTENT":
+            error_category = "著作権保護コンテンツ"
+            error_detail = exception.user_message
+            solution = exception.solution or "音声に含まれる音楽やBGMを削除するか、別の音声ファイルを使用してください。"
+        elif isinstance(exception, TranscriptionError) and exception.error_code == "SAFETY_FILTER":
+            error_category = "安全性フィルター"
+            error_detail = exception.user_message
+            solution = exception.solution or "音声の内容を確認してください。"
+        elif 'audio input modality is not enabled' in error_str or 'audio input is not supported' in error_str:
             error_category = "モデル非対応"
             error_detail = "選択されたモデルは音声入力に対応していません"
             solution = "別のモデルを選択してください。Flash系モデル（gemini-2.5-flash等）の使用を推奨します。"
@@ -758,7 +991,8 @@ class FileProcessor:
         
         try:
             # Whisperで文字起こし
-            text, metadata = self.whisper_service.transcribe(
+            whisper_service = self.get_whisper_service()
+            text, metadata = whisper_service.transcribe(
                 audio_path, 
                 model_name=whisper_model,
                 language='ja'
@@ -782,7 +1016,9 @@ class FileProcessor:
             logger.error(f"Whisper文字起こしエラー: {str(e)}")
             raise TranscriptionError(f"Whisper文字起こしに失敗しました: {str(e)}")
     
-    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model='base', cached_segments=None, progress_callback=None):
+    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model='base',
+                                                cached_segments=None, progress_callback=None,
+                                                cleanup_segments=True):
         """Whisperを使用した分割ファイルの文字起こし"""
         # キャッシュされたセグメントを使用
         if cached_segments:
@@ -801,7 +1037,9 @@ class FileProcessor:
 
         segment_transcriptions = []
         segment_info = []
+        segment_errors = []
         total = len(segment_files)
+        whisper_service = self.get_whisper_service()
 
         try:
             for i, segment_file in enumerate(segment_files):
@@ -811,17 +1049,22 @@ class FileProcessor:
                     progress_callback(pct)
                 
                 # Whisperでセグメントを文字起こし
-                text, metadata = self.whisper_service.transcribe_segment(
+                text, metadata = whisper_service.transcribe_segment(
                     segment_file, 
                     segment_num=i+1,
                     total_segments=len(segment_files),
                     model_name=whisper_model,
                     language='ja'
                 )
-                
+
+                if metadata.get('is_error'):
+                    segment_errors.append({
+                        'segment_index': i + 1,
+                        'error_text': text
+                    })
+                    continue
+
                 segment_transcriptions.append(text)
-                
-                # セグメント情報を記録
                 segment_info.append({
                     'segment_index': i,
                     'total_segments': len(segment_files),
@@ -830,8 +1073,10 @@ class FileProcessor:
                 })
         
         finally:
-            # セグメントファイルをクリーンアップ
-            self._cleanup_segments(segment_files, audio_path)
+            if cleanup_segments:
+                self._cleanup_segments(segment_files, audio_path)
+
+        self._handle_segment_errors(audio_path, total, segment_errors, len(segment_transcriptions), update_status)
         
         # スマート統合を実行
         if SEGMENT_MERGE_CONFIG['enable_smart_merge']:
@@ -867,8 +1112,9 @@ class FileProcessor:
             raise ApiConnectionError("追加処理（要約・議事録作成など）にはGemini APIキーが必要です")
 
         process_name = prompts[process_type]["name"]
-        genai.configure(api_key=api_key)
-        model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
+        with GENAI_SDK_LOCK:
+            genai.configure(api_key=api_key)
+            model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
 
         # モデル名を表示
         logger.info(f"✓ {process_name}使用モデル: {model_name}")
@@ -877,13 +1123,14 @@ class FileProcessor:
         
         prompt = prompts[process_type]["prompt"].replace("{transcription}", transcription)
         
-        model = genai.GenerativeModel(
-            model_name,
-            generation_config=AI_GENERATION_CONFIG,
-            safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 安全性フィルターを緩和
-        )
-        
-        response = model.generate_content(prompt)
+        with GENAI_SDK_LOCK:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(
+                model_name,
+                generation_config=AI_GENERATION_CONFIG,
+                safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 安全性フィルターを緩和
+            )
+            response = model.generate_content(prompt)
         if not response.text:
             raise TranscriptionError(f"{process_name}の生成に失敗しました")
         
@@ -921,6 +1168,9 @@ class FileProcessor:
             str or None: 要約タイトル。失敗時はNone
         """
         try:
+            with GENAI_SDK_LOCK:
+                genai.configure(api_key=api_key)
+
             # キャッシュ付きモデルリストを使用（音声処理不向きモデルを除外）
             all_names = self.api_utils._get_available_models(api_key)
             available_names = [
@@ -955,16 +1205,17 @@ class FileProcessor:
                 f"{excerpt}"
             )
 
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config={
-                    'temperature': 0.1,
-                    'max_output_tokens': 100,
-                    'candidate_count': 1
-                }
-            )
-
-            response = model.generate_content(prompt)
+            with GENAI_SDK_LOCK:
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel(
+                    model_name,
+                    generation_config={
+                        'temperature': 0.1,
+                        'max_output_tokens': 100,
+                        'candidate_count': 1
+                    }
+                )
+                response = model.generate_content(prompt)
 
             if not response.text or not response.text.strip():
                 logger.warning("タイトル生成: 空のレスポンス")
@@ -1082,23 +1333,25 @@ class FileProcessor:
                     base_name = match.group(1)
             
             # APIを使用して処理
-            genai.configure(api_key=api_key)
-            model_name = self.api_utils.get_best_available_model(api_key)
+            with GENAI_SDK_LOCK:
+                genai.configure(api_key=api_key)
+                model_name = self.api_utils.get_best_available_model(api_key)
 
             # モデル名を表示
             logger.info(f"✓ {process_name}使用モデル: {model_name}")
             update_status(f"✓ 使用モデル: {model_name}")
             update_status(f"{process_name}を生成中...")
             
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config=AI_GENERATION_CONFIG
-            )
-            
             # プロンプトに文字起こし結果を埋め込む
             prompt = prompt_info["prompt"].replace("{transcription}", transcription)
-            
-            response = model.generate_content(prompt)
+
+            with GENAI_SDK_LOCK:
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel(
+                    model_name,
+                    generation_config=AI_GENERATION_CONFIG
+                )
+                response = model.generate_content(prompt)
             if not response.text:
                 raise TranscriptionError(f"{process_name}の生成に失敗しました")
             
@@ -1124,6 +1377,8 @@ class FileProcessor:
             
             return output_path
             
+        except (TranscriptionError, AudioProcessingError, ApiConnectionError, FileProcessingError):
+            raise
         except Exception as e:
             update_status(f"処理エラー: {str(e)}")
             raise FileProcessingError(f"文字起こしファイルの処理に失敗しました: {str(e)}")

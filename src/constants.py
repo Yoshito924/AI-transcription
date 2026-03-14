@@ -7,6 +7,7 @@
 
 # 音声処理関連の定数
 MAX_AUDIO_SIZE_MB = 20  # Geminiの推奨上限サイズ（リクエストの合計サイズが20MBを超える場合はFiles APIを使用）
+WHISPER_API_MAX_AUDIO_SIZE_MB = 25  # OpenAI Speech-to-Text API のファイル上限
 MAX_AUDIO_DURATION_SEC = 34200  # 9.5時間（34,200秒）- Gemini APIの最大音声長
 # 参考: https://ai.google.dev/gemini-api/docs/audio?hl=ja
 # - 1つのプロンプトでサポートされる音声データの最大長は9.5時間

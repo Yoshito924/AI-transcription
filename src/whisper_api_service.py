@@ -6,7 +6,7 @@ OpenAI Whisper APIを使用した文字起こしサービス
 """
 
 import os
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 from .exceptions import TranscriptionError, ApiConnectionError
 from .logger import logger
@@ -41,6 +41,56 @@ class WhisperApiService:
                 "openaiパッケージがインストールされていません。"
                 "pip install openai でインストールしてください。"
             )
+
+    def _coerce_to_dict(self, value: Any) -> Optional[Dict[str, Any]]:
+        """SDKレスポンスを辞書へ正規化する"""
+        if isinstance(value, dict):
+            return value
+
+        for method_name in ('model_dump', 'to_dict', 'dict'):
+            method = getattr(value, method_name, None)
+            if callable(method):
+                try:
+                    result = method()
+                    if isinstance(result, dict):
+                        return result
+                except Exception:
+                    pass
+
+        return None
+
+    def _extract_text(self, transcript: Any) -> str:
+        """レスポンスから文字起こし本文を抽出する"""
+        if isinstance(transcript, str):
+            return transcript
+
+        text = getattr(transcript, 'text', None)
+        if isinstance(text, str):
+            return text
+
+        transcript_dict = self._coerce_to_dict(transcript)
+        if transcript_dict:
+            text = transcript_dict.get('text')
+            if isinstance(text, str):
+                return text
+
+        return str(transcript or '')
+
+    def _normalize_segment(self, segment: Any, index: int) -> Dict[str, Any]:
+        """セグメント情報を辞書へ正規化する"""
+        segment_dict = self._coerce_to_dict(segment) or {}
+        return {
+            'id': segment_dict.get('id', getattr(segment, 'id', index)),
+            'start': segment_dict.get('start', getattr(segment, 'start', 0.0)),
+            'end': segment_dict.get('end', getattr(segment, 'end', 0.0)),
+            'text': (segment_dict.get('text', getattr(segment, 'text', '')) or '').strip(),
+        }
+
+    def _extract_segments(self, transcript: Any) -> List[Dict[str, Any]]:
+        """レスポンスからセグメント一覧を抽出する"""
+        transcript_dict = self._coerce_to_dict(transcript) or {}
+        raw_segments = transcript_dict.get('segments', getattr(transcript, 'segments', [])) or []
+        return [self._normalize_segment(segment, index) for index, segment in enumerate(raw_segments)]
     
     def transcribe(self, audio_path: str, language: Optional[str] = 'ja',
                    response_format: str = 'text', **kwargs) -> Tuple[str, Dict[str, Any]]:
@@ -75,29 +125,31 @@ class WhisperApiService:
                     **kwargs
                 )
             
-            # レスポンス形式に応じてテキストを抽出
-            if response_format == 'text':
-                text = transcript if isinstance(transcript, str) else str(transcript)
-            elif response_format == 'json':
-                text = transcript.get('text', '') if isinstance(transcript, dict) else str(transcript)
-            elif response_format in ['verbose_json', 'srt', 'vtt']:
-                if isinstance(transcript, dict):
-                    text = transcript.get('text', '')
-                else:
-                    text = str(transcript)
-            else:
-                text = str(transcript)
+            text = self._extract_text(transcript)
             
             if not text or not text.strip():
                 raise TranscriptionError("文字起こし結果が空でした")
+
+            segments = self._extract_segments(transcript)
+            transcript_dict = self._coerce_to_dict(transcript) or {}
+            detected_language = (
+                transcript_dict.get('language')
+                or getattr(transcript, 'language', None)
+                or language
+                or 'auto'
+            )
             
             # メタデータを構築
             metadata = {
                 'model': 'whisper-1',
-                'language': language or 'auto',
+                'language': detected_language,
                 'file_size_mb': file_size_mb,
                 'service': 'openai-whisper-api'
             }
+
+            if segments:
+                metadata['segments'] = segments
+                metadata['total_segments'] = len(segments)
             
             logger.info(f"Whisper API文字起こし完了: テキスト長={len(text)}文字")
             
@@ -136,33 +188,12 @@ class WhisperApiService:
         Returns:
             tuple: (文字起こしテキスト, メタデータ)
         """
-        # verbose_json形式で取得してセグメント情報を含める
         text, metadata = self.transcribe(
             audio_path,
             language=language,
             response_format='verbose_json',
             **kwargs
         )
-        
-        # セグメント情報があれば追加
-        try:
-            import openai
-            with open(audio_path, 'rb') as audio_file:
-                transcript = self.client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    language=language,
-                    response_format='verbose_json',
-                    **kwargs
-                )
-            
-            if isinstance(transcript, dict):
-                segments = transcript.get('segments', [])
-                metadata['segments'] = segments
-                metadata['total_segments'] = len(segments)
-        except Exception as e:
-            logger.warning(f"セグメント情報の取得に失敗: {str(e)}")
-        
         return text, metadata
     
     def estimate_cost(self, audio_duration_seconds: float) -> Dict[str, float]:
@@ -190,4 +221,3 @@ class WhisperApiService:
             'cost_per_minute': cost_per_minute,
             'model': 'whisper-1'  # 現在利用可能なモデル
         }
-

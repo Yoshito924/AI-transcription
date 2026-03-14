@@ -125,15 +125,24 @@ class TextMerger:
         words1 = self._extract_words(text1)
         words2 = self._extract_words(text2)
         
-        if not words1 or not words2:
+        if words1 and words2 and len(words1) >= self.min_overlap_words and len(words2) >= self.min_overlap_words:
+            matcher = SequenceMatcher(None, words1, words2)
+            return matcher.ratio()
+
+        normalized1 = self._normalize_for_overlap(text1)
+        normalized2 = self._normalize_for_overlap(text2)
+        if not normalized1 or not normalized2:
             return 0.0
-        
-        # 最小単語数チェック
-        if len(words1) < self.min_overlap_words or len(words2) < self.min_overlap_words:
-            return 0.0
-        
-        # SequenceMatcherを使用して類似度を計算
-        matcher = SequenceMatcher(None, words1, words2)
+
+        if self._contains_cjk(normalized1 + normalized2):
+            ngrams1 = self._build_char_ngrams(normalized1)
+            ngrams2 = self._build_char_ngrams(normalized2)
+            if not ngrams1 or not ngrams2:
+                return SequenceMatcher(None, normalized1, normalized2).ratio()
+            matcher = SequenceMatcher(None, ngrams1, ngrams2)
+            return matcher.ratio()
+
+        matcher = SequenceMatcher(None, normalized1, normalized2)
         return matcher.ratio()
     
     def _choose_better_overlap(self, overlap1: List[str], overlap2: List[str]) -> List[str]:
@@ -192,6 +201,20 @@ class TextMerger:
         # 句読点と空白で分割し、空文字列を除去
         words = re.findall(r'[^\s\.,。、！？!?]+', text)
         return [word for word in words if word.strip()]
+
+    def _normalize_for_overlap(self, text: str) -> str:
+        """オーバーラップ比較用に空白と句読点を除去する"""
+        return re.sub(r'[\s\.,。、！？!?]+', '', text or '')
+
+    def _build_char_ngrams(self, text: str, n: int = 3) -> List[str]:
+        """日本語のような非分かち書きテキスト用に文字n-gramを作る"""
+        if len(text) < n:
+            return [text] if text else []
+        return [text[i:i + n] for i in range(len(text) - n + 1)]
+
+    def _contains_cjk(self, text: str) -> bool:
+        """CJK文字を含むかを判定する"""
+        return bool(re.search(r'[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]', text or ''))
     
     def _clean_text(self, text: str) -> str:
         """

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import threading
 import time
 
 from .constants import PREFERRED_MODELS, AI_GENERATION_CONFIG
@@ -9,6 +10,7 @@ from .logger import logger
 
 # モデルリストキャッシュのTTL（秒）
 _MODEL_LIST_CACHE_TTL = 300  # 5分
+GENAI_SDK_LOCK = threading.RLock()
 
 class ApiUtils:
     """API接続関連のユーティリティクラス"""
@@ -29,12 +31,13 @@ class ApiUtils:
                 and now - self._model_list_cache_time < _MODEL_LIST_CACHE_TTL):
             return self._model_list_cache
 
-        genai.configure(api_key=api_key)
-        models = genai.list_models()
-        available = [
-            m.name for m in models
-            if 'gemini' in m.name.lower() and 'generateContent' in m.supported_generation_methods
-        ]
+        with GENAI_SDK_LOCK:
+            genai.configure(api_key=api_key)
+            models = list(genai.list_models())
+            available = [
+                m.name for m in models
+                if 'gemini' in m.name.lower() and 'generateContent' in m.supported_generation_methods
+            ]
 
         self._model_list_cache = available
         self._model_list_cache_time = now
@@ -74,11 +77,13 @@ class ApiUtils:
             logger.info(f"利用可能なGeminiモデル一覧: {', '.join(available_gemini_models)}")
             
             # 選択したモデルでテスト
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config=AI_GENERATION_CONFIG
-            )
-            response = model.generate_content("こんにちは")
+            with GENAI_SDK_LOCK:
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel(
+                    model_name,
+                    generation_config=AI_GENERATION_CONFIG
+                )
+                response = model.generate_content("こんにちは")
             
             # 応答がある場合は成功（モデル名を返す）
             if response and hasattr(response, 'text'):

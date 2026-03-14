@@ -434,7 +434,8 @@ class WhisperService:
                 'total_segments': total_segments,
                 'model': model_name,
                 'language': result.get('language', language),
-                'duration': result.get('duration', 0)
+                'duration': result.get('duration', 0),
+                'is_error': False
             }
             
             return text, metadata
@@ -475,6 +476,8 @@ class WhisperService:
 
             # エラーでも続行できるようにエラーメッセージを返す
             error_msg = f"セグメント {segment_num} 処理エラー: {error_category}"
+            error_details['is_error'] = True
+            error_details['error_category'] = error_category
             return f"[{error_msg}]", error_details
     
     def test_whisper_availability(self) -> Tuple[bool, str]:

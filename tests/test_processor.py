@@ -1,0 +1,107 @@
+import os
+import unittest
+from unittest.mock import MagicMock, patch
+
+from src.exceptions import ApiConnectionError, AudioProcessingError, TranscriptionError
+from src.processor import FileProcessor
+
+
+class StubWhisperService:
+    def __init__(self, responses):
+        self._responses = iter(responses)
+
+    def transcribe_segment(self, *args, **kwargs):
+        return next(self._responses)
+
+
+class FileProcessorTests(unittest.TestCase):
+    def make_output_dir(self):
+        output_dir = os.path.join(os.getcwd(), 'output')
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+
+    def test_whisper_service_is_lazy_initialized(self):
+        temp_dir = self.make_output_dir()
+        with patch('src.processor.WhisperService', side_effect=AudioProcessingError("missing")) as whisper_cls:
+            processor = FileProcessor(temp_dir, enable_cache=False)
+
+            self.assertIsNone(processor.whisper_service)
+            whisper_cls.assert_not_called()
+
+            with self.assertRaises(AudioProcessingError):
+                processor.get_whisper_service()
+
+            whisper_cls.assert_called_once()
+
+    def test_whisper_segment_errors_are_filtered_and_warned(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor.get_whisper_service = lambda: StubWhisperService([
+            ("最初の成功セグメントです。", {'is_error': False}),
+            ("[セグメント 2 処理エラー: GPUエラー]", {'is_error': True, 'error_category': 'GPUエラー'}),
+        ])
+
+        result = processor._perform_whisper_segmented_transcription(
+            audio_path="dummy.mp3",
+            update_status=lambda message: None,
+            whisper_model='base',
+            cached_segments=['seg1.mp3', 'seg2.mp3'],
+            cleanup_segments=False
+        )
+
+        self.assertIn("最初の成功セグメントです。", result)
+        self.assertNotIn("処理エラー", result)
+        self.assertIsNotNone(processor.last_warning)
+
+    def test_all_failed_segments_raise_error(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+
+        with self.assertRaises(TranscriptionError):
+            processor._handle_segment_errors(
+                audio_path="dummy.mp3",
+                total_segments=2,
+                segment_errors=[{'segment_index': 1, 'error_text': 'e1'}, {'segment_index': 2, 'error_text': 'e2'}],
+                successful_segments=0,
+                update_status=lambda message: None
+            )
+
+    def test_all_failed_segments_preserve_root_exception_type(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        root_exception = ApiConnectionError("認証エラー", user_message="APIキーが無効です")
+
+        with self.assertRaises(ApiConnectionError) as ctx:
+            processor._handle_segment_errors(
+                audio_path="dummy.mp3",
+                total_segments=2,
+                segment_errors=[{'segment_index': 1, 'error_text': 'e1'}],
+                successful_segments=0,
+                update_status=lambda message: None,
+                fatal_exception=root_exception
+            )
+
+        self.assertIn("APIキーが無効です", ctx.exception.user_message)
+
+    def test_gemini_large_file_ignores_cached_segments_and_uses_single_path(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor._perform_single_transcription = MagicMock(return_value="ok")
+        processor._perform_segmented_transcription = MagicMock(side_effect=AssertionError("segmented path should not be used"))
+        processor.audio_processor.get_audio_duration = lambda path: 60
+
+        with patch('src.processor.get_file_size_mb', return_value=21.0):
+            result = processor._perform_transcription(
+                audio_path="dummy.mp3",
+                api_key="test",
+                update_status=lambda message: None,
+                cached_segments=['seg1.mp3']
+            )
+
+        self.assertEqual(result, "ok")
+        processor._perform_single_transcription.assert_called_once()
+        processor._perform_segmented_transcription.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

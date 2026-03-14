@@ -339,13 +339,14 @@ class TranscriptionController:
             try:
                 file_size_mb = get_file_size_mb(self.current_file) if self.current_file else 0.0
                 filename = os.path.basename(self.current_file) if self.current_file else "unknown"
+                actual_model = self.processor.last_transcription_model_name or "gemini-2.5-flash"
 
                 # 音声時間とファイルサイズから概算トークン数を推定
                 estimated_input_tokens = int(file_size_mb * TOKEN_ESTIMATION_FACTOR)
                 estimated_output_tokens = int(estimated_input_tokens * OUTPUT_TOKEN_RATIO)
 
                 cost = self.usage_tracker.record_usage(
-                    model="gemini-2.5-flash",  # デフォルトモデル（2025年11月推奨）
+                    model=actual_model,
                     input_tokens=estimated_input_tokens,
                     output_tokens=estimated_output_tokens,
                     file_name=filename,
@@ -353,6 +354,7 @@ class TranscriptionController:
                 )
 
                 self.add_log(f"使用料金: ${cost:.4f} (概算)")
+                self.add_log(f"使用モデル: {actual_model}")
                 self.add_log(f"━━━ Gemini処理完了 ━━━")
 
                 # 使用量表示を更新
@@ -379,38 +381,44 @@ class TranscriptionController:
         if hasattr(self, 'update_history_callback') and self.update_history_callback:
             self.update_history_callback(output_file)
 
+        warning_message = getattr(self.processor, 'last_warning', None)
+        if warning_message:
+            self.add_log(f"注意: {warning_message}")
+
         # キュー処理中なら次のファイルへ進む（メッセージボックスは出さない）
         if self.queue_processing:
             self.ui_elements['root'].after(300, self._process_next_in_queue)
             return
 
         # エンジンに応じたメッセージを表示（単一処理のみ）
-        self._show_completion_message(engine_value, output_file)
+        self._show_completion_message(engine_value, output_file, warning_message)
     
-    def _show_completion_message(self, engine_value, output_file):
+    def _show_completion_message(self, engine_value, output_file, warning_message=None):
         """処理完了メッセージを表示"""
         filename = os.path.basename(output_file)
-        
+
         if engine_value == 'whisper':
             whisper_model = get_whisper_model_value(self.ui_elements)
-            messagebox.showinfo(
-                "成功",
+            message = (
                 f"Whisperによる文字起こしが完了しました。\n"
                 f"モデル: {whisper_model} (ローカル/無料)\n"
                 f"出力ファイル: {filename}"
             )
         elif engine_value == 'whisper-api':
-            messagebox.showinfo(
-                "成功",
+            message = (
                 f"Whisper APIによる文字起こしが完了しました。\n"
                 f"出力ファイル: {filename}"
             )
         else:
-            messagebox.showinfo(
-                "成功",
+            message = (
                 f"Geminiによる文字起こしが完了しました。\n"
                 f"出力ファイル: {filename}"
             )
+
+        if warning_message:
+            messagebox.showwarning("一部未完了", f"{message}\n\n注意:\n{warning_message}")
+        else:
+            messagebox.showinfo("成功", message)
     
     def add_files_to_queue(self, file_paths):
         """ファイルを検証してキューに追加
