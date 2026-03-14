@@ -25,8 +25,9 @@ class WhisperApiService:
     # OpenAI Whisper APIでサポートされているモデル
     # 参考: https://platform.openai.com/docs/models/whisper
     SUPPORTED_MODELS = ['whisper-1']  # 現在はwhisper-1のみ
-    
-    def __init__(self, api_key: Optional[str] = None):
+    DEFAULT_REQUEST_TIMEOUT_SEC = 1800  # 30分
+
+    def __init__(self, api_key: Optional[str] = None, request_timeout_sec: int = DEFAULT_REQUEST_TIMEOUT_SEC):
         """Whisper APIサービスの初期化
         
         Args:
@@ -34,8 +35,9 @@ class WhisperApiService:
         """
         try:
             import openai
-            self.client = openai.OpenAI(api_key=api_key) if api_key else None
+            self.client = openai.OpenAI(api_key=api_key, timeout=request_timeout_sec) if api_key else None
             self.api_key = api_key
+            self.request_timeout_sec = request_timeout_sec
         except ImportError:
             raise ApiConnectionError(
                 "openaiパッケージがインストールされていません。"
@@ -163,6 +165,12 @@ class WhisperApiService:
             if 'api_key' in error_msg.lower() or 'authentication' in error_msg.lower():
                 raise ApiConnectionError(
                     "OpenAI APIキーが無効です。正しいAPIキーを設定してください。"
+                )
+            elif 'timeout' in error_msg.lower() or 'timed out' in error_msg.lower():
+                raise ApiConnectionError(
+                    "Whisper APIの応答がタイムアウトしました。しばらく待ってから再実行してください。",
+                    error_code="API_TIMEOUT",
+                    solution="長い音声は分割して再実行するか、時間を置いてから再試行してください。"
                 )
             elif 'rate_limit' in error_msg.lower() or '429' in error_msg:
                 raise ApiConnectionError(

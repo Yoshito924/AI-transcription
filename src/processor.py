@@ -8,6 +8,7 @@ import shutil
 import datetime
 import tempfile
 import time
+import threading
 import google.generativeai as genai
 
 from .constants import (
@@ -52,6 +53,7 @@ class FileProcessor:
         self.whisper_service = None
         self.whisper_init_error = None
         self.whisper_api_service = None  # APIキーが設定されたときに初期化
+        self.whisper_api_status_heartbeat_sec = 30
         self.last_transcription_model_name = None
         self.last_warning = None
         self.text_merger = EnhancedTextMerger(
@@ -96,6 +98,29 @@ class FileProcessor:
         """Whisperデバイス情報を返す"""
         service = self.get_whisper_service()
         return service.get_device_info()
+
+    def _run_with_status_heartbeat(self, operation, update_status, base_message):
+        """長時間処理中に定期的な生存確認メッセージを出す"""
+        interval_sec = getattr(self, 'whisper_api_status_heartbeat_sec', 30)
+        if not interval_sec or interval_sec <= 0:
+            return operation()
+
+        stop_event = threading.Event()
+        started_at = time.monotonic()
+
+        def heartbeat():
+            while not stop_event.wait(interval_sec):
+                elapsed_sec = int(time.monotonic() - started_at)
+                update_status(f"{base_message} {format_duration(elapsed_sec)}経過")
+
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
+
+        try:
+            return operation()
+        finally:
+            stop_event.set()
+            heartbeat_thread.join(timeout=0.1)
 
     def _check_response_safety(self, response, segment_num=None):
         """Gemini APIレスポンスの安全性チェック
@@ -508,12 +533,16 @@ class FileProcessor:
             )
         
         logger.info(f"Whisper API文字起こし開始: サイズ={file_size_mb:.2f}MB, 長さ={format_duration(audio_duration_sec)}")
-        update_status(f"Whisper APIで文字起こし中...")
+        update_status("Whisper APIで文字起こし中... 応答待ち")
         if progress_callback:
             progress_callback(15)
 
         try:
-            text, metadata = self.whisper_api_service.transcribe(audio_path, language='ja')
+            text, metadata = self._run_with_status_heartbeat(
+                lambda: self.whisper_api_service.transcribe(audio_path, language='ja'),
+                update_status,
+                "Whisper APIで文字起こし中..."
+            )
             
             # 料金情報を表示
             if audio_duration_sec:
@@ -553,13 +582,18 @@ class FileProcessor:
 
         try:
             for i, segment_file in enumerate(segment_files):
-                update_status(f"セグメント {i+1}/{total} をWhisper APIで処理中")
+                segment_status = f"セグメント {i+1}/{total} をWhisper APIで処理中..."
+                update_status(segment_status)
                 if progress_callback:
                     pct = 10 + int((i / total) * 70)
                     progress_callback(pct)
 
                 try:
-                    text, metadata = self.whisper_api_service.transcribe(segment_file, language='ja')
+                    text, metadata = self._run_with_status_heartbeat(
+                        lambda: self.whisper_api_service.transcribe(segment_file, language='ja'),
+                        update_status,
+                        segment_status
+                    )
                 except Exception as e:
                     if first_exception is None:
                         first_exception = e

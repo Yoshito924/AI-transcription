@@ -1,6 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
+from src.exceptions import ApiConnectionError
 from src.whisper_api_service import WhisperApiService
 
 
@@ -32,6 +33,23 @@ class WhisperApiServiceTests(unittest.TestCase):
         self.assertEqual(metadata['language'], 'ja')
         self.assertEqual(metadata['total_segments'], 2)
         self.assertEqual(metadata['segments'][0]['text'], 'こんにちは')
+
+    def test_transcribe_converts_timeout_to_api_error(self):
+        service = WhisperApiService.__new__(WhisperApiService)
+        service.api_key = "test"
+        service.client = SimpleNamespace(
+            audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(
+                    create=lambda **kwargs: (_ for _ in ()).throw(Exception("request timed out"))
+                )
+            )
+        )
+
+        with self.assertRaises(ApiConnectionError) as ctx:
+            service.transcribe("tests\\fixtures\\dummy.mp3")
+
+        self.assertEqual(ctx.exception.error_code, "API_TIMEOUT")
+        self.assertIn("タイムアウト", ctx.exception.user_message)
 
 
 if __name__ == '__main__':

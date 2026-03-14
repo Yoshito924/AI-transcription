@@ -1,4 +1,5 @@
 import os
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,22 @@ class StubWhisperService:
 
     def transcribe_segment(self, *args, **kwargs):
         return next(self._responses)
+
+
+class SlowWhisperApiService:
+    def __init__(self, delay_sec=0.03):
+        self.api_key = "test"
+        self.delay_sec = delay_sec
+
+    def transcribe(self, *args, **kwargs):
+        time.sleep(self.delay_sec)
+        return "ok", {}
+
+    def estimate_cost(self, audio_duration_seconds):
+        return {
+            'cost_usd': 0.006,
+            'cost_jpy': 1.0,
+        }
 
 
 class FileProcessorTests(unittest.TestCase):
@@ -101,6 +118,24 @@ class FileProcessorTests(unittest.TestCase):
         self.assertEqual(result, "ok")
         processor._perform_single_transcription.assert_called_once()
         processor._perform_segmented_transcription.assert_not_called()
+
+    def test_whisper_api_single_file_emits_heartbeat_while_waiting(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor.whisper_api_service = SlowWhisperApiService()
+        processor.whisper_api_status_heartbeat_sec = 0.01
+        processor.audio_processor.get_audio_duration = lambda path: 60
+        statuses = []
+
+        with patch('src.processor.get_file_size_mb', return_value=5.0):
+            result = processor._perform_whisper_api_transcription(
+                audio_path="dummy.mp3",
+                api_key="test",
+                update_status=statuses.append
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertTrue(any("経過" in message for message in statuses))
 
 
 if __name__ == '__main__':
