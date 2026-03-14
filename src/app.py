@@ -852,27 +852,44 @@ class TranscriptionApp:
           {C:/path with spaces/file.mp3}
           C:/simple.wav
         """
-        raw_data = raw_data.strip()
-        paths = []
-        i = 0
-        while i < len(raw_data):
-            if raw_data[i] == '{':
-                # 中括弧で囲まれたパス
-                end = raw_data.index('}', i)
-                path = raw_data[i+1:end]
-                paths.append(path.replace('\\', '/'))
-                i = end + 1
-            elif raw_data[i] in (' ', '\t', '\n', '\r'):
-                i += 1
-            else:
-                # スペースなしのパス（次のスペースまたは末尾まで）
-                end = i
-                while end < len(raw_data) and raw_data[end] not in (' ', '\t', '\n', '\r', '{'):
-                    end += 1
-                path = raw_data[i:end]
-                paths.append(path.replace('\\', '/'))
-                i = end
-        return paths
+        raw_data = (raw_data or "").strip()
+        if not raw_data:
+            return []
+
+        parsed_paths = []
+
+        try:
+            i = 0
+            while i < len(raw_data):
+                if raw_data[i] == '{':
+                    end = raw_data.index('}', i)
+                    parsed_paths.append(raw_data[i + 1:end])
+                    i = end + 1
+                elif raw_data[i] in (' ', '\t', '\n', '\r'):
+                    i += 1
+                elif raw_data[i] in ('"', "'"):
+                    quote = raw_data[i]
+                    end = raw_data.index(quote, i + 1)
+                    parsed_paths.append(raw_data[i + 1:end])
+                    i = end + 1
+                else:
+                    end = i
+                    while end < len(raw_data) and raw_data[end] not in (' ', '\t', '\n', '\r', '{'):
+                        end += 1
+                    parsed_paths.append(raw_data[i:end])
+                    i = end
+        except Exception:
+            try:
+                parsed_paths = list(self.root.tk.splitlist(raw_data))
+            except Exception:
+                parsed_paths = []
+
+        normalized_paths = []
+        for path in parsed_paths:
+            normalized_path = normalize_file_path(path)
+            if normalized_path:
+                normalized_paths.append(normalized_path)
+        return normalized_paths
 
     def _add_files_to_queue(self, file_paths, prompt_on_duplicates=True):
         """ファイルリストをキューに追加（重複検出付き）"""

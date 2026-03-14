@@ -10,6 +10,7 @@ import re
 import subprocess
 import platform
 from datetime import datetime
+from urllib.parse import unquote, urlparse
 
 from .constants import (
     DEFAULT_AUDIO_BITRATE, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS, GEMINI_PRICING,
@@ -120,9 +121,24 @@ def sanitize_filename(name):
 
 def normalize_file_path(file_path):
     """ファイルパスを正規化（D&D対応）"""
-    file_path = file_path.strip()
+    file_path = (file_path or "").strip()
     if file_path.startswith('{') and file_path.endswith('}'):
-        file_path = file_path[1:-1]
+        file_path = file_path[1:-1].strip()
+
+    if len(file_path) >= 2 and file_path[0] == file_path[-1] and file_path[0] in ("'", '"'):
+        file_path = file_path[1:-1].strip()
+
+    if file_path.lower().startswith('file://'):
+        parsed = urlparse(file_path)
+        decoded_path = unquote(parsed.path or "")
+        if parsed.netloc and parsed.netloc.lower() != 'localhost':
+            file_path = f"//{parsed.netloc}{decoded_path}"
+        else:
+            file_path = decoded_path
+
+        if re.match(r'^/[A-Za-z]:/', file_path):
+            file_path = file_path[1:]
+
     return os.path.normpath(file_path)
 
 

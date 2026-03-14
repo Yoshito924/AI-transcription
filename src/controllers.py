@@ -431,7 +431,8 @@ class TranscriptionController:
         invalid = 0
 
         for path in file_paths:
-            abs_path = os.path.abspath(path)
+            normalized_path = normalize_file_path(path)
+            abs_path = os.path.abspath(normalized_path)
 
             # 拡張子チェック
             ext = os.path.splitext(abs_path)[1].lower().lstrip('.')

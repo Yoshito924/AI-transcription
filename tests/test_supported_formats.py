@@ -1,9 +1,12 @@
 import os
+import tkinter as tk
 import unittest
 from unittest.mock import MagicMock
 
+from src.app import TranscriptionApp
 from src.constants import SUPPORTED_AUDIO_FORMATS, SUPPORTED_MEDIA_FILE_GLOB
 from src.controllers import TranscriptionController
+from src.utils import normalize_file_path
 
 
 class SupportedFormatsTests(unittest.TestCase):
@@ -47,6 +50,32 @@ class SupportedFormatsTests(unittest.TestCase):
         self.assertEqual(added, 3)
         self.assertEqual(duplicated_paths, [])
         self.assertEqual(invalid, 1)
+
+    def test_controller_accepts_quoted_mov_path(self):
+        controller = TranscriptionController(MagicMock(), MagicMock(), MagicMock(), {})
+        mov_path = self._make_file('quoted clip.MOV')
+
+        added, duplicated_paths, invalid = controller.add_files_to_queue([f'"{mov_path}"'])
+
+        self.assertEqual(added, 1)
+        self.assertEqual(duplicated_paths, [])
+        self.assertEqual(invalid, 0)
+
+    def test_normalize_file_path_supports_file_uri(self):
+        mov_path = self._make_file('uri clip.MOV')
+        mov_uri = f"file:///{mov_path.replace(os.sep, '/')}"
+
+        self.assertEqual(normalize_file_path(mov_uri), os.path.normpath(mov_path))
+
+    def test_parse_dnd_paths_supports_quoted_entries(self):
+        mov_path = self._make_file('dragged clip.MOV')
+        app = TranscriptionApp.__new__(TranscriptionApp)
+        app.root = MagicMock()
+        app.root.tk = tk.Tcl()
+
+        parsed = app._parse_dnd_paths(f'"{mov_path}"')
+
+        self.assertEqual(parsed, [os.path.normpath(mov_path)])
 
 
 if __name__ == '__main__':
