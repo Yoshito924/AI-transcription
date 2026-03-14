@@ -77,6 +77,16 @@ class SupportedFormatsTests(unittest.TestCase):
 
         self.assertEqual(parsed, [os.path.normpath(mov_path)])
 
+    def test_parse_dnd_paths_supports_single_raw_path_with_spaces(self):
+        mov_path = self._make_file('single raw dragged clip.MOV')
+        app = TranscriptionApp.__new__(TranscriptionApp)
+        app.root = MagicMock()
+        app.root.tk = tk.Tcl()
+
+        parsed = app._parse_dnd_paths(mov_path)
+
+        self.assertEqual(parsed, [os.path.normpath(mov_path)])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -856,7 +856,19 @@ class TranscriptionApp:
         if not raw_data:
             return []
 
+        single_path = normalize_file_path(raw_data)
+        if single_path and os.path.exists(single_path):
+            return [single_path]
+
         parsed_paths = []
+
+        def score_paths(paths):
+            existing = sum(1 for path in paths if os.path.exists(path))
+            supported = sum(
+                1 for path in paths
+                if os.path.splitext(path)[1].lower().lstrip('.') in SUPPORTED_AUDIO_FORMATS
+            )
+            return (existing, supported, -len(paths))
 
         try:
             i = 0
@@ -889,6 +901,18 @@ class TranscriptionApp:
             normalized_path = normalize_file_path(path)
             if normalized_path:
                 normalized_paths.append(normalized_path)
+
+        try:
+            splitlist_paths = [
+                normalize_file_path(path)
+                for path in self.root.tk.splitlist(raw_data)
+                if normalize_file_path(path)
+            ]
+        except Exception:
+            splitlist_paths = []
+
+        if score_paths(splitlist_paths) > score_paths(normalized_paths):
+            return splitlist_paths
         return normalized_paths
 
     def _add_files_to_queue(self, file_paths, prompt_on_duplicates=True):
