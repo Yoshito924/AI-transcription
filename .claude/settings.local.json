@@ -10,7 +10,14 @@
       "Bash(pip install:*)",
       "Bash(ffmpeg:*)",
       "Bash(dir /s /b \"L:\\Dropbox\\programs\\Python_tools\\AI-transcription\")",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(dir:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nコード品質改善: 例外処理・スレッド安全性・ロギング・エラーハンドリングの強化\n\n- bare except を具体的な例外型\\(OSError, json.JSONDecodeError等\\)に置換\n- threading.Lock によるスレッド競合防止を追加\n- print\\(\\) を logger に統一\\(audio_processor, controllers, api_utils\\)\n- Whisperモデルのalias_ofフィールド解決処理を追加\n- セグメントエラーテキストが文字起こし結果に混入する問題を修正\n- マジックナンバーを定数化\\(TOKEN_ESTIMATION_FACTOR, OUTPUT_TOKEN_RATIO\\)\n- エラー分類ロジックを_classify_segment_errorメソッドに分離\n- ファイルコピーをshutil.copyfileに変更しメモリ効率を改善\n- ファイルパス正規化をos.path.normpathに変更しUNCパス対応\n- キャッシュのdirty flagパターン導入で不要なディスク書き込みを削減\n- モデルランキングの重複コードをリファクタリング\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(node scripts/build.js:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }

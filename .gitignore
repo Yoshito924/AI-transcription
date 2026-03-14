@@ -38,6 +38,8 @@ config/
 !config/.gitkeep
 output/
 !output/.gitkeep
+recordings/*
+!recordings/.gitkeep
 
 # ユーザー固有のファイル
 usage_data.json
