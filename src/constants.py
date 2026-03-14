@@ -24,9 +24,18 @@ OVERLAP_SECONDS = 10  # セグメント間のオーバーラップ時間
 SEGMENT_DURATION_SEC = 600  # 10分
 
 # ファイル処理関連
-# 参考: https://ai.google.dev/gemini-api/docs/audio?hl=ja
-# Geminiがサポートする音声形式: WAV, MP3, AIFF, AAC, OGG Vorbis, FLAC
-SUPPORTED_AUDIO_FORMATS = ['mp3', 'wav', 'mp4', 'avi', 'mov', 'm4a', 'flac', 'ogg', 'aiff', 'aac']
+# FFmpegで音声抽出しやすい代表的な音声・動画形式を受け付ける
+SUPPORTED_AUDIO_FORMATS = [
+    'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'oga', 'opus', 'weba',
+    'wma', 'aiff', 'aif', 'caf', 'amr', 'ac3', 'mp2',
+    'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv',
+    'mpeg', 'mpg', '3gp', '3g2', 'ts', 'mts', 'm2ts', 'flv'
+]
+SUPPORTED_MEDIA_FILE_GLOB = ' '.join(f'*.{ext}' for ext in SUPPORTED_AUDIO_FORMATS)
+SUPPORTED_MEDIA_FILE_TYPES = [
+    ('音声・動画ファイル', SUPPORTED_MEDIA_FILE_GLOB),
+    ('すべてのファイル', '*.*')
+]
 AUDIO_MIME_TYPE = 'audio/mpeg'
 # Gemini APIでサポートされる音声MIMEタイプ
 GEMINI_SUPPORTED_AUDIO_MIME_TYPES = {

@@ -19,7 +19,8 @@ from .constants import (
     DEFAULT_RECORDING_GAIN_PERCENT,
     FILE_NAME_DISPLAY_MAX_LENGTH,
     RECORDINGS_DIR,
-    SUPPORTED_AUDIO_FORMATS
+    SUPPORTED_AUDIO_FORMATS,
+    SUPPORTED_MEDIA_FILE_TYPES
 )
 from .utils import (
     open_file,
@@ -678,11 +679,7 @@ class TranscriptionApp:
     
     def browse_file(self, event=None):
         """ファイル選択ダイアログを表示（複数選択対応）"""
-        file_types = [
-            ('音声・動画ファイル', '*.mp3 *.wav *.mp4 *.avi *.mov *.m4a *.flac *.ogg'),
-            ('すべてのファイル', '*.*')
-        ]
-        file_paths = filedialog.askopenfilenames(filetypes=file_types)
+        file_paths = filedialog.askopenfilenames(filetypes=SUPPORTED_MEDIA_FILE_TYPES)
         if file_paths:
             if len(file_paths) == 1:
                 self.load_file(file_paths[0])
