@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import platform
+import webbrowser
 from datetime import datetime
 from urllib.parse import unquote, urlparse
 
@@ -98,6 +99,26 @@ def open_directory(dir_path):
             subprocess.run(['xdg-open', dir_path])
         return True
     except (FileNotFoundError, OSError):
+        return False
+
+
+def open_url(url):
+    """URLを既定のブラウザで開く"""
+    try:
+        if platform.system() == 'Windows':
+            os.startfile(url)
+            return True
+
+        if platform.system() == 'Darwin':
+            subprocess.run(['open', url])
+            return True
+
+        if platform.system() == 'Linux':
+            subprocess.run(['xdg-open', url])
+            return True
+
+        return webbrowser.open(url)
+    except (FileNotFoundError, OSError, webbrowser.Error):
         return False
 
 

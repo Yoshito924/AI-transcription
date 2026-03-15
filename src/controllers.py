@@ -9,6 +9,7 @@
 import os
 import threading
 import datetime
+import tkinter as tk
 from tkinter import messagebox
 
 from .constants import (
@@ -16,7 +17,8 @@ from .constants import (
     FILE_NAME_DISPLAY_MAX_LENGTH,
     TOKEN_ESTIMATION_FACTOR,
     OUTPUT_TOKEN_RATIO,
-    SUPPORTED_AUDIO_FORMATS
+    SUPPORTED_AUDIO_FORMATS,
+    OPENAI_BILLING_OVERVIEW_URL
 )
 from .exceptions import (
     TranscriptionError,
@@ -27,6 +29,7 @@ from .exceptions import (
 from .utils import (
     get_file_size_mb,
     normalize_file_path,
+    open_url,
     truncate_display_name,
     truncate_status_message,
     get_engine_value,
@@ -314,10 +317,83 @@ class TranscriptionController:
         if self.queue_processing:
             filename = os.path.basename(self.current_file) if self.current_file else "unknown"
             self.queue_errors.append((filename, str(exception)))
+            if getattr(exception, 'error_code', None) == "INSUFFICIENT_CREDIT":
+                self.add_log(f"OpenAI Billing: {OPENAI_BILLING_OVERVIEW_URL}")
             self.ui_elements['root'].after(300, self._process_next_in_queue)
             return
 
+        if getattr(exception, 'error_code', None) == "INSUFFICIENT_CREDIT":
+            self._show_openai_billing_dialog(user_message)
+            return
+
         messagebox.showerror("エラー", user_message)
+
+    def _show_openai_billing_dialog(self, user_message):
+        """OpenAI Billing への導線付きエラーダイアログを表示"""
+        root = self.ui_elements['root']
+        self.add_log(f"OpenAI Billing: {OPENAI_BILLING_OVERVIEW_URL}")
+
+        dialog = tk.Toplevel(root)
+        dialog.title("OpenAI Billingの確認")
+        dialog.transient(root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        body = tk.Frame(dialog, padx=18, pady=16)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        message_label = tk.Label(
+            body,
+            text=user_message,
+            justify=tk.LEFT,
+            anchor='w',
+            wraplength=460
+        )
+        message_label.pack(fill=tk.X)
+
+        link_label = tk.Label(
+            body,
+            text=OPENAI_BILLING_OVERVIEW_URL,
+            fg="#2563EB",
+            cursor="hand2",
+            justify=tk.LEFT,
+            anchor='w',
+            wraplength=460
+        )
+        link_label.pack(fill=tk.X, pady=(10, 12))
+        link_label.bind("<Button-1>", lambda _event: self._open_openai_billing())
+
+        button_row = tk.Frame(body)
+        button_row.pack(fill=tk.X)
+
+        open_button = tk.Button(button_row, text="Billingを開く", command=self._open_openai_billing)
+        open_button.pack(side=tk.LEFT)
+
+        close_button = tk.Button(button_row, text="閉じる", command=dialog.destroy)
+        close_button.pack(side=tk.RIGHT)
+
+        dialog.update_idletasks()
+        dialog_width = dialog.winfo_reqwidth()
+        dialog_height = dialog.winfo_reqheight()
+        root_x = root.winfo_rootx()
+        root_y = root.winfo_rooty()
+        root_width = root.winfo_width()
+        root_height = root.winfo_height()
+        pos_x = root_x + max((root_width - dialog_width) // 2, 0)
+        pos_y = root_y + max((root_height - dialog_height) // 2, 0)
+        dialog.geometry(f"+{pos_x}+{pos_y}")
+
+        open_button.focus_set()
+        root.wait_window(dialog)
+
+    def _open_openai_billing(self):
+        """OpenAI Billing ページを既定ブラウザで開く"""
+        if not open_url(OPENAI_BILLING_OVERVIEW_URL):
+            messagebox.showerror(
+                "エラー",
+                "ブラウザで OpenAI Billing ページを開けませんでした。\n"
+                f"{OPENAI_BILLING_OVERVIEW_URL}"
+            )
     
     def _update_progress_bar(self, value):
         """プログレスバーの値とラベルを更新"""

@@ -557,6 +557,8 @@ class FileProcessor:
                 progress_callback(80)
             return text
 
+        except (ApiConnectionError, AudioProcessingError, TranscriptionError):
+            raise
         except Exception as e:
             logger.error(f"Whisper API文字起こしエラー: {str(e)}")
             raise TranscriptionError(f"Whisper API文字起こしに失敗しました: {str(e)}")
@@ -961,6 +963,16 @@ class FileProcessor:
             error_category = "モデル非対応"
             error_detail = "選択されたモデルは音声入力に対応していません"
             solution = "別のモデルを選択してください。Flash系モデル（gemini-2.5-flash等）の使用を推奨します。"
+        elif (
+            (isinstance(exception, ApiConnectionError) and exception.error_code == "INSUFFICIENT_CREDIT")
+            or 'insufficient_quota' in error_str
+            or 'current quota' in error_str
+            or 'billing' in error_str
+            or 'credit balance' in error_str
+        ):
+            error_category = "利用残高不足"
+            error_detail = "OpenAI API の利用残高または請求設定に問題があります"
+            solution = "OpenAI の Billing でクレジット残高と支払い方法を確認し、残高が 0 の場合はチャージ後に再実行してください。"
         elif 'rate limit' in error_str or '429' in error_str:
             error_category = "APIレート制限"
             error_detail = "APIの呼び出し回数が上限に達しました"

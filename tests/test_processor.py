@@ -31,6 +31,18 @@ class SlowWhisperApiService:
         }
 
 
+class QuotaWhisperApiService:
+    def __init__(self):
+        self.api_key = "test"
+
+    def transcribe(self, *args, **kwargs):
+        raise ApiConnectionError(
+            "quota exceeded",
+            error_code="INSUFFICIENT_CREDIT",
+            user_message="OpenAI APIの利用残高が不足している可能性があります。"
+        )
+
+
 class FileProcessorTests(unittest.TestCase):
     def make_output_dir(self):
         output_dir = os.path.join(os.getcwd(), 'output')
@@ -136,6 +148,23 @@ class FileProcessorTests(unittest.TestCase):
 
         self.assertEqual(result, "ok")
         self.assertTrue(any("経過" in message for message in statuses))
+
+    def test_whisper_api_single_file_preserves_insufficient_credit_error(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor.whisper_api_service = QuotaWhisperApiService()
+        processor.audio_processor.get_audio_duration = lambda path: 60
+
+        with patch('src.processor.get_file_size_mb', return_value=5.0):
+            with self.assertRaises(ApiConnectionError) as ctx:
+                processor._perform_whisper_api_transcription(
+                    audio_path="dummy.mp3",
+                    api_key="test",
+                    update_status=lambda message: None
+                )
+
+        self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_CREDIT")
+        self.assertIn("利用残高", ctx.exception.user_message)
 
 
 if __name__ == '__main__':

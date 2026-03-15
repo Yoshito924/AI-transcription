@@ -9,6 +9,7 @@ import os
 from typing import Optional, Dict, Any, Tuple, List
 
 from .exceptions import TranscriptionError, ApiConnectionError
+from .constants import OPENAI_BILLING_OVERVIEW_URL
 from .logger import logger
 from .utils import format_duration, get_file_size_mb
 
@@ -159,24 +160,42 @@ class WhisperApiService:
             
         except Exception as e:
             error_msg = str(e)
+            error_text = error_msg.lower()
+            error_code = str(getattr(e, 'code', '') or '').lower()
+            error_type = str(getattr(e, 'type', '') or '').lower()
+            error_markers = " ".join(marker for marker in (error_text, error_code, error_type) if marker)
             logger.error(f"Whisper API文字起こしエラー: {error_msg}")
             
             # エラーの種類に応じた詳細メッセージ
-            if 'api_key' in error_msg.lower() or 'authentication' in error_msg.lower():
+            if 'api_key' in error_text or 'authentication' in error_text:
                 raise ApiConnectionError(
                     "OpenAI APIキーが無効です。正しいAPIキーを設定してください。"
                 )
-            elif 'timeout' in error_msg.lower() or 'timed out' in error_msg.lower():
+            elif (
+                'insufficient_quota' in error_markers
+                or 'current quota' in error_markers
+                or 'billing' in error_markers
+                or 'credit balance' in error_markers
+            ):
+                raise ApiConnectionError(
+                    "OpenAI APIの利用残高が不足している可能性があります。Billing の残高と請求設定を確認してください。",
+                    error_code="INSUFFICIENT_CREDIT",
+                    solution=(
+                        "OpenAI の Billing でクレジット残高と支払い方法を確認し、残高が 0 の場合はチャージ後に再実行してください。\n"
+                        f"{OPENAI_BILLING_OVERVIEW_URL}"
+                    )
+                )
+            elif 'timeout' in error_text or 'timed out' in error_text:
                 raise ApiConnectionError(
                     "Whisper APIの応答がタイムアウトしました。しばらく待ってから再実行してください。",
                     error_code="API_TIMEOUT",
                     solution="長い音声は分割して再実行するか、時間を置いてから再試行してください。"
                 )
-            elif 'rate_limit' in error_msg.lower() or '429' in error_msg:
+            elif 'rate_limit' in error_text or '429' in error_msg:
                 raise ApiConnectionError(
                     "APIのレート制限に達しました。しばらく待ってから再度実行してください。"
                 )
-            elif 'file_size' in error_msg.lower() or 'too large' in error_msg.lower():
+            elif 'file_size' in error_text or 'too large' in error_text:
                 raise TranscriptionError(
                     "ファイルサイズが大きすぎます。"
                     "Whisper APIは25MB以下のファイルをサポートしています。"

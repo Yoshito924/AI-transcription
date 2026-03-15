@@ -37,6 +37,7 @@ SUPPORTED_MEDIA_FILE_TYPES = [
     ('すべてのファイル', '*.*')
 ]
 AUDIO_MIME_TYPE = 'audio/mpeg'
+OPENAI_BILLING_OVERVIEW_URL = "https://platform.openai.com/settings/organization/billing/overview"
 # Gemini APIでサポートされる音声MIMEタイプ
 GEMINI_SUPPORTED_AUDIO_MIME_TYPES = {
     'wav': 'audio/wav',
