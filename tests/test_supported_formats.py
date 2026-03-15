@@ -1,7 +1,7 @@
 import os
 import tkinter as tk
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.app import TranscriptionApp
 from src.constants import SUPPORTED_AUDIO_FORMATS, SUPPORTED_MEDIA_FILE_GLOB
@@ -86,6 +86,25 @@ class SupportedFormatsTests(unittest.TestCase):
         parsed = app._parse_dnd_paths(mov_path)
 
         self.assertEqual(parsed, [os.path.normpath(mov_path)])
+
+    def test_open_history_directory_uses_history_metadata_parent(self):
+        app = TranscriptionApp.__new__(TranscriptionApp)
+        app.history_meta_path = os.path.join('data', 'processing_history.json')
+
+        with patch('src.app.open_directory', return_value=True) as open_directory:
+            app.open_history_directory()
+
+        open_directory.assert_called_once_with('data')
+
+    def test_open_history_directory_shows_error_when_open_fails(self):
+        app = TranscriptionApp.__new__(TranscriptionApp)
+        app.history_meta_path = os.path.join('data', 'processing_history.json')
+
+        with patch('src.app.open_directory', return_value=False), \
+             patch('src.app.messagebox.showerror') as show_error:
+            app.open_history_directory()
+
+        show_error.assert_called_once_with("エラー", "処理履歴のディレクトリを開けません。")
 
 
 if __name__ == '__main__':

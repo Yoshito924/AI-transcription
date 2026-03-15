@@ -12,6 +12,7 @@ from .config import Config
 from .processor import FileProcessor
 from .audio_recorder import MicrophoneRecorder
 from .controllers import TranscriptionController
+from .terminal_cleanup import schedule_launch_terminal_close
 from .usage_tracker import UsageTracker
 from .constants import (
     OUTPUT_DIR,
@@ -576,6 +577,10 @@ class TranscriptionApp:
         
         # アプリケーションを終了
         self.root.destroy()
+        try:
+            schedule_launch_terminal_close()
+        except Exception:
+            pass
     
     def toggle_api_key_visibility(self):
         """APIキーの表示/非表示を切り替える"""
@@ -1097,6 +1102,12 @@ class TranscriptionApp:
         """出力フォルダを開く"""
         if not open_directory(self.output_dir):
             messagebox.showerror("エラー", "出力フォルダを開けません。")
+
+    def open_history_directory(self):
+        """処理履歴メタデータを保存しているディレクトリを開く"""
+        history_dir = os.path.dirname(self.history_meta_path)
+        if not open_directory(history_dir):
+            messagebox.showerror("エラー", "処理履歴のディレクトリを開けません。")
 
     def open_source_file_folder(self, event=None):
         """選択されたファイルの元ファイルのフォルダをエクスプローラーで開く"""

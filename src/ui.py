@@ -1798,7 +1798,13 @@ def create_history_section(parent, app, theme, widgets):
         button_frame, "出力フォルダを開く", ICONS['folder'], 'Secondary',
         command=app.open_output_folder
     )
-    folder_btn.pack(side=tk.LEFT)
+    folder_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+    history_folder_btn = widgets.create_icon_button(
+        button_frame, "履歴フォルダを開く", ICONS['folder'], 'Secondary',
+        command=app.open_history_directory
+    )
+    history_folder_btn.pack(side=tk.LEFT)
 
     delete_btn = widgets.create_icon_button(
         button_frame, "削除", ICONS['delete'], 'Secondary',
