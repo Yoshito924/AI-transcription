@@ -1103,6 +1103,21 @@ class TranscriptionApp:
         if not open_directory(self.output_dir):
             messagebox.showerror("エラー", "出力フォルダを開けません。")
 
+    def open_selected_output_directory(self, event=None):
+        """選択された出力ファイルの保存先ディレクトリを開く"""
+        tree = self.ui_elements['history_tree']
+        selection = tree.selection()
+        if not selection:
+            messagebox.showinfo("情報", "履歴からファイルを選択してください。")
+            return
+
+        item = tree.item(selection[0])
+        filename = item['values'][0]
+        directory = os.path.dirname(os.path.join(self.output_dir, filename))
+
+        if not open_directory(directory):
+            messagebox.showerror("エラー", f"保存先ディレクトリを開けません。\n{directory}")
+
     def open_history_directory(self):
         """処理履歴メタデータを保存しているディレクトリを開く"""
         history_dir = os.path.dirname(self.history_meta_path)

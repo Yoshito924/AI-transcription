@@ -1721,6 +1721,12 @@ def create_history_section(parent, app, theme, widgets):
     )
     refresh_btn.pack(side=tk.RIGHT)
 
+    open_selected_dir_btn = widgets.create_icon_button(
+        header_frame, "保存先", ICONS['folder'], 'Secondary',
+        command=app.open_selected_output_directory
+    )
+    open_selected_dir_btn.pack(side=tk.RIGHT, padx=(0, 6))
+
     history_desc = tk.Label(
         card,
         text="出力済みテキストの一覧です。ダブルクリックで開けます。",
@@ -1782,35 +1788,32 @@ def create_history_section(parent, app, theme, widgets):
     button_frame = tk.Frame(card, bg=theme.colors['surface'])
     button_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(0, CARD_PADDING))
 
+    for col in range(3):
+        button_frame.grid_columnconfigure(col, weight=1, uniform='history_actions')
+
     open_btn = widgets.create_icon_button(
-        button_frame, "ファイルを開く", ICONS['document'], 'Secondary',
+        button_frame, "開く", ICONS['document'], 'Secondary',
         command=app.open_output_file
     )
-    open_btn.pack(side=tk.LEFT, padx=(0, 5))
+    open_btn.grid(row=0, column=0, sticky='ew', padx=(0, 4), pady=(0, 6))
 
     source_folder_btn = widgets.create_icon_button(
-        button_frame, "元ファイルのフォルダ", ICONS['file'], 'Secondary',
+        button_frame, "元フォルダ", ICONS['file'], 'Secondary',
         command=app.open_source_file_folder
     )
-    source_folder_btn.pack(side=tk.LEFT, padx=(0, 5))
-
-    folder_btn = widgets.create_icon_button(
-        button_frame, "出力フォルダを開く", ICONS['folder'], 'Secondary',
-        command=app.open_output_folder
-    )
-    folder_btn.pack(side=tk.LEFT, padx=(0, 5))
+    source_folder_btn.grid(row=0, column=1, sticky='ew', padx=4, pady=(0, 6))
 
     history_folder_btn = widgets.create_icon_button(
-        button_frame, "履歴フォルダを開く", ICONS['folder'], 'Secondary',
+        button_frame, "履歴データ", ICONS['folder'], 'Secondary',
         command=app.open_history_directory
     )
-    history_folder_btn.pack(side=tk.LEFT)
+    history_folder_btn.grid(row=0, column=2, sticky='ew', padx=(4, 0), pady=(0, 6))
 
     delete_btn = widgets.create_icon_button(
         button_frame, "削除", ICONS['delete'], 'Secondary',
         command=app.delete_output_file
     )
-    delete_btn.pack(side=tk.RIGHT)
+    delete_btn.grid(row=1, column=2, sticky='ew', padx=(4, 0), pady=(0, 0))
 
     card.history_tree = history_tree
 
