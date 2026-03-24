@@ -245,6 +245,14 @@ def get_gemini_safety_filter_recovery_value(ui_elements, default='segment'):
     return default
 
 
+def get_trim_long_silence_value(ui_elements, default=True):
+    """UI要素から長い無音圧縮の有効/無効を取得する"""
+    trim_long_silence_var = ui_elements.get('trim_long_silence_var', None)
+    if trim_long_silence_var is not None:
+        return bool(trim_long_silence_var.get())
+    return default
+
+
 def calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_input=False, audio_duration_seconds=None):
     """Gemini APIの使用料金を計算する
 

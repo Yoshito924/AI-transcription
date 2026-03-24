@@ -12,10 +12,12 @@ import threading
 import google.generativeai as genai
 
 from .constants import (
+    DEFAULT_TRIM_LONG_SILENCE,
     MAX_AUDIO_SIZE_MB,
     WHISPER_API_MAX_AUDIO_SIZE_MB,
     MAX_AUDIO_DURATION_SEC,
     SEGMENT_DURATION_SEC,
+    SILENCE_TRIM_MIN_REDUCTION_SEC,
     AUDIO_MIME_TYPE,
     OUTPUT_DIR,
     AI_GENERATION_CONFIG,
@@ -124,6 +126,36 @@ class FileProcessor:
             stop_event.set()
             heartbeat_thread.join(timeout=0.1)
 
+    def _build_silence_trim_summary(self, before_sec, after_sec, prefix="長い無音を圧縮しました"):
+        """長い無音圧縮の削減量をログ向けに整形する"""
+        if before_sec is None or after_sec is None:
+            return None
+
+        reduction_sec = max(0.0, before_sec - after_sec)
+        reduction_ratio = (reduction_sec / before_sec * 100.0) if before_sec else 0.0
+        return (
+            f"{prefix}: {format_duration(before_sec)} → {format_duration(after_sec)} "
+            f"({format_duration(reduction_sec)}短縮 / {reduction_ratio:.1f}%削減)"
+        )
+
+    def _log_cached_silence_trim_summary(self, original_duration_sec, cache_entry, update_status):
+        """キャッシュ再利用時にも無音圧縮の削減量を表示する"""
+        cached_duration = cache_entry.get('duration')
+        if original_duration_sec is None or cached_duration is None:
+            return
+
+        reduction_sec = original_duration_sec - cached_duration
+        if reduction_sec < SILENCE_TRIM_MIN_REDUCTION_SEC:
+            return
+
+        summary = self._build_silence_trim_summary(
+            original_duration_sec,
+            cached_duration,
+            prefix="長い無音圧縮を再利用"
+        )
+        if summary:
+            update_status(summary)
+
     def _check_response_safety(self, response, segment_num=None):
         """Gemini APIレスポンスの安全性チェック
 
@@ -215,7 +247,8 @@ class FileProcessor:
                     save_to_output_dir=True, save_to_source_dir=False,
                     progress_value_callback=None, gemini_api_key=None,
                     time_tracker=None, whisper_api_model=None,
-                    gemini_safety_filter_recovery='segment'):
+                    gemini_safety_filter_recovery='segment',
+                    trim_long_silence=DEFAULT_TRIM_LONG_SILENCE):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
         self.last_transcription_model_name = None
@@ -236,7 +269,12 @@ class FileProcessor:
         try:
             # 音声ファイルの準備（キャッシュ対応）
             update_progress(2)
-            audio_path, cached_segments, from_cache = self._prepare_audio_file(input_file, update_status, engine=engine)
+            audio_path, cached_segments, from_cache = self._prepare_audio_file(
+                input_file,
+                update_status,
+                engine=engine,
+                trim_long_silence=trim_long_silence
+            )
             update_progress(10)
 
             # ETA予測を表示
@@ -455,7 +493,8 @@ class FileProcessor:
             cleanup_segments=cleanup_segments
         )
     
-    def _prepare_audio_file(self, input_file, update_status, engine='gemini'):
+    def _prepare_audio_file(self, input_file, update_status, engine='gemini',
+                            trim_long_silence=DEFAULT_TRIM_LONG_SILENCE):
         """音声ファイルの準備（変換・圧縮・分割）
 
         キャッシュがあれば再利用、なければ処理してキャッシュに保存
@@ -474,25 +513,73 @@ class FileProcessor:
         logger.info(f"音声ファイル準備開始: {os.path.basename(input_file)}, サイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
         update_status(f"処理開始: ファイルサイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
 
+        cache_profile = {
+            'preprocess_version': 2,
+            'trim_long_silence': bool(trim_long_silence),
+        }
+
         # キャッシュをチェック
         if self.enable_cache and self.cache_manager:
-            cache_entry = self.cache_manager.get_cache_entry(input_file)
+            cache_entry = self.cache_manager.get_cache_entry(input_file, cache_profile=cache_profile)
             if cache_entry:
                 cache_id = cache_entry['cache_id']
                 processed_audio, segments = self.cache_manager.get_cached_files(cache_id)
 
                 if processed_audio:
+                    cached_duration = cache_entry.get('duration')
+                    if cached_duration:
+                        self.last_audio_duration_sec = cached_duration
                     update_status(f"✓ キャッシュから読み込み: {os.path.basename(input_file)}")
+                    if trim_long_silence:
+                        self._log_cached_silence_trim_summary(audio_duration_sec, cache_entry, update_status)
                     logger.info(f"キャッシュ使用: processed={processed_audio}, segments={len(segments) if segments else 0}")
                     return processed_audio, segments, True
 
         # キャッシュがない場合は通常処理
         update_status("音声ファイルを変換中...")
-        audio_path = self.audio_processor.convert_audio(input_file)
+        audio_path = self.audio_processor.convert_audio(input_file, trim_long_silence=False)
+
+        processed_duration_sec = self.audio_processor.get_audio_duration(audio_path) or audio_duration_sec
+
+        if trim_long_silence:
+            try:
+                trimmed_audio_path, pre_trim_duration_sec, trimmed_duration_sec = self.audio_processor.reduce_long_silence(
+                    audio_path,
+                    callback=update_status
+                )
+                reduction_sec = pre_trim_duration_sec - trimmed_duration_sec
+                if reduction_sec >= SILENCE_TRIM_MIN_REDUCTION_SEC:
+                    update_status(
+                        self._build_silence_trim_summary(
+                            pre_trim_duration_sec,
+                            trimmed_duration_sec
+                        )
+                    )
+                    try:
+                        os.unlink(audio_path)
+                    except OSError:
+                        logger.warning(f"元の変換音声の削除に失敗: {audio_path}")
+                    audio_path = trimmed_audio_path
+                    processed_duration_sec = trimmed_duration_sec
+                else:
+                    try:
+                        os.unlink(trimmed_audio_path)
+                    except OSError:
+                        logger.warning(f"無音圧縮の一時ファイル削除に失敗: {trimmed_audio_path}")
+                    logger.info(self._build_silence_trim_summary(
+                        pre_trim_duration_sec,
+                        trimmed_duration_sec,
+                        prefix="無音圧縮の効果が小さいため元の音声を使用"
+                    ))
+            except AudioProcessingError as e:
+                logger.warning(f"無音圧縮をスキップ: {str(e)}")
+                update_status("注意: 長い無音の圧縮はスキップし、そのまま処理を続行します")
+
+        self.last_audio_duration_sec = processed_duration_sec
 
         # エンジンごとに、前処理段階で分割が必要かを判定
         file_size_mb = get_file_size_mb(audio_path)
-        is_too_long = bool(audio_duration_sec and audio_duration_sec > MAX_AUDIO_DURATION_SEC)
+        is_too_long = bool(processed_duration_sec and processed_duration_sec > MAX_AUDIO_DURATION_SEC)
         needs_split = False
 
         if engine == 'whisper-api':
@@ -515,7 +602,8 @@ class FileProcessor:
         if self.enable_cache and self.cache_manager:
             try:
                 self.cache_manager.save_cache_entry(
-                    input_file, audio_path, segment_files, audio_duration_sec
+                    input_file, audio_path, segment_files, processed_duration_sec,
+                    cache_profile=cache_profile
                 )
                 update_status("✓ キャッシュに保存しました")
             except Exception as e:

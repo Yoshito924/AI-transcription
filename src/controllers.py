@@ -35,7 +35,8 @@ from .utils import (
     get_engine_value,
     get_whisper_model_value,
     get_whisper_api_model_value,
-    get_gemini_safety_filter_recovery_value
+    get_gemini_safety_filter_recovery_value,
+    get_trim_long_silence_value
 )
 from .logger import logger
 from .processing_time_tracker import ProcessingTimeTracker
@@ -261,6 +262,7 @@ class TranscriptionController:
             whisper_model = get_whisper_model_value(self.ui_elements)
             whisper_api_model = get_whisper_api_model_value(self.ui_elements)
             gemini_safety_filter_recovery = get_gemini_safety_filter_recovery_value(self.ui_elements)
+            trim_long_silence = get_trim_long_silence_value(self.ui_elements)
 
             # エンジンに応じた開始メッセージを表示
             if engine_value == 'whisper':
@@ -296,7 +298,8 @@ class TranscriptionController:
                 gemini_api_key=gemini_api_key,
                 time_tracker=self.time_tracker,
                 whisper_api_model=whisper_api_model,
-                gemini_safety_filter_recovery=gemini_safety_filter_recovery
+                gemini_safety_filter_recovery=gemini_safety_filter_recovery,
+                trim_long_silence=trim_long_silence
             )
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))

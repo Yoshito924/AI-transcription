@@ -15,7 +15,10 @@ from .constants import (
     MAX_BITRATE,
     MAX_COMPRESSION_ATTEMPTS,
     OVERLAP_SECONDS,
-    SEGMENT_DURATION_SEC
+    SEGMENT_DURATION_SEC,
+    SILENCE_TRIM_MIN_SILENCE_SEC,
+    SILENCE_TRIM_KEEP_SILENCE_SEC,
+    SILENCE_TRIM_THRESHOLD_DB
 )
 from .exceptions import AudioProcessingError
 from .utils import format_duration, get_file_size_mb
@@ -54,6 +57,92 @@ class AudioProcessor:
         except Exception as e:
             logger.error(f"音声長さの取得中に例外が発生: {file_path}", exc_info=True)
             return None
+
+    def _build_silence_reduction_filter(self,
+                                        min_silence_sec=SILENCE_TRIM_MIN_SILENCE_SEC,
+                                        keep_silence_sec=SILENCE_TRIM_KEEP_SILENCE_SEC,
+                                        threshold_db=SILENCE_TRIM_THRESHOLD_DB):
+        """ハムノイズ・環境音のみの長い区間を圧縮するFFmpegフィルタを構築"""
+        threshold_text = f"{threshold_db}dB" if isinstance(threshold_db, (int, float)) else str(threshold_db)
+        return (
+            "silenceremove="
+            f"start_periods=1:"
+            f"start_duration={min_silence_sec}:"
+            f"start_threshold={threshold_text}:"
+            f"start_silence={keep_silence_sec}:"
+            f"stop_periods=-1:"
+            f"stop_duration={min_silence_sec}:"
+            f"stop_threshold={threshold_text}:"
+            f"stop_silence={keep_silence_sec}:"
+            "detection=rms"
+        )
+
+    def reduce_long_silence(self, input_file_path, callback=None,
+                            min_silence_sec=SILENCE_TRIM_MIN_SILENCE_SEC,
+                            keep_silence_sec=SILENCE_TRIM_KEEP_SILENCE_SEC,
+                            threshold_db=SILENCE_TRIM_THRESHOLD_DB):
+        """長い近似無音区間を圧縮した音声ファイルを生成する"""
+        def update_status(message):
+            logger.info(message)
+            if callback:
+                callback(message)
+
+        if not os.path.exists(input_file_path):
+            raise AudioProcessingError(f"ファイル {input_file_path} が見つかりません")
+
+        duration = self.get_audio_duration(input_file_path)
+        if duration is None or duration <= 0:
+            raise AudioProcessingError("音声ファイルの長さを取得できませんでした")
+
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+            output_path = temp_file.name
+
+        try:
+            timeout = max(120, int(duration * 2))
+            filter_text = self._build_silence_reduction_filter(
+                min_silence_sec=min_silence_sec,
+                keep_silence_sec=keep_silence_sec,
+                threshold_db=threshold_db
+            )
+            update_status(
+                "長い無音を圧縮中... "
+                f"(しきい値 {threshold_db}dB / {min_silence_sec:.1f}秒以上)"
+            )
+
+            command = [
+                'ffmpeg',
+                '-nostdin',
+                '-i', input_file_path,
+                '-y',
+                '-af', filter_text,
+                '-c:a', 'libmp3lame',
+                '-b:a', DEFAULT_AUDIO_BITRATE,
+                output_path
+            ]
+
+            process = subprocess.run(
+                command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                timeout=timeout
+            )
+
+            if process.returncode != 0:
+                error_msg = process.stderr.decode('utf-8', errors='replace')
+                if len(error_msg) > 500:
+                    error_msg = "...\n" + error_msg[-500:]
+                raise AudioProcessingError(f"無音圧縮エラー (returncode={process.returncode}): {error_msg}")
+
+            reduced_duration = self.get_audio_duration(output_path)
+            if reduced_duration is None or reduced_duration <= 0:
+                raise AudioProcessingError("無音圧縮後の音声長を取得できませんでした")
+
+            return output_path, duration, reduced_duration
+
+        except Exception:
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+            raise
     
     def split_audio(self, input_file_path, segment_duration_sec=SEGMENT_DURATION_SEC, callback=None, overlap_sec=OVERLAP_SECONDS):
         """音声ファイルを指定された時間（デフォルト10分）ごとに分割する
@@ -341,7 +430,8 @@ class AudioProcessor:
     def convert_audio(self, input_file, output_format='mp3',
                      bitrate=DEFAULT_AUDIO_BITRATE,
                      sample_rate=DEFAULT_SAMPLE_RATE,
-                     channels=DEFAULT_CHANNELS):
+                     channels=DEFAULT_CHANNELS,
+                     trim_long_silence=False):
         """音声/動画ファイルを指定したフォーマットに変換する"""
         with tempfile.NamedTemporaryFile(suffix=f'.{output_format}', delete=False) as temp_file:
             output_path = temp_file.name
@@ -366,6 +456,12 @@ class AudioProcessor:
                 output_path
             ]
 
+            if trim_long_silence:
+                cmd[cmd.index(output_path):cmd.index(output_path)] = [
+                    '-af',
+                    self._build_silence_reduction_filter()
+                ]
+
             logger.info(f"音声変換開始: {os.path.basename(input_file)} (タイムアウト: {timeout}秒)")
 
             result = subprocess.run(
@@ -377,10 +473,31 @@ class AudioProcessor:
 
             if result.returncode != 0:
                 error_msg = result.stderr.decode('utf-8', errors='replace')
+                if trim_long_silence:
+                    logger.warning(f"無音圧縮付き変換に失敗したため通常変換へフォールバック: {error_msg}")
+                    fallback_cmd = [
+                        'ffmpeg', '-y',
+                        '-nostdin',
+                        '-i', input_file,
+                        '-vn',
+                        '-ar', str(sample_rate),
+                        '-ac', str(channels),
+                        '-b:a', bitrate,
+                        output_path
+                    ]
+                    result = subprocess.run(
+                        fallback_cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        timeout=timeout
+                    )
+                    error_msg = result.stderr.decode('utf-8', errors='replace')
+
                 # エラーメッセージが長い場合は末尾のみ表示
-                if len(error_msg) > 500:
-                    error_msg = "...\n" + error_msg[-500:]
-                raise AudioProcessingError(f"音声変換エラー (returncode={result.returncode}): {error_msg}")
+                if result.returncode != 0:
+                    if len(error_msg) > 500:
+                        error_msg = "...\n" + error_msg[-500:]
+                    raise AudioProcessingError(f"音声変換エラー (returncode={result.returncode}): {error_msg}")
 
             return output_path
 

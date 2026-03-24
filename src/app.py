@@ -32,6 +32,7 @@ from .utils import (
     get_engine_value,
     get_whisper_model_value,
     get_gemini_safety_filter_recovery_value,
+    get_trim_long_silence_value,
     format_duration,
     format_file_size
 )
@@ -1232,10 +1233,12 @@ class TranscriptionApp:
         if hasattr(self, 'ui_elements'):
             save_to_output = self.ui_elements.get('save_to_output_var')
             save_to_source = self.ui_elements.get('save_to_source_var')
+            trim_long_silence = get_trim_long_silence_value(self.ui_elements)
             if save_to_output is not None:
                 self.config.set("save_to_output_dir", save_to_output.get())
             if save_to_source is not None:
                 self.config.set("save_to_source_dir", save_to_source.get())
+            self.config.set("trim_long_silence", trim_long_silence)
 
     def _save_recording_settings(self):
         """録音設定を保存"""

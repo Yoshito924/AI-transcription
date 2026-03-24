@@ -820,6 +820,28 @@ def create_file_section(parent, app, theme, widgets):
         style='Modern.TCheckbutton'
     ).pack(anchor='w', pady=(4, 0))
 
+    trim_long_silence_var = tk.BooleanVar(
+        value=app.config.get("trim_long_silence", True)
+    )
+
+    ttk.Checkbutton(
+        right_inner, text="長い無音を自動圧縮",
+        variable=trim_long_silence_var, command=lambda: on_trim_long_silence_toggle(),
+        style='Modern.TCheckbutton'
+    ).pack(anchor='w', pady=(10, 0))
+
+    trim_long_silence_desc = tk.Label(
+        right_inner,
+        text="ハムノイズや環境音だけの区間が 2.5 秒以上続く場合に短く詰め、APIコストと処理時間を下げます。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant'],
+        justify='left',
+        anchor='w'
+    )
+    trim_long_silence_desc.pack(anchor='w', fill=tk.X, pady=(2, 0))
+    _bind_dynamic_wraplength(trim_long_silence_desc, 24)
+
     summary_grid = tk.Frame(frame, bg=theme.colors['surface'])
     summary_grid.pack(fill=tk.X, padx=pad, pady=(0, 8))
     summary_grid.grid_columnconfigure(0, weight=1)
@@ -1029,6 +1051,10 @@ def create_file_section(parent, app, theme, widgets):
         app.config.save()
         update_save_summary()
 
+    def on_trim_long_silence_toggle():
+        app.config.set("trim_long_silence", trim_long_silence_var.get())
+        app.config.save()
+
     def on_engine_change():
         engine_value = engine_var.get()
         is_gemini = engine_value == "gemini"
@@ -1119,6 +1145,7 @@ def create_file_section(parent, app, theme, widgets):
     frame.whisper_api_display_to_model = whisper_api_display_to_model
     frame.gemini_safety_filter_recovery_var = gemini_recovery_var
     frame.gemini_safety_filter_recovery_display_to_mode = gemini_recovery_display_to_mode
+    frame.trim_long_silence_var = trim_long_silence_var
     frame.save_to_output_var = save_to_output_var
     frame.save_to_source_var = save_to_source_var
     frame.queue_frame = queue_frame
@@ -2095,6 +2122,7 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'whisper_api_display_to_model': file_section.whisper_api_display_to_model,
         'gemini_safety_filter_recovery_var': file_section.gemini_safety_filter_recovery_var,
         'gemini_safety_filter_recovery_display_to_mode': file_section.gemini_safety_filter_recovery_display_to_mode,
+        'trim_long_silence_var': file_section.trim_long_silence_var,
         'save_to_output_var': file_section.save_to_output_var,
         'save_to_source_var': file_section.save_to_source_var,
         'recording_status_label': recording_section.recording_status_label,

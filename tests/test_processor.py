@@ -112,6 +112,74 @@ class FileProcessorTests(unittest.TestCase):
 
         self.assertIn("APIキーが無効です", ctx.exception.user_message)
 
+    def test_prepare_audio_file_uses_trimmed_duration_for_followup_processing(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor.enable_cache = True
+        processor.cache_manager = MagicMock()
+        processor.cache_manager.get_cache_entry.return_value = None
+        processor.audio_processor.get_audio_duration = MagicMock(side_effect=[7200.0, 7200.0])
+        processor.audio_processor.convert_audio = MagicMock(return_value="processed.mp3")
+        processor.audio_processor.reduce_long_silence = MagicMock(return_value=("trimmed.mp3", 7200.0, 120.0))
+        statuses = []
+
+        with patch('src.processor.get_file_size_mb', side_effect=[5124.0, 188.0]), \
+             patch('src.processor.os.unlink'):
+            audio_path, segments, from_cache = processor._prepare_audio_file(
+                "dummy.mp4",
+                statuses.append,
+                engine='gemini',
+                trim_long_silence=True
+            )
+
+        self.assertEqual(audio_path, "trimmed.mp3")
+        self.assertIsNone(segments)
+        self.assertFalse(from_cache)
+        self.assertEqual(processor.last_audio_duration_sec, 120.0)
+        compression_messages = [message for message in statuses if "長い無音を圧縮しました" in message]
+        self.assertTrue(compression_messages)
+        self.assertIn("1時間58分0秒短縮", compression_messages[0])
+        self.assertIn("98.3%削減", compression_messages[0])
+        processor.cache_manager.get_cache_entry.assert_called_once_with(
+            "dummy.mp4",
+            cache_profile={'preprocess_version': 2, 'trim_long_silence': True}
+        )
+        self.assertEqual(processor.cache_manager.save_cache_entry.call_args.args[3], 120.0)
+        self.assertEqual(
+            processor.cache_manager.save_cache_entry.call_args.kwargs['cache_profile'],
+            {'preprocess_version': 2, 'trim_long_silence': True}
+        )
+
+    def test_prepare_audio_file_logs_trim_summary_when_loading_from_cache(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor.enable_cache = True
+        processor.cache_manager = MagicMock()
+        processor.cache_manager.get_cache_entry.return_value = {
+            'cache_id': 'cache-1',
+            'duration': 120.0,
+        }
+        processor.cache_manager.get_cached_files.return_value = ("cached.mp3", None)
+        processor.audio_processor.get_audio_duration = MagicMock(return_value=7200.0)
+        statuses = []
+
+        with patch('src.processor.get_file_size_mb', return_value=5124.0):
+            audio_path, segments, from_cache = processor._prepare_audio_file(
+                "dummy.mp4",
+                statuses.append,
+                engine='gemini',
+                trim_long_silence=True
+            )
+
+        self.assertEqual(audio_path, "cached.mp3")
+        self.assertIsNone(segments)
+        self.assertTrue(from_cache)
+        self.assertEqual(processor.last_audio_duration_sec, 120.0)
+        cache_messages = [message for message in statuses if "長い無音圧縮を再利用" in message]
+        self.assertTrue(cache_messages)
+        self.assertIn("1時間58分0秒短縮", cache_messages[0])
+        self.assertIn("98.3%削減", cache_messages[0])
+
     def test_gemini_large_file_ignores_cached_segments_and_uses_single_path(self):
         temp_dir = self.make_output_dir()
         processor = FileProcessor(temp_dir, enable_cache=False)
@@ -246,3 +314,4 @@ class FileProcessorTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

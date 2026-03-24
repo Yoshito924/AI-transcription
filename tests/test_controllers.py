@@ -116,7 +116,7 @@ class ControllerErrorHandlingTests(unittest.TestCase):
         controller._handle_processing_error.assert_called_once()
         self.assertIs(controller._handle_processing_error.call_args[0][0], exception)
 
-    def test_process_in_thread_passes_selected_safety_filter_recovery_mode(self):
+    def test_process_in_thread_passes_selected_processing_settings(self):
         root = DeferredRoot()
         processor = MagicMock()
         processor.process_file.return_value = "output.txt"
@@ -127,6 +127,7 @@ class ControllerErrorHandlingTests(unittest.TestCase):
             'api_key_var': DummyVar("test-key"),
             'save_to_output_var': DummyVar(True),
             'save_to_source_var': DummyVar(False),
+            'trim_long_silence_var': DummyVar(False),
             'engine_var': DummyVar("gemini"),
             'gemini_safety_filter_recovery_var': DummyVar("Whisper に自動切替"),
             'gemini_safety_filter_recovery_display_to_mode': {
@@ -147,6 +148,7 @@ class ControllerErrorHandlingTests(unittest.TestCase):
             processor.process_file.call_args.kwargs['gemini_safety_filter_recovery'],
             'whisper'
         )
+        self.assertFalse(processor.process_file.call_args.kwargs['trim_long_silence'])
 
 
 if __name__ == '__main__':

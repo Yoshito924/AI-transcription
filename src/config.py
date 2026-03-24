@@ -7,6 +7,7 @@ import json
 from .constants import (
     DEFAULT_WINDOW_WIDTH, 
     DEFAULT_WINDOW_HEIGHT, 
+    DEFAULT_TRIM_LONG_SILENCE,
     DEFAULT_RECORDING_GAIN_PERCENT,
     CONFIG_DIR, 
     DATA_DIR, 
@@ -36,6 +37,7 @@ class Config:
             "transcription_engine": "gemini",  # "gemini" または "whisper" または "whisper-api"
             "gemini_safety_filter_recovery": "segment",  # "segment" または "whisper"
             "whisper_model": "base",  # "tiny", "base", "small", "medium", "large", "turbo"
+            "trim_long_silence": DEFAULT_TRIM_LONG_SILENCE,
             "save_to_output_dir": True,
             "save_to_source_dir": False,
             "recording_dir": RECORDINGS_DIR,

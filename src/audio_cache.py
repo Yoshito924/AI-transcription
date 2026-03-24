@@ -92,22 +92,26 @@ class AudioCacheManager:
         """メタデータの変更をマーク"""
         self._metadata_dirty = True
 
-    def _calculate_file_hash(self, file_path: str) -> str:
-        """ファイルのハッシュ値を計算（ファイル名+サイズ+更新日時）"""
+    def _calculate_file_hash(self, file_path: str, cache_profile: Optional[Dict] = None) -> str:
+        """ファイルのハッシュ値を計算（ファイル情報+前処理設定）"""
         stat = os.stat(file_path)
-        hash_input = f"{os.path.basename(file_path)}_{stat.st_size}_{stat.st_mtime}"
+        profile_text = ""
+        if cache_profile:
+            profile_text = json.dumps(cache_profile, ensure_ascii=False, sort_keys=True)
+        hash_input = f"{os.path.basename(file_path)}_{stat.st_size}_{stat.st_mtime}_{profile_text}"
         return hashlib.sha256(hash_input.encode()).hexdigest()[:16]
 
-    def get_cache_entry(self, original_file: str) -> Optional[Dict]:
+    def get_cache_entry(self, original_file: str, cache_profile: Optional[Dict] = None) -> Optional[Dict]:
         """キャッシュエントリを取得
 
         Args:
             original_file: 元の音声ファイルパス
+            cache_profile: 前処理プロファイル
 
         Returns:
             キャッシュが存在する場合はエントリ情報、なければNone
         """
-        file_hash = self._calculate_file_hash(original_file)
+        file_hash = self._calculate_file_hash(original_file, cache_profile=cache_profile)
 
         if file_hash in self.metadata:
             entry = self.metadata[file_hash]
@@ -131,7 +135,8 @@ class AudioCacheManager:
 
     def save_cache_entry(self, original_file: str, processed_audio: str,
                         segments: Optional[List[str]] = None,
-                        duration: Optional[float] = None) -> str:
+                        duration: Optional[float] = None,
+                        cache_profile: Optional[Dict] = None) -> str:
         """キャッシュエントリを保存
 
         Args:
@@ -139,11 +144,12 @@ class AudioCacheManager:
             processed_audio: 変換・圧縮後の音声ファイルパス
             segments: 分割された音声セグメントのパスリスト
             duration: 音声の長さ（秒）
+            cache_profile: 前処理プロファイル
 
         Returns:
             キャッシュID（ハッシュ値）
         """
-        file_hash = self._calculate_file_hash(original_file)
+        file_hash = self._calculate_file_hash(original_file, cache_profile=cache_profile)
         cache_path = self.cache_dir / file_hash
 
         try:
@@ -173,6 +179,7 @@ class AudioCacheManager:
                 'segments': segment_paths,
                 'segment_count': len(segment_paths) if segment_paths else 0,
                 'duration': duration,
+                'cache_profile': cache_profile or {},
                 'created': datetime.now().isoformat(),
                 'last_accessed': datetime.now().isoformat(),
                 'cache_id': file_hash
