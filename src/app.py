@@ -31,6 +31,7 @@ from .utils import (
     truncate_display_name,
     get_engine_value,
     get_whisper_model_value,
+    get_gemini_safety_filter_recovery_value,
     format_duration,
     format_file_size
 )
@@ -1221,8 +1222,10 @@ class TranscriptionApp:
         if hasattr(self, 'ui_elements'):
             engine_value = get_engine_value(self.ui_elements)
             whisper_model = get_whisper_model_value(self.ui_elements)
+            gemini_safety_filter_recovery = get_gemini_safety_filter_recovery_value(self.ui_elements)
             self.config.set("transcription_engine", engine_value)
             self.config.set("whisper_model", whisper_model)
+            self.config.set("gemini_safety_filter_recovery", gemini_safety_filter_recovery)
 
     def _save_destination_settings(self):
         """保存先設定を保存"""

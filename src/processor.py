@@ -214,7 +214,8 @@ class FileProcessor:
                     preferred_model=None, engine='gemini', whisper_model='base',
                     save_to_output_dir=True, save_to_source_dir=False,
                     progress_value_callback=None, gemini_api_key=None,
-                    time_tracker=None, whisper_api_model=None):
+                    time_tracker=None, whisper_api_model=None,
+                    gemini_safety_filter_recovery='segment'):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
         self.last_transcription_model_name = None
@@ -284,7 +285,8 @@ class FileProcessor:
                         whisper_model=whisper_model,
                         cached_segments=cached_segments,
                         progress_callback=update_progress,
-                        cleanup_segments=not from_cache
+                        cleanup_segments=not from_cache,
+                        recovery_mode=gemini_safety_filter_recovery
                     )
                 else:
                     raise
@@ -369,15 +371,28 @@ class FileProcessor:
     def _recover_from_gemini_safety_filter(self, exception, audio_path, api_key, update_status,
                                            preferred_model=None, whisper_model='turbo',
                                            cached_segments=None, progress_callback=None,
-                                           cleanup_segments=True):
+                                           cleanup_segments=True, recovery_mode='segment'):
         """Gemini安全性ブロック時に分割再試行し、だめならWhisperへフォールバックする"""
         root_message = getattr(exception, 'user_message', str(exception))
+        normalized_recovery_mode = recovery_mode if recovery_mode in ('segment', 'whisper') else 'segment'
         recovery_notice = (
             "注意: Gemini が安全性フィルターでブロックされました。代替経路で処理を継続します。\n"
             f"- ブロック内容: {root_message}"
         )
         logger.warning(f"Gemini安全性ブロックを検出: {root_message}")
         update_status(recovery_notice)
+
+        if normalized_recovery_mode == 'whisper':
+            update_status("注意: 設定に従い、セグメント再試行は行わず Whisper に切り替えます。")
+            return self._fallback_to_whisper_on_safety(
+                exception,
+                audio_path,
+                update_status,
+                whisper_model=whisper_model,
+                cached_segments=cached_segments,
+                progress_callback=progress_callback,
+                cleanup_segments=cleanup_segments
+            )
 
         retry_segments = cached_segments
         retry_cleanup_segments = cleanup_segments

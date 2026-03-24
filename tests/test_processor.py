@@ -149,7 +149,8 @@ class FileProcessorTests(unittest.TestCase):
             exception,
             audio_path="dummy.mp3",
             api_key="test",
-            update_status=statuses.append
+            update_status=statuses.append,
+            recovery_mode='segment'
         )
 
         self.assertEqual(result, "segmented ok")
@@ -176,10 +177,35 @@ class FileProcessorTests(unittest.TestCase):
             exception,
             audio_path="dummy.mp3",
             api_key="test",
-            update_status=lambda message: None
+            update_status=lambda message: None,
+            recovery_mode='segment'
         )
 
         self.assertEqual(result, "whisper ok")
+        processor._perform_whisper_transcription.assert_called_once()
+
+    def test_gemini_safety_filter_whisper_mode_skips_segment_retry(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor.audio_processor.split_audio = MagicMock(side_effect=AssertionError("segment retry should not run"))
+        processor.get_whisper_service = MagicMock(return_value=object())
+        processor._perform_whisper_transcription = MagicMock(return_value="whisper ok")
+        exception = TranscriptionError(
+            "blocked",
+            error_code="SAFETY_FILTER",
+            user_message="安全性フィルターによりブロックされました"
+        )
+
+        result = processor._recover_from_gemini_safety_filter(
+            exception,
+            audio_path="dummy.mp3",
+            api_key="test",
+            update_status=lambda message: None,
+            recovery_mode='whisper'
+        )
+
+        self.assertEqual(result, "whisper ok")
+        processor.audio_processor.split_audio.assert_not_called()
         processor._perform_whisper_transcription.assert_called_once()
 
     def test_whisper_api_single_file_emits_heartbeat_while_waiting(self):

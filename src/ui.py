@@ -739,6 +739,49 @@ def create_file_section(parent, app, theme, widgets):
     )
     whisper_api_model_info.pack(anchor='w', pady=(4, 0))
 
+    gemini_recovery_label = tk.Label(
+        left_inner,
+        text="Gemini ブロック時の動作",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    gemini_recovery_label.pack(anchor='w', pady=(10, 0))
+
+    gemini_recovery_display_names = {
+        'segment': '音声を分割して再試行（推奨）',
+        'whisper': 'Whisper に自動切替',
+    }
+    gemini_recovery_display_to_mode = {v: k for k, v in gemini_recovery_display_names.items()}
+    gemini_recovery_details = {
+        'segment': 'Geminiで細かく再試行し、弾かれた区間だけ除外して継続',
+        'whisper': 'Geminiで弾かれたらすぐローカルWhisperへ切替',
+    }
+    saved_gemini_recovery = app.config.get("gemini_safety_filter_recovery", "segment")
+    if saved_gemini_recovery not in gemini_recovery_display_names:
+        saved_gemini_recovery = 'segment'
+
+    gemini_recovery_var = tk.StringVar(
+        value=gemini_recovery_display_names.get(saved_gemini_recovery, '')
+    )
+    gemini_recovery_combo = ttk.Combobox(
+        left_inner,
+        textvariable=gemini_recovery_var,
+        values=list(gemini_recovery_display_names.values()),
+        state='readonly',
+        style='Modern.TCombobox'
+    )
+    gemini_recovery_combo.pack(fill=tk.X, pady=(6, 0))
+
+    gemini_recovery_info = tk.Label(
+        left_inner,
+        text=gemini_recovery_details.get(saved_gemini_recovery, ''),
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    gemini_recovery_info.pack(anchor='w', pady=(4, 0))
+
     right_inner = tk.Frame(right_panel, bg=theme.colors['surface_variant'])
     right_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
@@ -988,6 +1031,7 @@ def create_file_section(parent, app, theme, widgets):
 
     def on_engine_change():
         engine_value = engine_var.get()
+        is_gemini = engine_value == "gemini"
         is_whisper = engine_value == "whisper"
         is_whisper_api = engine_value == "whisper-api"
 
@@ -1001,6 +1045,11 @@ def create_file_section(parent, app, theme, widgets):
         api_label_color = theme.colors['text_secondary'] if is_whisper_api else theme.colors['text_disabled']
         whisper_api_model_label.config(fg=api_label_color)
         whisper_api_model_info.config(fg=api_label_color)
+
+        gemini_recovery_combo.config(state='readonly' if is_gemini else 'disabled')
+        recovery_label_color = theme.colors['text_secondary'] if is_gemini else theme.colors['text_disabled']
+        gemini_recovery_label.config(fg=recovery_label_color)
+        gemini_recovery_info.config(fg=recovery_label_color)
 
         engine_map = {
             'gemini': 'Gemini',
@@ -1040,13 +1089,22 @@ def create_file_section(parent, app, theme, widgets):
         app.config.set("whisper_api_model", model_name)
         app.config.save()
 
+    def on_gemini_recovery_change(event=None):
+        display_name = gemini_recovery_var.get()
+        recovery_mode = gemini_recovery_display_to_mode.get(display_name, 'segment')
+        gemini_recovery_info.config(text=gemini_recovery_details.get(recovery_mode, ''))
+        app.config.set("gemini_safety_filter_recovery", recovery_mode)
+        app.config.save()
+
     engine_var.trace('w', lambda *args: on_engine_change())
     whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
     whisper_api_model_combo.bind('<<ComboboxSelected>>', on_whisper_api_model_change)
+    gemini_recovery_combo.bind('<<ComboboxSelected>>', on_gemini_recovery_change)
     update_save_summary()
     on_engine_change()
     on_model_change()
     on_whisper_api_model_change()
+    on_gemini_recovery_change()
 
     frame.drop_area = drop_canvas
     frame.file_label = file_label
@@ -1059,6 +1117,8 @@ def create_file_section(parent, app, theme, widgets):
     frame.whisper_model_combo = whisper_model_combo
     frame.whisper_api_model_var = whisper_api_model_var
     frame.whisper_api_display_to_model = whisper_api_display_to_model
+    frame.gemini_safety_filter_recovery_var = gemini_recovery_var
+    frame.gemini_safety_filter_recovery_display_to_mode = gemini_recovery_display_to_mode
     frame.save_to_output_var = save_to_output_var
     frame.save_to_source_var = save_to_source_var
     frame.queue_frame = queue_frame
@@ -2033,6 +2093,8 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'whisper_model_combo': file_section.whisper_model_combo,
         'whisper_api_model_var': file_section.whisper_api_model_var,
         'whisper_api_display_to_model': file_section.whisper_api_display_to_model,
+        'gemini_safety_filter_recovery_var': file_section.gemini_safety_filter_recovery_var,
+        'gemini_safety_filter_recovery_display_to_mode': file_section.gemini_safety_filter_recovery_display_to_mode,
         'save_to_output_var': file_section.save_to_output_var,
         'save_to_source_var': file_section.save_to_source_var,
         'recording_status_label': recording_section.recording_status_label,

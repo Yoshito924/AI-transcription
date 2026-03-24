@@ -116,6 +116,38 @@ class ControllerErrorHandlingTests(unittest.TestCase):
         controller._handle_processing_error.assert_called_once()
         self.assertIs(controller._handle_processing_error.call_args[0][0], exception)
 
+    def test_process_in_thread_passes_selected_safety_filter_recovery_mode(self):
+        root = DeferredRoot()
+        processor = MagicMock()
+        processor.process_file.return_value = "output.txt"
+        ui_elements = {
+            'root': root,
+            'progress': MagicMock(),
+            'progress_label': MagicMock(),
+            'api_key_var': DummyVar("test-key"),
+            'save_to_output_var': DummyVar(True),
+            'save_to_source_var': DummyVar(False),
+            'engine_var': DummyVar("gemini"),
+            'gemini_safety_filter_recovery_var': DummyVar("Whisper に自動切替"),
+            'gemini_safety_filter_recovery_display_to_mode': {
+                "音声を分割して再試行（推奨）": "segment",
+                "Whisper に自動切替": "whisper",
+            },
+        }
+        controller = TranscriptionController(processor, MagicMock(), MagicMock(), ui_elements)
+        controller.current_file = "dummy.mp3"
+
+        controller._process_in_thread(
+            "transcription",
+            "test-key",
+            {"transcription": {"name": "文字起こし", "prompt": "{transcription}"}}
+        )
+
+        self.assertEqual(
+            processor.process_file.call_args.kwargs['gemini_safety_filter_recovery'],
+            'whisper'
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

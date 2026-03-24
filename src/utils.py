@@ -235,6 +235,16 @@ def get_whisper_api_model_value(ui_elements, default='gpt-4o-mini-transcribe'):
     return default
 
 
+def get_gemini_safety_filter_recovery_value(ui_elements, default='segment'):
+    """UI要素からGemini安全性ブロック時の回復モードを取得する"""
+    recovery_var = ui_elements.get('gemini_safety_filter_recovery_var', None)
+    display_to_mode = ui_elements.get('gemini_safety_filter_recovery_display_to_mode', None)
+    if recovery_var and display_to_mode:
+        display_name = recovery_var.get()
+        return display_to_mode.get(display_name, default)
+    return default
+
+
 def calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_input=False, audio_duration_seconds=None):
     """Gemini APIの使用料金を計算する
 
