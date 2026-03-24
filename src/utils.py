@@ -221,6 +221,20 @@ def get_whisper_model_value(ui_elements, default='turbo'):
     return default
 
 
+def get_whisper_api_model_value(ui_elements, default='gpt-4o-mini-transcribe'):
+    """UI要素からWhisper APIモデル値を取得する
+
+    Returns:
+        str: モデル値（'gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'whisper-1'）
+    """
+    whisper_api_model_var = ui_elements.get('whisper_api_model_var', None)
+    display_to_model = ui_elements.get('whisper_api_display_to_model', None)
+    if whisper_api_model_var and display_to_model:
+        display_name = whisper_api_model_var.get()
+        return display_to_model.get(display_name, default)
+    return default
+
+
 def calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_input=False, audio_duration_seconds=None):
     """Gemini APIの使用料金を計算する
 

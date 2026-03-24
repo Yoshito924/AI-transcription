@@ -33,19 +33,23 @@ from .utils import (
     truncate_display_name,
     truncate_status_message,
     get_engine_value,
-    get_whisper_model_value
+    get_whisper_model_value,
+    get_whisper_api_model_value
 )
 from .logger import logger
+from .processing_time_tracker import ProcessingTimeTracker
 
 
 class TranscriptionController:
     """文字起こし処理のコントローラー"""
     
-    def __init__(self, processor, config, usage_tracker, ui_elements):
+    def __init__(self, processor, config, usage_tracker, ui_elements,
+                 time_tracker: ProcessingTimeTracker = None):
         self.processor = processor
         self.config = config
         self.usage_tracker = usage_tracker
         self.ui_elements = ui_elements
+        self.time_tracker = time_tracker
         self.is_processing = False
         self._processing_lock = threading.Lock()
         self.current_file = None
@@ -127,7 +131,7 @@ class TranscriptionController:
             tag = 'error'
         elif "完了" in message or "成功" in message:
             tag = 'success'
-        elif "警告" in message:
+        elif "警告" in message or "注意" in message:
             tag = 'warning'
         elif "━━━" in message:
             tag = 'separator'
@@ -254,12 +258,13 @@ class TranscriptionController:
             # エンジンとモデルの取得
             engine_value = get_engine_value(self.ui_elements)
             whisper_model = get_whisper_model_value(self.ui_elements)
+            whisper_api_model = get_whisper_api_model_value(self.ui_elements)
 
             # エンジンに応じた開始メッセージを表示
             if engine_value == 'whisper':
                 self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Whisper処理開始 (モデル: {whisper_model}) ━━━"))
             elif engine_value == 'whisper-api':
-                self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Whisper API処理開始 ━━━"))
+                self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Whisper API処理開始 (モデル: {whisper_api_model}) ━━━"))
             else:
                 self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Gemini処理開始 ━━━"))
 
@@ -286,7 +291,9 @@ class TranscriptionController:
                 save_to_output_dir=save_to_output_dir,
                 save_to_source_dir=save_to_source_dir,
                 progress_value_callback=progress_value_callback,
-                gemini_api_key=gemini_api_key
+                gemini_api_key=gemini_api_key,
+                time_tracker=self.time_tracker,
+                whisper_api_model=whisper_api_model
             )
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))
@@ -295,11 +302,19 @@ class TranscriptionController:
             # カスタム例外の場合は詳細メッセージを使用
             user_msg = e.get_detailed_message() if hasattr(e, 'get_detailed_message') else str(e)
             status_msg = e.user_message if hasattr(e, 'user_message') else str(e)
-            self.ui_elements['root'].after(0, lambda: self._handle_processing_error(e, user_msg, status_msg))
+            self.ui_elements['root'].after(
+                0,
+                lambda exc=e, user_message=user_msg, status_message=status_msg:
+                    self._handle_processing_error(exc, user_message, status_message)
+            )
         except Exception as e:
             # その他の例外
             error_msg = f"処理エラー: {str(e)}"
-            self.ui_elements['root'].after(0, lambda: self._handle_processing_error(e, error_msg, error_msg))
+            self.ui_elements['root'].after(
+                0,
+                lambda exc=e, user_message=error_msg, status_message=error_msg:
+                    self._handle_processing_error(exc, user_message, status_message)
+            )
     
     def _handle_processing_error(self, exception, user_message, status_message):
         """処理エラーをハンドル"""
@@ -312,6 +327,9 @@ class TranscriptionController:
         if hasattr(exception, 'error_code'):
             self.add_log(f"エラーコード: {exception.error_code}")
         self.add_log(f"エラー詳細: {type(exception).__name__}: {str(exception)}")
+        if user_message:
+            prefix = "警告" if getattr(exception, 'error_code', None) == "SAFETY_FILTER" else "エラー内容"
+            self.add_log(f"{prefix}: {user_message}")
 
         # キュー処理中はエラーを記録して次のファイルへ
         if self.queue_processing:
@@ -395,6 +413,43 @@ class TranscriptionController:
                 f"{OPENAI_BILLING_OVERVIEW_URL}"
             )
     
+    def _record_processing_time(self):
+        """処理時間をトラッカーに記録"""
+        if not self.time_tracker:
+            return
+        audio_sec = getattr(self.processor, 'last_audio_duration_sec', None)
+        proc_sec = getattr(self.processor, 'last_processing_sec', None)
+        if not audio_sec or not proc_sec:
+            return
+        try:
+            engine_value = getattr(self.processor, 'last_engine_used', None) or get_engine_value(self.ui_elements)
+            if engine_value == 'whisper':
+                model_name = self.processor.last_transcription_model_name or get_whisper_model_value(self.ui_elements)
+            elif engine_value == 'whisper-api':
+                model_name = self.processor.last_transcription_model_name or 'whisper-1'
+            else:
+                model_name = self.processor.last_transcription_model_name or 'gemini-2.5-flash'
+
+            filename = os.path.basename(self.current_file) if self.current_file else ""
+            self.time_tracker.record(
+                engine=engine_value,
+                model=model_name,
+                audio_duration_sec=audio_sec,
+                processing_sec=proc_sec,
+                file_name=filename
+            )
+
+            # 統計をログに表示
+            stats = self.time_tracker.get_model_stats(engine_value, model_name)
+            if stats and stats['sample_count'] >= 2:
+                ratio = stats['avg_ratio']
+                self.add_log(
+                    f"処理速度: 音声1分あたり平均{ratio * 60:.0f}秒 "
+                    f"(実績{stats['sample_count']}件)"
+                )
+        except Exception as e:
+            logger.error(f"処理時間記録エラー: {e}")
+
     def _update_progress_bar(self, value):
         """プログレスバーの値とラベルを更新"""
         self.ui_elements['progress'].config(value=value)
@@ -407,8 +462,11 @@ class TranscriptionController:
         self.is_processing = False
         self.update_status(f"処理完了: {os.path.basename(output_file)}")
 
-        # エンジンの確認
-        engine_value = get_engine_value(self.ui_elements)
+        # 処理時間を記録
+        self._record_processing_time()
+
+        # エンジンの確認（フォールバック時は実際に使われたエンジンを優先）
+        engine_value = getattr(self.processor, 'last_engine_used', None) or get_engine_value(self.ui_elements)
 
         # GeminiまたはWhisper APIの場合のみ使用量を記録
         if engine_value == 'gemini':
@@ -440,10 +498,11 @@ class TranscriptionController:
                 logger.error(f"使用量記録エラー: {e}")
         elif engine_value == 'whisper-api':
             # Whisper APIの場合
-            self.add_log(f"━━━ Whisper API処理完了 ━━━")
+            api_model = self.processor.last_transcription_model_name or 'whisper-1'
+            self.add_log(f"━━━ Whisper API処理完了 (モデル: {api_model}) ━━━")
         else:
             # Whisper（ローカル）の場合
-            whisper_model = get_whisper_model_value(self.ui_elements)
+            whisper_model = getattr(self.processor, 'last_transcription_model_name', None) or get_whisper_model_value(self.ui_elements)
             self.add_log(f"━━━ Whisper処理完了 (モデル: {whisper_model}, 無料) ━━━")
 
             # ファイルサイズ情報を記録
@@ -474,15 +533,17 @@ class TranscriptionController:
         filename = os.path.basename(output_file)
 
         if engine_value == 'whisper':
-            whisper_model = get_whisper_model_value(self.ui_elements)
+            whisper_model = getattr(self.processor, 'last_transcription_model_name', None) or get_whisper_model_value(self.ui_elements)
             message = (
                 f"Whisperによる文字起こしが完了しました。\n"
                 f"モデル: {whisper_model} (ローカル/無料)\n"
                 f"出力ファイル: {filename}"
             )
         elif engine_value == 'whisper-api':
+            api_model = self.processor.last_transcription_model_name or 'whisper-1'
             message = (
-                f"Whisper APIによる文字起こしが完了しました。\n"
+                f"OpenAI APIによる文字起こしが完了しました。\n"
+                f"モデル: {api_model}\n"
                 f"出力ファイル: {filename}"
             )
         else:

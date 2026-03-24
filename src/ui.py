@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 
 from .ui_styles import ModernTheme, ModernWidgets, ICONS
+from .whisper_api_service import WhisperApiService
 from .constants import (
     DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
@@ -695,6 +696,49 @@ def create_file_section(parent, app, theme, widgets):
     )
     whisper_model_info.pack(anchor='w', pady=(6, 0))
 
+    # Whisper API モデル選択
+    whisper_api_model_label = tk.Label(
+        left_inner,
+        text="Whisper API モデル",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    whisper_api_model_label.pack(anchor='w', pady=(10, 0))
+
+    whisper_api_display_names = WhisperApiService.MODEL_DESCRIPTIONS
+    whisper_api_display_to_model = {v: k for k, v in whisper_api_display_names.items()}
+
+    saved_whisper_api_model = app.config.get(
+        "whisper_api_model", WhisperApiService.DEFAULT_MODEL
+    )
+    if saved_whisper_api_model not in whisper_api_display_names:
+        saved_whisper_api_model = WhisperApiService.DEFAULT_MODEL
+
+    whisper_api_model_var = tk.StringVar(
+        value=whisper_api_display_names.get(saved_whisper_api_model, '')
+    )
+    whisper_api_model_combo = ttk.Combobox(
+        left_inner,
+        textvariable=whisper_api_model_var,
+        values=list(whisper_api_display_names.values()),
+        state='readonly',
+        style='Modern.TCombobox'
+    )
+    whisper_api_model_combo.pack(fill=tk.X, pady=(6, 0))
+
+    whisper_api_pricing_text = {
+        k: f"${v}/分" for k, v in WhisperApiService.MODEL_PRICING.items()
+    }
+    whisper_api_model_info = tk.Label(
+        left_inner,
+        text=whisper_api_pricing_text.get(saved_whisper_api_model, ''),
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    whisper_api_model_info.pack(anchor='w', pady=(4, 0))
+
     right_inner = tk.Frame(right_panel, bg=theme.colors['surface_variant'])
     right_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
@@ -945,10 +989,18 @@ def create_file_section(parent, app, theme, widgets):
     def on_engine_change():
         engine_value = engine_var.get()
         is_whisper = engine_value == "whisper"
+        is_whisper_api = engine_value == "whisper-api"
+
         whisper_model_combo.config(state='readonly' if is_whisper else 'disabled')
         whisper_model_info.config(
             fg=theme.colors['text_secondary'] if is_whisper else theme.colors['text_disabled']
         )
+
+        # Whisper APIモデル選択の有効/無効切り替え
+        whisper_api_model_combo.config(state='readonly' if is_whisper_api else 'disabled')
+        api_label_color = theme.colors['text_secondary'] if is_whisper_api else theme.colors['text_disabled']
+        whisper_api_model_label.config(fg=api_label_color)
+        whisper_api_model_info.config(fg=api_label_color)
 
         engine_map = {
             'gemini': 'Gemini',
@@ -960,7 +1012,9 @@ def create_file_section(parent, app, theme, widgets):
         if engine_value == 'gemini':
             model_tile.value_label.config(text="自動選択")
         elif engine_value == 'whisper-api':
-            model_tile.value_label.config(text="whisper-1")
+            api_display = whisper_api_model_var.get()
+            api_model = whisper_api_display_to_model.get(api_display, WhisperApiService.DEFAULT_MODEL)
+            model_tile.value_label.config(text=api_model)
         else:
             display_name = whisper_model_var.get()
             model_tile.value_label.config(text=display_to_model.get(display_name, 'turbo'))
@@ -977,11 +1031,22 @@ def create_file_section(parent, app, theme, widgets):
         app.config.set("whisper_model", model_name)
         app.config.save()
 
+    def on_whisper_api_model_change(event=None):
+        display_name = whisper_api_model_var.get()
+        model_name = whisper_api_display_to_model.get(display_name, WhisperApiService.DEFAULT_MODEL)
+        whisper_api_model_info.config(text=whisper_api_pricing_text.get(model_name, ''))
+        if engine_var.get() == 'whisper-api':
+            model_tile.value_label.config(text=model_name)
+        app.config.set("whisper_api_model", model_name)
+        app.config.save()
+
     engine_var.trace('w', lambda *args: on_engine_change())
     whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
+    whisper_api_model_combo.bind('<<ComboboxSelected>>', on_whisper_api_model_change)
     update_save_summary()
     on_engine_change()
     on_model_change()
+    on_whisper_api_model_change()
 
     frame.drop_area = drop_canvas
     frame.file_label = file_label
@@ -992,6 +1057,8 @@ def create_file_section(parent, app, theme, widgets):
     frame.engine_var = engine_var
     frame.whisper_model_var = whisper_model_var
     frame.whisper_model_combo = whisper_model_combo
+    frame.whisper_api_model_var = whisper_api_model_var
+    frame.whisper_api_display_to_model = whisper_api_display_to_model
     frame.save_to_output_var = save_to_output_var
     frame.save_to_source_var = save_to_source_var
     frame.queue_frame = queue_frame
@@ -1964,6 +2031,8 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'engine_var': file_section.engine_var,
         'whisper_model_var': file_section.whisper_model_var,
         'whisper_model_combo': file_section.whisper_model_combo,
+        'whisper_api_model_var': file_section.whisper_api_model_var,
+        'whisper_api_display_to_model': file_section.whisper_api_display_to_model,
         'save_to_output_var': file_section.save_to_output_var,
         'save_to_source_var': file_section.save_to_source_var,
         'recording_status_label': recording_section.recording_status_label,

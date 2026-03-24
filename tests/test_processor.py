@@ -131,6 +131,57 @@ class FileProcessorTests(unittest.TestCase):
         processor._perform_single_transcription.assert_called_once()
         processor._perform_segmented_transcription.assert_not_called()
 
+    def test_gemini_safety_filter_retries_with_segments_before_whisper(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor.audio_processor.get_audio_duration = lambda path: 300
+        processor.audio_processor.split_audio = MagicMock(return_value=['seg1.mp3', 'seg2.mp3', 'seg3.mp3'])
+        processor._perform_segmented_transcription = MagicMock(return_value="segmented ok")
+        processor._perform_whisper_transcription = MagicMock(side_effect=AssertionError("whisper fallback should not be used"))
+        statuses = []
+        exception = TranscriptionError(
+            "blocked",
+            error_code="SAFETY_FILTER",
+            user_message="安全性フィルターによりブロックされました"
+        )
+
+        result = processor._recover_from_gemini_safety_filter(
+            exception,
+            audio_path="dummy.mp3",
+            api_key="test",
+            update_status=statuses.append
+        )
+
+        self.assertEqual(result, "segmented ok")
+        processor.audio_processor.split_audio.assert_called_once()
+        processor._perform_segmented_transcription.assert_called_once()
+        processor._perform_whisper_transcription.assert_not_called()
+        self.assertTrue(any("セグメント単位で再試行" in message for message in statuses))
+        self.assertIn("セグメント単位で再試行", processor.last_warning)
+
+    def test_gemini_safety_filter_falls_back_to_whisper_when_segments_do_not_split(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        processor.audio_processor.get_audio_duration = lambda path: 30
+        processor.audio_processor.split_audio = MagicMock(return_value=['dummy.mp3'])
+        processor.get_whisper_service = MagicMock(return_value=object())
+        processor._perform_whisper_transcription = MagicMock(return_value="whisper ok")
+        exception = TranscriptionError(
+            "blocked",
+            error_code="SAFETY_FILTER",
+            user_message="安全性フィルターによりブロックされました"
+        )
+
+        result = processor._recover_from_gemini_safety_filter(
+            exception,
+            audio_path="dummy.mp3",
+            api_key="test",
+            update_status=lambda message: None
+        )
+
+        self.assertEqual(result, "whisper ok")
+        processor._perform_whisper_transcription.assert_called_once()
+
     def test_whisper_api_single_file_emits_heartbeat_while_waiting(self):
         temp_dir = self.make_output_dir()
         processor = FileProcessor(temp_dir, enable_cache=False)

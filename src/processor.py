@@ -15,6 +15,7 @@ from .constants import (
     MAX_AUDIO_SIZE_MB,
     WHISPER_API_MAX_AUDIO_SIZE_MB,
     MAX_AUDIO_DURATION_SEC,
+    SEGMENT_DURATION_SEC,
     AUDIO_MIME_TYPE,
     OUTPUT_DIR,
     AI_GENERATION_CONFIG,
@@ -55,6 +56,7 @@ class FileProcessor:
         self.whisper_api_service = None  # APIキーが設定されたときに初期化
         self.whisper_api_status_heartbeat_sec = 30
         self.last_transcription_model_name = None
+        self.last_engine_used = None
         self.last_warning = None
         self.text_merger = EnhancedTextMerger(
             overlap_threshold=SEGMENT_MERGE_CONFIG['overlap_threshold'],
@@ -211,11 +213,15 @@ class FileProcessor:
     def process_file(self, input_file, process_type, api_key, prompts, status_callback=None,
                     preferred_model=None, engine='gemini', whisper_model='base',
                     save_to_output_dir=True, save_to_source_dir=False,
-                    progress_value_callback=None, gemini_api_key=None):
+                    progress_value_callback=None, gemini_api_key=None,
+                    time_tracker=None, whisper_api_model=None):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
         self.last_transcription_model_name = None
+        self.last_engine_used = engine
         self.last_warning = None
+        self.last_audio_duration_sec = None
+        self.last_processing_sec = None
 
         def update_status(message):
             logger.info(message)
@@ -232,26 +238,56 @@ class FileProcessor:
             audio_path, cached_segments, from_cache = self._prepare_audio_file(input_file, update_status, engine=engine)
             update_progress(10)
 
+            # ETA予測を表示
+            if time_tracker and self.last_audio_duration_sec:
+                if engine == 'whisper':
+                    model_for_eta = whisper_model
+                elif engine == 'whisper-api':
+                    model_for_eta = whisper_api_model or 'gpt-4o-mini-transcribe'
+                else:
+                    model_for_eta = preferred_model or 'gemini-2.5-flash'
+                estimate = time_tracker.estimate(engine, model_for_eta, self.last_audio_duration_sec)
+                eta_msg = time_tracker.format_estimate(estimate)
+                if eta_msg:
+                    update_status(eta_msg)
+
             # 文字起こし実行（エンジンに応じて分岐）
             # キャッシュからセグメントを取得した場合は、それを使用
-            if engine == 'whisper':
-                transcription = self._perform_whisper_transcription(
-                    audio_path, update_status, whisper_model, cached_segments,
-                    progress_callback=update_progress,
-                    cleanup_segments=not from_cache
-                )
-            elif engine == 'whisper-api':
-                transcription = self._perform_whisper_api_transcription(
-                    audio_path, api_key, update_status, cached_segments,
-                    progress_callback=update_progress,
-                    cleanup_segments=not from_cache
-                )
-            else:  # gemini
-                transcription = self._perform_transcription(
-                    audio_path, api_key, update_status, preferred_model, cached_segments,
-                    progress_callback=update_progress,
-                    cleanup_segments=not from_cache
-                )
+            try:
+                if engine == 'whisper':
+                    transcription = self._perform_whisper_transcription(
+                        audio_path, update_status, whisper_model, cached_segments,
+                        progress_callback=update_progress,
+                        cleanup_segments=not from_cache
+                    )
+                elif engine == 'whisper-api':
+                    transcription = self._perform_whisper_api_transcription(
+                        audio_path, api_key, update_status, cached_segments,
+                        progress_callback=update_progress,
+                        cleanup_segments=not from_cache,
+                        whisper_api_model=whisper_api_model
+                    )
+                else:  # gemini
+                    transcription = self._perform_transcription(
+                        audio_path, api_key, update_status, preferred_model, cached_segments,
+                        progress_callback=update_progress,
+                        cleanup_segments=not from_cache
+                    )
+            except TranscriptionError as e:
+                if engine == 'gemini' and getattr(e, 'error_code', None) == "SAFETY_FILTER":
+                    transcription = self._recover_from_gemini_safety_filter(
+                        e,
+                        audio_path,
+                        api_key,
+                        update_status,
+                        preferred_model=preferred_model,
+                        whisper_model=whisper_model,
+                        cached_segments=cached_segments,
+                        progress_callback=update_progress,
+                        cleanup_segments=not from_cache
+                    )
+                else:
+                    raise
             update_progress(85)
 
             # 追加処理（必要な場合）
@@ -284,6 +320,125 @@ class FileProcessor:
             logger.error(f"処理エラー: {str(e)}", exc_info=True)
             update_status(f"処理エラー: {str(e)}")
             raise FileProcessingError(f"ファイル処理に失敗しました: {str(e)}")
+
+    def _fallback_to_whisper_on_safety(self, exception, audio_path, update_status, whisper_model='turbo',
+                                       cached_segments=None, progress_callback=None, cleanup_segments=True):
+        """Geminiの安全性ブロック時にWhisperへ自動フォールバックする"""
+        root_message = getattr(exception, 'user_message', str(exception))
+        fallback_warning = (
+            "注意: Gemini が安全性フィルターでブロックされたため、Whisper に自動切り替えしました。\n"
+            f"- ブロック内容: {root_message}\n"
+            f"- フォールバックモデル: {whisper_model}"
+        )
+        logger.warning(
+            "Gemini安全性ブロックのためWhisperへ自動フォールバック: "
+            f"model={whisper_model}, reason={root_message}"
+        )
+        update_status(fallback_warning)
+
+        # 利用できない場合は元のエラーをそのまま扱いたいため、先に可用性だけ確認する
+        self.get_whisper_service()
+
+        self.last_warning = fallback_warning
+        self.last_engine_used = 'whisper'
+        result = self._perform_whisper_transcription(
+            audio_path,
+            update_status,
+            whisper_model,
+            cached_segments,
+            progress_callback=progress_callback,
+            cleanup_segments=cleanup_segments
+        )
+
+        if self.last_warning and self.last_warning != fallback_warning:
+            self.last_warning = f"{fallback_warning}\n{self.last_warning}"
+        else:
+            self.last_warning = fallback_warning
+
+        return result
+
+    def _get_safety_retry_segment_duration(self, audio_path):
+        """安全性ブロック時の再試行用セグメント長を返す"""
+        audio_duration_sec = self.audio_processor.get_audio_duration(audio_path) or self.last_audio_duration_sec
+        if not audio_duration_sec or audio_duration_sec <= 0:
+            return SEGMENT_DURATION_SEC
+        if audio_duration_sec <= SEGMENT_DURATION_SEC:
+            return max(60, int(audio_duration_sec / 3))
+        return SEGMENT_DURATION_SEC
+
+    def _recover_from_gemini_safety_filter(self, exception, audio_path, api_key, update_status,
+                                           preferred_model=None, whisper_model='turbo',
+                                           cached_segments=None, progress_callback=None,
+                                           cleanup_segments=True):
+        """Gemini安全性ブロック時に分割再試行し、だめならWhisperへフォールバックする"""
+        root_message = getattr(exception, 'user_message', str(exception))
+        recovery_notice = (
+            "注意: Gemini が安全性フィルターでブロックされました。代替経路で処理を継続します。\n"
+            f"- ブロック内容: {root_message}"
+        )
+        logger.warning(f"Gemini安全性ブロックを検出: {root_message}")
+        update_status(recovery_notice)
+
+        retry_segments = cached_segments
+        retry_cleanup_segments = cleanup_segments
+
+        if retry_segments:
+            logger.info(f"安全性ブロック後の再試行にキャッシュ済みセグメントを使用: {len(retry_segments)}個")
+        else:
+            segment_duration_sec = self._get_safety_retry_segment_duration(audio_path)
+            update_status(
+                "注意: Gemini の誤ブロックを避けるため、音声を分割して再試行します。\n"
+                f"- 分割単位: {format_duration(segment_duration_sec)}"
+            )
+            retry_segments = self.audio_processor.split_audio(
+                audio_path,
+                segment_duration_sec=segment_duration_sec,
+                callback=update_status
+            )
+            retry_cleanup_segments = True
+
+        if retry_segments and len(retry_segments) > 1:
+            segmented_warning = (
+                "注意: Gemini が単一ファイルでは安全性フィルターにかかったため、"
+                "セグメント単位で再試行しました。"
+            )
+            update_status(f"{segmented_warning}\n- セグメント数: {len(retry_segments)}")
+
+            try:
+                result = self._perform_segmented_transcription(
+                    audio_path,
+                    api_key,
+                    update_status,
+                    preferred_model,
+                    retry_segments,
+                    progress_callback=progress_callback,
+                    cleanup_segments=retry_cleanup_segments
+                )
+            except Exception as retry_exception:
+                logger.warning(
+                    "Gemini安全性ブロック後のセグメント再試行に失敗。Whisperへフォールバック: "
+                    f"{type(retry_exception).__name__}: {retry_exception}"
+                )
+                update_status("注意: Gemini のセグメント再試行でも継続できなかったため、Whisper に切り替えます。")
+            else:
+                if self.last_warning and self.last_warning != segmented_warning:
+                    self.last_warning = f"{segmented_warning}\n{self.last_warning}"
+                else:
+                    self.last_warning = segmented_warning
+                return result
+        else:
+            logger.info("安全性ブロック後のセグメント再試行をスキップ: 分割結果が1セグメント以下")
+            update_status("注意: 問題箇所の切り分けができなかったため、Whisper に切り替えます。")
+
+        return self._fallback_to_whisper_on_safety(
+            exception,
+            audio_path,
+            update_status,
+            whisper_model=whisper_model,
+            cached_segments=cached_segments,
+            progress_callback=progress_callback,
+            cleanup_segments=cleanup_segments
+        )
     
     def _prepare_audio_file(self, input_file, update_status, engine='gemini'):
         """音声ファイルの準備（変換・圧縮・分割）
@@ -297,6 +452,9 @@ class FileProcessor:
         original_size_mb = get_file_size_mb(input_file)
         audio_duration_sec = self.audio_processor.get_audio_duration(input_file)
         duration_str = format_duration(audio_duration_sec) if audio_duration_sec else "不明"
+
+        # 音声長さを記録（ETA算出用）
+        self.last_audio_duration_sec = audio_duration_sec
 
         logger.info(f"音声ファイル準備開始: {os.path.basename(input_file)}, サイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
         update_status(f"処理開始: ファイルサイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
@@ -440,6 +598,8 @@ class FileProcessor:
     def _perform_transcription(self, audio_path, api_key, update_status, preferred_model=None,
                                cached_segments=None, progress_callback=None, cleanup_segments=True):
         """文字起こしを実行"""
+        self.last_engine_used = 'gemini'
+
         # ファイルサイズと長さを再チェック
         file_size_mb = get_file_size_mb(audio_path)
         audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
@@ -472,6 +632,9 @@ class FileProcessor:
     def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='base',
                                        cached_segments=None, progress_callback=None, cleanup_segments=True):
         """Whisperを使用した文字起こしを実行"""
+        self.last_engine_used = 'whisper'
+        self.last_transcription_model_name = whisper_model
+
         # キャッシュされたセグメントがある場合は、それを使用
         if cached_segments:
             logger.info(f"キャッシュされたセグメントを使用: {len(cached_segments)}個")
@@ -505,11 +668,24 @@ class FileProcessor:
     
     def _perform_whisper_api_transcription(self, audio_path, api_key, update_status,
                                            cached_segments=None, progress_callback=None,
-                                           cleanup_segments=True):
-        """OpenAI Whisper APIを使用した文字起こしを実行"""
-        # Whisper APIサービスの初期化
-        if not self.whisper_api_service or self.whisper_api_service.api_key != api_key:
-            self.whisper_api_service = WhisperApiService(api_key=api_key)
+                                           cleanup_segments=True, whisper_api_model=None):
+        """OpenAI 文字起こしAPIを使用した文字起こしを実行"""
+        self.last_engine_used = 'whisper-api'
+
+        # APIサービスの初期化（モデル変更時も再初期化）
+        current_model = getattr(self.whisper_api_service, 'model', None) if self.whisper_api_service else None
+        needs_reinit = (
+            not self.whisper_api_service
+            or self.whisper_api_service.api_key != api_key
+            or (whisper_api_model and current_model != whisper_api_model)
+        )
+        if needs_reinit:
+            self.whisper_api_service = WhisperApiService(api_key=api_key, model=whisper_api_model)
+
+        # モデル名を記録
+        active_model = getattr(self.whisper_api_service, 'model', None) or whisper_api_model or 'gpt-4o-mini-transcribe'
+        self.last_transcription_model_name = active_model
+        update_status(f"使用モデル: {active_model}")
 
         if cached_segments:
             return self._perform_whisper_api_segmented_transcription(
@@ -1334,6 +1510,7 @@ class FileProcessor:
 
         # 処理完了のログ
         end_time = datetime.datetime.now()
+        self.last_processing_sec = (end_time - start_time).total_seconds()
         process_time_str = format_process_time(start_time, end_time)
         output_size_kb = get_file_size_kb(result_path)
         update_status(

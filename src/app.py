@@ -14,6 +14,7 @@ from .audio_recorder import MicrophoneRecorder
 from .controllers import TranscriptionController
 from .terminal_cleanup import schedule_launch_terminal_close
 from .usage_tracker import UsageTracker
+from .processing_time_tracker import ProcessingTimeTracker
 from .constants import (
     OUTPUT_DIR,
     DATA_DIR,
@@ -50,6 +51,9 @@ class TranscriptionApp:
         
         # 使用量追跡
         self.usage_tracker = UsageTracker(self.app_dir)
+
+        # 処理時間追跡
+        self.time_tracker = ProcessingTimeTracker(self.app_dir)
         
         # 変数初期化
         self.api_key = tk.StringVar(value=self.config.get("api_key", ""))  # Gemini API用
@@ -115,7 +119,8 @@ class TranscriptionApp:
         self.ui_elements['openai_api_key_var'] = self.openai_api_key
         self.ui_elements['root'] = self.root
         self.controller = TranscriptionController(
-            self.processor, self.config, self.usage_tracker, self.ui_elements
+            self.processor, self.config, self.usage_tracker, self.ui_elements,
+            time_tracker=self.time_tracker
         )
         self.controller.set_update_history_callback(self._on_history_update)
         self.controller.update_usage_callback = self.update_usage_display
