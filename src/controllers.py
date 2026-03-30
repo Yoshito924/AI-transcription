@@ -7,6 +7,7 @@
 """
 
 import os
+import queue
 import threading
 import datetime
 import tkinter as tk
@@ -68,6 +69,12 @@ class TranscriptionController:
         self.update_queue_callback = None
         self._waveform_request_id = 0
         self._waveform_cache = {}
+
+        # パイプライン並列処理用
+        self._prep_queue = None
+        self._prep_thread = None
+        self._prep_cancel = threading.Event()
+        self._prep_file_list = []
     
     def update_status(self, message):
         """ステータスを更新"""
@@ -362,7 +369,7 @@ class TranscriptionController:
         thread.daemon = True
         thread.start()
     
-    def _process_in_thread(self, process_type, api_key, prompts):
+    def _process_in_thread(self, process_type, api_key, prompts, prepared_audio=None):
         """スレッドで実行される処理"""
         try:
             # ステータスメッセージコールバック
@@ -429,7 +436,8 @@ class TranscriptionController:
                 trim_long_silence=trim_long_silence,
                 silence_trim_settings=silence_trim_settings,
                 title_generation_engine=title_generation_engine,
-                rename_source_file=rename_source_file
+                rename_source_file=rename_source_file,
+                prepared_audio=prepared_audio
             )
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))
@@ -473,7 +481,7 @@ class TranscriptionController:
             self.queue_errors.append((filename, str(exception)))
             if getattr(exception, 'error_code', None) == "INSUFFICIENT_CREDIT":
                 self.add_log(f"OpenAI Billing: {OPENAI_BILLING_OVERVIEW_URL}")
-            self.ui_elements['root'].after(300, self._process_next_in_queue)
+            self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
             return
 
         if getattr(exception, 'error_code', None) == "INSUFFICIENT_CREDIT":
@@ -658,7 +666,7 @@ class TranscriptionController:
 
         # キュー処理中なら次のファイルへ進む（メッセージボックスは出さない）
         if self.queue_processing:
-            self.ui_elements['root'].after(300, self._process_next_in_queue)
+            self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
             return
 
         # エンジンに応じたメッセージを表示（単一処理のみ）
@@ -770,39 +778,98 @@ class TranscriptionController:
             self.current_queue_index = 0
             self.total_queue_files = len(self.file_queue)
             self.queue_errors = []
-            self.add_log(f"━━━ キュー処理開始: {self.total_queue_files}件 ━━━")
-            self._process_next_in_queue()
+            self.add_log(f"━━━ キュー処理開始: {self.total_queue_files}件（パイプライン並列） ━━━")
+
+            # キューをスナップショットして前処理ワーカーを起動
+            self._prep_file_list = list(self.file_queue)
+            self.file_queue.clear()
+            self._prep_cancel.clear()
+            self._prep_queue = queue.Queue(maxsize=1)
+
+            self._prep_thread = threading.Thread(
+                target=self._audio_prep_worker, daemon=True
+            )
+            self._prep_thread.start()
+
+            self._process_next_in_queue_pipeline()
         else:
             # キューが空 → 従来の単一ファイル処理
             self.queue_processing = False
             self.start_transcription()
 
-    def _process_next_in_queue(self):
-        """キューから1つ取り出して処理開始"""
-        if not self.file_queue:
+    def _audio_prep_worker(self):
+        """前処理ワーカースレッド: キュー内ファイルの音声変換を先行実行"""
+        while self._prep_file_list and not self._prep_cancel.is_set():
+            file_path = self._prep_file_list.pop(0)
+            filename = os.path.basename(file_path)
+
+            if not os.path.exists(file_path):
+                self._prep_queue.put((file_path, None, "元ファイルが見つかりません"))
+                continue
+
+            try:
+                engine_value = get_engine_value(self.ui_elements)
+                trim_long_silence = get_trim_long_silence_value(self.ui_elements)
+                silence_trim_settings = get_silence_trim_settings(self.ui_elements)
+
+                def prep_status(msg, fn=filename):
+                    self.ui_elements['root'].after(
+                        0, lambda m=msg, f=fn: self.add_log(f"[前処理: {f}] {m}")
+                    )
+
+                prepared = self.processor.prepare_audio(
+                    file_path,
+                    engine=engine_value,
+                    trim_long_silence=trim_long_silence,
+                    silence_trim_settings=silence_trim_settings,
+                    status_callback=prep_status
+                )
+                self._prep_queue.put((file_path, prepared, None))
+            except Exception as e:
+                logger.error(f"前処理エラー ({filename}): {e}")
+                self._prep_queue.put((file_path, None, str(e)))
+
+    def _process_next_in_queue_pipeline(self):
+        """パイプライン版: 前処理済みデータを取得して文字起こし開始"""
+        if self.current_queue_index >= self.total_queue_files:
             self._on_queue_complete()
             return
 
         self.current_queue_index += 1
-        file_path = self.file_queue.pop(0)
-        self.current_file = file_path
-        filename = os.path.basename(file_path)
-        display_name = truncate_display_name(filename, FILE_NAME_DISPLAY_MAX_LENGTH)
 
-        if not os.path.exists(file_path):
-            self.current_file = None
-            if self.update_queue_callback:
-                self.update_queue_callback()
-            self.queue_errors.append((filename, "元ファイルが見つかりません"))
-            self.ui_elements['file_label'].config(
-                text=f"スキップ {self.current_queue_index}/{self.total_queue_files}: {display_name}"
-            )
+        # 前処理キューからの取得をバックグラウンドスレッドで待機（UI非ブロック）
+        def _wait_and_dispatch():
+            try:
+                file_path, prepared, error = self._prep_queue.get(timeout=600)
+                self.ui_elements['root'].after(
+                    0, lambda: self._dispatch_pipeline_file(file_path, prepared, error)
+                )
+            except queue.Empty:
+                self.ui_elements['root'].after(
+                    0, lambda: self._dispatch_pipeline_file(None, None, "前処理タイムアウト")
+                )
+
+        threading.Thread(target=_wait_and_dispatch, daemon=True).start()
+
+    def _dispatch_pipeline_file(self, file_path, prepared_audio, error):
+        """前処理済みファイルの文字起こしを開始"""
+        if file_path:
+            filename = os.path.basename(file_path)
+            display_name = truncate_display_name(filename, FILE_NAME_DISPLAY_MAX_LENGTH)
+        else:
+            filename = "unknown"
+            display_name = "unknown"
+
+        if error:
+            self.queue_errors.append((filename, error))
             self.add_log(
                 f"[{self.current_queue_index}/{self.total_queue_files}] "
-                f"{filename} は見つからないためスキップ"
+                f"{filename}: {error} - スキップ"
             )
-            self.ui_elements['root'].after(300, self._process_next_in_queue)
+            self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
             return
+
+        self.current_file = file_path
 
         # UI更新
         self.ui_elements['file_label'].config(
@@ -815,9 +882,9 @@ class TranscriptionController:
         if self.update_queue_callback:
             self.update_queue_callback()
 
-        self.add_log(f"[{self.current_queue_index}/{self.total_queue_files}] {filename} を処理開始")
+        self.add_log(f"[{self.current_queue_index}/{self.total_queue_files}] {filename} を文字起こし開始")
 
-        # start_transcription の内部ロジックを直接呼ぶ
+        # APIキー取得
         engine_value = get_engine_value(self.ui_elements)
 
         if engine_value == 'whisper-api':
@@ -826,14 +893,14 @@ class TranscriptionController:
             if not api_key:
                 self.queue_errors.append((filename, "OpenAI APIキー未設定"))
                 self.add_log(f"エラー: OpenAI APIキー未設定 - {filename} をスキップ")
-                self.ui_elements['root'].after(300, self._process_next_in_queue)
+                self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
                 return
         elif engine_value == 'gemini':
             api_key = self.ui_elements['api_key_var'].get().strip()
             if not api_key:
                 self.queue_errors.append((filename, "Gemini APIキー未設定"))
                 self.add_log(f"エラー: Gemini APIキー未設定 - {filename} をスキップ")
-                self.ui_elements['root'].after(300, self._process_next_in_queue)
+                self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
                 return
         else:
             api_key = ""
@@ -853,11 +920,34 @@ class TranscriptionController:
             }
         }
 
-        self._start_processing_thread("transcription", api_key, prompts)
+        self._start_processing_thread_with_prepared(
+            "transcription", api_key, prompts, prepared_audio
+        )
+
+    def _start_processing_thread_with_prepared(self, process_type, api_key, prompts, prepared_audio):
+        """前処理済みデータ付きで処理スレッドを開始"""
+        with self._processing_lock:
+            if self.is_processing:
+                return
+            self.is_processing = True
+        self.ui_elements['progress'].config(mode='determinate', maximum=100, value=0)
+        if 'progress_label' in self.ui_elements:
+            self.ui_elements['progress_label'].config(text="0%")
+        self.update_status("文字起こし処理を開始しています...")
+
+        thread = threading.Thread(
+            target=self._process_in_thread,
+            args=(process_type, api_key, prompts),
+            kwargs={'prepared_audio': prepared_audio}
+        )
+        thread.daemon = True
+        thread.start()
 
     def _on_queue_complete(self):
         """全ファイル処理完了後のサマリー表示"""
         self.queue_processing = False
+        self._prep_cancel.set()
+        self._prep_file_list.clear()
         success_count = self.total_queue_files - len(self.queue_errors)
 
         self.add_log(f"━━━ キュー処理完了 ━━━")

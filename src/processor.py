@@ -242,8 +242,36 @@ class FileProcessor:
         files.sort(key=lambda x: x[3], reverse=True)
         return files
     
+    def prepare_audio(self, input_file, engine='gemini',
+                      trim_long_silence=DEFAULT_TRIM_LONG_SILENCE,
+                      silence_trim_settings=None,
+                      status_callback=None):
+        """音声前処理のみを実行する（パイプライン並列用）
+
+        Returns:
+            dict: audio_path, cached_segments, from_cache, audio_duration_sec
+        """
+        def update_status(message):
+            logger.info(message)
+            if status_callback:
+                status_callback(message)
+
+        audio_path, cached_segments, from_cache = self._prepare_audio_file(
+            input_file,
+            update_status,
+            engine=engine,
+            trim_long_silence=trim_long_silence,
+            silence_trim_settings=silence_trim_settings
+        )
+        return {
+            'audio_path': audio_path,
+            'cached_segments': cached_segments,
+            'from_cache': from_cache,
+            'audio_duration_sec': self.last_audio_duration_sec,
+        }
+
     def process_file(self, input_file, process_type, api_key, prompts, status_callback=None,
-                    preferred_model=None, engine='gemini', whisper_model='base',
+                    preferred_model=None, engine='gemini', whisper_model='large-v3',
                     save_to_output_dir=True, save_to_source_dir=False,
                     progress_value_callback=None, gemini_api_key=None,
                     time_tracker=None, whisper_api_model=None,
@@ -251,7 +279,8 @@ class FileProcessor:
                     trim_long_silence=DEFAULT_TRIM_LONG_SILENCE,
                     silence_trim_settings=None,
                     title_generation_engine='auto',
-                    rename_source_file=False):
+                    rename_source_file=False,
+                    prepared_audio=None):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
         self.last_transcription_model_name = None
@@ -271,14 +300,22 @@ class FileProcessor:
 
         try:
             # 音声ファイルの準備（キャッシュ対応）
-            update_progress(2)
-            audio_path, cached_segments, from_cache = self._prepare_audio_file(
-                input_file,
-                update_status,
-                engine=engine,
-                trim_long_silence=trim_long_silence,
-                silence_trim_settings=silence_trim_settings
-            )
+            if prepared_audio:
+                # パイプライン並列: 前処理済みデータを使用
+                audio_path = prepared_audio['audio_path']
+                cached_segments = prepared_audio['cached_segments']
+                from_cache = prepared_audio['from_cache']
+                self.last_audio_duration_sec = prepared_audio['audio_duration_sec']
+                update_status("前処理済み音声データを使用")
+            else:
+                update_progress(2)
+                audio_path, cached_segments, from_cache = self._prepare_audio_file(
+                    input_file,
+                    update_status,
+                    engine=engine,
+                    trim_long_silence=trim_long_silence,
+                    silence_trim_settings=silence_trim_settings
+                )
             update_progress(10)
 
             # ETA予測を表示
@@ -392,7 +429,7 @@ class FileProcessor:
             update_status(f"処理エラー: {str(e)}")
             raise FileProcessingError(f"ファイル処理に失敗しました: {str(e)}")
 
-    def _fallback_to_whisper_on_safety(self, exception, audio_path, update_status, whisper_model='turbo',
+    def _fallback_to_whisper_on_safety(self, exception, audio_path, update_status, whisper_model='large-v3',
                                        cached_segments=None, progress_callback=None, cleanup_segments=True):
         """Geminiの安全性ブロック時にWhisperへ自動フォールバックする"""
         root_message = getattr(exception, 'user_message', str(exception))
@@ -438,7 +475,7 @@ class FileProcessor:
         return SEGMENT_DURATION_SEC
 
     def _recover_from_gemini_safety_filter(self, exception, audio_path, api_key, update_status,
-                                           preferred_model=None, whisper_model='turbo',
+                                           preferred_model=None, whisper_model='large-v3',
                                            cached_segments=None, progress_callback=None,
                                            cleanup_segments=True, recovery_mode='segment'):
         """Gemini安全性ブロック時に分割再試行し、だめならWhisperへフォールバックする"""
@@ -793,7 +830,7 @@ class FileProcessor:
                 progress_callback(80)
             return result
     
-    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='base',
+    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='large-v3',
                                        cached_segments=None, progress_callback=None, cleanup_segments=True):
         """Whisperを使用した文字起こしを実行"""
         self.last_engine_used = 'whisper'
@@ -1080,7 +1117,7 @@ class FileProcessor:
     
     def _perform_segmented_transcription(self, audio_path, api_key, update_status, preferred_model=None,
                                         cached_segments=None, progress_callback=None, cleanup_segments=True,
-                                        whisper_fallback_for_blocked=False, whisper_model='turbo'):
+                                        whisper_fallback_for_blocked=False, whisper_model='large-v3'):
         """分割された音声ファイルの文字起こし（スマート統合付き）"""
         with GENAI_SDK_LOCK:
             genai.configure(api_key=api_key)
@@ -1292,7 +1329,7 @@ class FileProcessor:
             )
 
     def _whisper_fallback_single_segment(self, segment_file, segment_num, total_segments,
-                                          update_status, whisper_model='turbo'):
+                                          update_status, whisper_model='large-v3'):
         """安全性フィルターでブロックされた単一セグメントをWhisperで文字起こしする
 
         Returns:
@@ -1416,7 +1453,7 @@ class FileProcessor:
 
         return error_category, error_detail
     
-    def _perform_whisper_single_transcription(self, audio_path, update_status, whisper_model='base'):
+    def _perform_whisper_single_transcription(self, audio_path, update_status, whisper_model='large-v3'):
         """Whisperを使用した単一ファイルの文字起こし"""
         update_status(f"Whisperで文字起こし中... (モデル: {whisper_model})")
 
@@ -1456,7 +1493,7 @@ class FileProcessor:
             logger.error(f"Whisper文字起こしエラー: {str(e)}")
             raise TranscriptionError(f"Whisper文字起こしに失敗しました: {str(e)}")
     
-    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model='base',
+    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model='large-v3',
                                                 cached_segments=None, progress_callback=None,
                                                 cleanup_segments=True):
         """Whisperを使用した分割ファイルの文字起こし"""
@@ -1597,6 +1634,47 @@ class FileProcessor:
             counter += 1
         return f"{base}_{counter}{ext}"
 
+    def _normalize_generated_title(self, raw_title):
+        """生成されたタイトル文字列をファイル名向けに正規化する"""
+        if raw_title is None:
+            return None
+
+        title = str(raw_title).strip()
+        if not title:
+            return None
+
+        lines = [line.strip() for line in title.splitlines() if line.strip()]
+        if lines:
+            title = lines[0]
+
+        title = re.sub(r'^[#*\-\d\.\)\(\s]+', '', title).strip()
+        title = title.strip('\'"`「」『』【】[]()（）')
+
+        leading_label_pattern = re.compile(
+            r'^(?:タイトル|要約|件名|summary|title)\s*[:：\-]\s*',
+            re.IGNORECASE
+        )
+        while True:
+            normalized = leading_label_pattern.sub('', title).strip()
+            normalized = normalized.strip('\'"`「」『』【】[]()（）')
+            if normalized == title:
+                break
+            title = normalized
+
+        secondary_label_match = re.search(
+            r'(?:タイトル|要約|件名|summary|title)\s*[:：\-]',
+            title,
+            re.IGNORECASE
+        )
+        if secondary_label_match and secondary_label_match.start() > 0:
+            title = title[:secondary_label_match.start()].rstrip(' 　-:：')
+
+        title = re.sub(r'\s+', ' ', title).strip()
+        if len(title) > SUMMARY_TITLE_MAX_LENGTH:
+            title = title[:SUMMARY_TITLE_MAX_LENGTH].rstrip()
+
+        return sanitize_filename(title)
+
     def generate_summary_title(self, text, api_key):
         """文字起こしテキストから要約タイトルを生成する
 
@@ -1641,6 +1719,7 @@ class FileProcessor:
             prompt = (
                 "この文字起こしの内容を15〜25文字で要約してタイトルを付けてください。\n"
                 "ファイル名に使うので記号は使わないでください。\n"
+                "「タイトル：」や「要約：」のような前置きは付けないでください。\n"
                 "タイトルのみを出力してください。説明や装飾は不要です。\n\n"
                 f"{excerpt}"
             )
@@ -1661,13 +1740,7 @@ class FileProcessor:
                 logger.warning("タイトル生成: 空のレスポンス")
                 return None
 
-            title = response.text.strip()
-            # 最大文字数で切り詰め
-            if len(title) > SUMMARY_TITLE_MAX_LENGTH:
-                title = title[:SUMMARY_TITLE_MAX_LENGTH]
-
-            # ファイル名に使えない文字を除去
-            title = sanitize_filename(title)
+            title = self._normalize_generated_title(response.text)
             if not title:
                 logger.warning("タイトル生成: サニタイズ後に空になりました")
                 return None
@@ -1690,6 +1763,7 @@ class FileProcessor:
             prompt = (
                 "この文字起こしの内容を15〜25文字で要約してタイトルを付けてください。\n"
                 "ファイル名に使うので記号は使わないでください。\n"
+                "「タイトル：」や「要約：」のような前置きは付けないでください。\n"
                 "タイトルのみを出力してください。説明や装飾は不要です。\n\n"
                 f"{excerpt}"
             )
@@ -1719,11 +1793,7 @@ class FileProcessor:
                 logger.warning("Ollamaタイトル生成: 空のレスポンス")
                 return None
 
-            # 最大文字数で切り詰め
-            if len(title) > SUMMARY_TITLE_MAX_LENGTH:
-                title = title[:SUMMARY_TITLE_MAX_LENGTH]
-
-            title = sanitize_filename(title)
+            title = self._normalize_generated_title(title)
             if not title:
                 logger.warning("Ollamaタイトル生成: サニタイズ後に空になりました")
                 return None
@@ -1745,7 +1815,7 @@ class FileProcessor:
             str or None: リネーム後のパス。失敗時はNone
         """
         try:
-            safe_title = sanitize_filename(summary_title)
+            safe_title = self._normalize_generated_title(summary_title)
             if not safe_title:
                 logger.warning("リネーム用タイトルがサニタイズ後に空になりました")
                 return None
@@ -1788,9 +1858,13 @@ class FileProcessor:
             process_name = "文字起こし"
 
         # ファイル名の生成
-        if summary_title:
-            # タイトルあり: {要約タイトル}_文字起こし_{元ファイル名}.txt
-            output_filename = f"{summary_title}_{process_name}_{base_name}.txt"
+        normalized_summary_title = self._normalize_generated_title(summary_title) if summary_title else None
+        normalized_base_name = self._normalize_generated_title(base_name) if base_name else None
+        if normalized_summary_title:
+            if normalized_base_name and normalized_base_name.casefold() == normalized_summary_title.casefold():
+                output_filename = f"{normalized_summary_title}_{process_name}.txt"
+            else:
+                output_filename = f"{normalized_summary_title}_{process_name}_{base_name}.txt"
         else:
             # タイトルなし: {元ファイル名}_文字起こし_{タイムスタンプ}.txt（従来通り）
             output_filename = f"{base_name}_{process_name}_{timestamp}.txt"
