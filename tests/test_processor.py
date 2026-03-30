@@ -1,3 +1,4 @@
+import datetime
 import os
 import time
 import unittest
@@ -311,6 +312,44 @@ class FileProcessorTests(unittest.TestCase):
         self.assertEqual(ctx.exception.error_code, "INSUFFICIENT_CREDIT")
         self.assertIn("利用残高", ctx.exception.user_message)
 
+
+    def test_generated_title_strips_labels_and_followup_sections(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+
+        title = processor._normalize_generated_title(
+            "タイトル：暑さで機械が止まる 浴衣姿も 要約：これは不要"
+        )
+
+        self.assertEqual(title, "暑さで機械が止まる 浴衣姿も")
+
+    def test_save_result_avoids_duplicate_summary_title_in_filename(self):
+        temp_dir = self.make_output_dir()
+        output_path = None
+        try:
+            processor = FileProcessor(temp_dir, enable_cache=False)
+            start_time = datetime.datetime.now()
+
+            output_path = processor._save_result(
+                input_file=os.path.join(os.getcwd(), "暑さで機械が止まる.mp4"),
+                final_text="dummy text",
+                process_type="transcription",
+                prompts={},
+                start_time=start_time,
+                update_status=lambda message: None,
+                save_to_output_dir=True,
+                save_to_source_dir=False,
+                summary_title="タイトル：暑さで機械が止まる"
+            )
+
+            self.assertTrue(os.path.exists(output_path))
+            self.assertEqual(
+                os.path.basename(output_path),
+                "暑さで機械が止まる_文字起こし.txt"
+            )
+        finally:
+            if output_path and os.path.exists(output_path):
+                os.remove(output_path)
 
 if __name__ == '__main__':
     unittest.main()

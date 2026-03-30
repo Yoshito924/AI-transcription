@@ -152,13 +152,14 @@ class WhisperApiService:
             raise TranscriptionError(f"音声ファイルが見つかりません: {audio_path}")
 
         file_size_mb = get_file_size_mb(audio_path)
-        logger.info(f"OpenAI文字起こし開始: {os.path.basename(audio_path)}, モデル={self.model}, サイズ={file_size_mb:.2f}MB")
+        model_name = getattr(self, 'model', self.DEFAULT_MODEL)
+        logger.info(f"OpenAI文字起こし開始: {os.path.basename(audio_path)}, モデル={model_name}, サイズ={file_size_mb:.2f}MB")
 
         try:
             # ファイルを開いてAPIに送信
             with open(audio_path, 'rb') as audio_file:
                 transcript = self.client.audio.transcriptions.create(
-                    model=self.model,
+                    model=model_name,
                     file=audio_file,
                     language=language,
                     response_format=response_format,
@@ -181,7 +182,7 @@ class WhisperApiService:
 
             # メタデータを構築
             metadata = {
-                'model': self.model,
+                'model': model_name,
                 'language': detected_language,
                 'file_size_mb': file_size_mb,
                 'service': 'openai-transcription-api'
@@ -191,7 +192,7 @@ class WhisperApiService:
                 metadata['segments'] = segments
                 metadata['total_segments'] = len(segments)
 
-            logger.info(f"OpenAI文字起こし完了: モデル={self.model}, テキスト長={len(text)}文字")
+            logger.info(f"OpenAI文字起こし完了: モデル={model_name}, テキスト長={len(text)}文字")
 
             return text.strip(), metadata
 
@@ -275,7 +276,7 @@ class WhisperApiService:
         - gpt-4o-mini-transcribe: $0.003/分
         - whisper-1: $0.006/分
         """
-        model = model or self.model
+        model = model or getattr(self, 'model', self.DEFAULT_MODEL)
         cost_per_minute = self.MODEL_PRICING.get(model, 0.006)
         duration_minutes = audio_duration_seconds / 60.0
         cost_usd = duration_minutes * cost_per_minute

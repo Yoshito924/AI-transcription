@@ -221,7 +221,7 @@ class WhisperService:
             'segments': segments
         }
     
-    def load_model(self, model_name: str = 'base', force_reload: bool = False):
+    def load_model(self, model_name: str = 'large-v3', force_reload: bool = False):
         """Whisperモデルをロード
 
         サポートされるモデル名:
@@ -328,7 +328,7 @@ class WhisperService:
                     raise AudioProcessingError(f"Whisperモデルのロードに失敗しました: {str(e)}")
         return self.model
     
-    def transcribe(self, audio_path: str, model_name: str = 'base', 
+    def transcribe(self, audio_path: str, model_name: str = 'large-v3', 
                   language: Optional[str] = 'ja', **kwargs) -> Tuple[str, Dict[str, Any]]:
         """音声ファイルを文字起こし"""
         try:
@@ -363,7 +363,7 @@ class WhisperService:
             logger.error(f"Whisper文字起こしエラー: {str(e)}")
             raise TranscriptionError(f"Whisper文字起こしに失敗しました: {str(e)}")
     
-    def transcribe_with_segments(self, audio_path: str, model_name: str = 'base',
+    def transcribe_with_segments(self, audio_path: str, model_name: str = 'large-v3',
                                 language: Optional[str] = 'ja', **kwargs) -> Tuple[str, Dict[str, Any]]:
         """セグメント情報付きで文字起こし"""
         try:
@@ -405,7 +405,7 @@ class WhisperService:
             raise TranscriptionError(f"Whisperセグメント文字起こしに失敗しました: {str(e)}")
     
     def transcribe_segment(self, segment_file: str, segment_num: int, 
-                          total_segments: int, model_name: str = 'base',
+                          total_segments: int, model_name: str = 'large-v3',
                           language: Optional[str] = 'ja') -> Tuple[str, Dict[str, Any]]:
         """セグメントファイルの文字起こし（分割処理用）"""
         try:
@@ -549,7 +549,7 @@ class WhisperService:
         else:
             return "CPU"
     
-    def estimate_processing_time(self, audio_duration_sec: float, model_name: str = 'base') -> float:
+    def estimate_processing_time(self, audio_duration_sec: float, model_name: str = 'large-v3') -> float:
         """処理時間の推定（秒）"""
         # GPU (CUDA) での処理倍率（音声長に対する処理時間の比率）
         # faster-whisper + RTX系GPUの実測ベース

@@ -40,7 +40,7 @@ class Config:
             "transcription_engine": "gemini",  # "gemini" または "whisper" または "whisper-api"
             "gemini_safety_filter_recovery": "segment",  # "segment" または "whisper"
             "title_generation_engine": "auto",  # "auto", "ollama", "gemini", "disabled"
-            "whisper_model": "base",  # "tiny", "base", "small", "medium", "large", "turbo"
+            "whisper_model": "large-v3",  # "tiny", "base", "small", "medium", "large-v3", "turbo"
             "trim_long_silence": DEFAULT_TRIM_LONG_SILENCE,
             "silence_trim_mode": DEFAULT_SILENCE_TRIM_MODE,
             "silence_trim_threshold_db": DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
