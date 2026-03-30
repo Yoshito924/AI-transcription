@@ -35,6 +35,8 @@ class AudioProcessor:
     
     def __init__(self, max_audio_size_mb=MAX_AUDIO_SIZE_MB):
         self.max_audio_size_mb = max_audio_size_mb
+        # 動画から抽出した音声の一時ファイルキャッシュ（同じ動画の再抽出を防止）
+        self._extracted_audio_cache = {}  # {video_path: tmp_audio_path}
     
     def get_audio_duration(self, file_path):
         """FFmpegを使用して音声ファイルの長さを秒単位で取得"""
@@ -267,6 +269,13 @@ class AudioProcessor:
             str: 一時音声ファイルのパス。失敗時は None
         """
         import time as _time
+
+        # キャッシュに抽出済みの音声があればそれを返す
+        cached = self._extracted_audio_cache.get(video_path)
+        if cached and os.path.exists(cached):
+            logger.info(f"抽出済み音声をキャッシュから再利用: {os.path.basename(video_path)}")
+            return cached
+
         try:
             tmp = tempfile.NamedTemporaryFile(suffix='.m4a', delete=False)
             tmp_path = tmp.name
@@ -292,6 +301,7 @@ class AudioProcessor:
             if result.returncode == 0 and os.path.exists(tmp_path):
                 tmp_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
                 logger.info(f"動画から音声を高速抽出: {elapsed:.1f}秒, {tmp_size_mb:.1f}MB")
+                self._extracted_audio_cache[video_path] = tmp_path
                 return tmp_path
 
             # コピーが失敗した場合（特殊コーデック）、再エンコードで抽出
@@ -1198,9 +1208,11 @@ class AudioProcessor:
             raise AudioProcessingError(f"音声変換に失敗しました: {str(e)}")
 
         finally:
-            # 動画から抽出した一時音声ファイルを削除
-            if tmp_audio_source and os.path.exists(tmp_audio_source):
-                try:
-                    os.unlink(tmp_audio_source)
-                except OSError:
-                    pass
+            # 動画から抽出した一時音声ファイルを削除し、キャッシュからも除去
+            if tmp_audio_source:
+                self._extracted_audio_cache.pop(input_file, None)
+                if os.path.exists(tmp_audio_source):
+                    try:
+                        os.unlink(tmp_audio_source)
+                    except OSError:
+                        pass
