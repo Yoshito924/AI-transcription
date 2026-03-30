@@ -412,7 +412,7 @@ class FileProcessor:
                                            cleanup_segments=True, recovery_mode='segment'):
         """Gemini安全性ブロック時に分割再試行し、だめならWhisperへフォールバックする"""
         root_message = getattr(exception, 'user_message', str(exception))
-        normalized_recovery_mode = recovery_mode if recovery_mode in ('segment', 'whisper') else 'segment'
+        normalized_recovery_mode = recovery_mode if recovery_mode in ('segment', 'segment-whisper', 'whisper') else 'segment'
         recovery_notice = (
             "注意: Gemini が安全性フィルターでブロックされました。代替経路で処理を継続します。\n"
             f"- ブロック内容: {root_message}"
@@ -451,12 +451,14 @@ class FileProcessor:
             retry_cleanup_segments = True
 
         if retry_segments and len(retry_segments) > 1:
+            whisper_note = "（ブロック区間はWhisperで補完）" if normalized_recovery_mode == 'segment-whisper' else ""
             segmented_warning = (
                 "注意: Gemini が単一ファイルでは安全性フィルターにかかったため、"
-                "セグメント単位で再試行しました。"
+                f"セグメント単位で再試行しました。{whisper_note}"
             )
             update_status(f"{segmented_warning}\n- セグメント数: {len(retry_segments)}")
 
+            use_whisper_fallback = (normalized_recovery_mode == 'segment-whisper')
             try:
                 result = self._perform_segmented_transcription(
                     audio_path,
@@ -465,7 +467,9 @@ class FileProcessor:
                     preferred_model,
                     retry_segments,
                     progress_callback=progress_callback,
-                    cleanup_segments=retry_cleanup_segments
+                    cleanup_segments=retry_cleanup_segments,
+                    whisper_fallback_for_blocked=use_whisper_fallback,
+                    whisper_model=whisper_model
                 )
             except Exception as retry_exception:
                 logger.warning(
@@ -1018,7 +1022,8 @@ class FileProcessor:
         return response.text
     
     def _perform_segmented_transcription(self, audio_path, api_key, update_status, preferred_model=None,
-                                        cached_segments=None, progress_callback=None, cleanup_segments=True):
+                                        cached_segments=None, progress_callback=None, cleanup_segments=True,
+                                        whisper_fallback_for_blocked=False, whisper_model='turbo'):
         """分割された音声ファイルの文字起こし（スマート統合付き）"""
         with GENAI_SDK_LOCK:
             genai.configure(api_key=api_key)
@@ -1077,6 +1082,22 @@ class FileProcessor:
 
                 # エラーチェック: エラーテキストは結果に含めない
                 if error_info is not None:
+                    # 安全性フィルターブロック時にWhisperフォールバック
+                    if (whisper_fallback_for_blocked
+                            and error_info['category'] == '安全性フィルター'):
+                        whisper_text = self._whisper_fallback_single_segment(
+                            segment_file, i+1, total, update_status, whisper_model
+                        )
+                        if whisper_text:
+                            segment_transcriptions.append(whisper_text)
+                            segment_info.append({
+                                'segment_index': i,
+                                'total_segments': len(segment_files),
+                                'file_path': segment_file
+                            })
+                            logger.info(f"セグメント {i+1} をWhisperで補完しました")
+                            continue
+
                     if first_exception is None:
                         first_exception = error_info['exception']
                     segment_errors.append({
@@ -1212,6 +1233,34 @@ class FileProcessor:
                     'detail': error_detail
                 }
             )
+
+    def _whisper_fallback_single_segment(self, segment_file, segment_num, total_segments,
+                                          update_status, whisper_model='turbo'):
+        """安全性フィルターでブロックされた単一セグメントをWhisperで文字起こしする
+
+        Returns:
+            str or None: Whisperの文字起こし結果。失敗時はNone
+        """
+        try:
+            update_status(
+                f"セグメント {segment_num}/{total_segments} が安全性フィルターでブロック → Whisper で補完中..."
+            )
+            whisper_service = self.get_whisper_service()
+            text, metadata = whisper_service.transcribe(
+                segment_file,
+                model_name=whisper_model,
+                language='ja'
+            )
+            if text and text.strip():
+                update_status(
+                    f"セグメント {segment_num}/{total_segments} を Whisper ({whisper_model}) で補完完了"
+                )
+                return text.strip()
+            return None
+        except Exception as e:
+            logger.warning(f"セグメント {segment_num} のWhisperフォールバック失敗: {e}")
+            update_status(f"セグメント {segment_num} のWhisper補完にも失敗しました")
+            return None
 
     def _classify_segment_error(self, exception, segment_num, segment_file, total_segments, model_name):
         """セグメント処理エラーを分類し、ログに記録する

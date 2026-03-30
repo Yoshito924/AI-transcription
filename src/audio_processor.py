@@ -2,9 +2,12 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+
+import numpy as np
 
 from .constants import (
     MAX_AUDIO_SIZE_MB, 
@@ -57,6 +60,126 @@ class AudioProcessor:
         except Exception as e:
             logger.error(f"音声長さの取得中に例外が発生: {file_path}", exc_info=True)
             return None
+
+    def extract_waveform_data(self, file_path, target_samples=4000):
+        """音声ファイルから波形表示用のサンプルデータを抽出する
+
+        FFmpegでモノラル・低サンプルレートのPCMに変換し、
+        numpyで目標サンプル数にダウンサンプリングする。
+
+        Args:
+            file_path: 入力音声ファイルのパス
+            target_samples: 表示用に間引くサンプル数（デフォルト4000）
+
+        Returns:
+            tuple: (samples_array, duration_sec) or (None, None)
+        """
+        if not os.path.exists(file_path):
+            return None, None
+
+        duration = self.get_audio_duration(file_path)
+        if not duration or duration <= 0:
+            return None, None
+
+        # 目標サンプル数に合わせたサンプルレートを計算（最低8000Hz、最大44100Hz）
+        target_sr = max(8000, min(44100, int(target_samples / duration * 4)))
+
+        try:
+            cmd = [
+                'ffmpeg', '-nostdin',
+                '-i', file_path,
+                '-vn',
+                '-ac', '1',                # モノラル
+                '-ar', str(target_sr),      # サンプルレート
+                '-f', 's16le',              # 16bit signed little-endian PCM
+                '-acodec', 'pcm_s16le',
+                'pipe:1'
+            ]
+            timeout = max(60, int(duration * 1.5))
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=timeout
+            )
+            if result.returncode != 0:
+                logger.error("波形データの抽出に失敗しました")
+                return None, None
+
+            # PCMデータをnumpy配列に変換
+            raw = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32)
+            if len(raw) == 0:
+                return None, None
+
+            # -1.0〜1.0に正規化
+            max_val = np.max(np.abs(raw))
+            if max_val > 0:
+                raw = raw / max_val
+
+            # target_samples にダウンサンプリング（ピーク保持）
+            if len(raw) > target_samples:
+                chunk_size = len(raw) // target_samples
+                trimmed = raw[:chunk_size * target_samples]
+                chunks = trimmed.reshape(target_samples, chunk_size)
+                # 各チャンクの最大絶対値を符号付きで保持
+                max_idx = np.argmax(np.abs(chunks), axis=1)
+                samples = chunks[np.arange(target_samples), max_idx]
+            else:
+                samples = raw
+
+            return samples, duration
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"波形データ抽出がタイムアウトしました: {file_path}")
+            return None, None
+        except Exception as e:
+            logger.error(f"波形データ抽出中にエラー: {e}", exc_info=True)
+            return None, None
+
+    def detect_silence_regions(self, file_path,
+                               min_silence_sec=SILENCE_TRIM_MIN_SILENCE_SEC,
+                               threshold_db=SILENCE_TRIM_THRESHOLD_DB):
+        """FFmpeg silencedetect で無音区間の開始・終了タイムスタンプを取得する
+
+        Returns:
+            list of (start_sec, end_sec) — 無音区間のリスト
+        """
+        if not os.path.exists(file_path):
+            return []
+
+        duration = self.get_audio_duration(file_path)
+        if not duration or duration <= 0:
+            return []
+
+        threshold_text = f"{threshold_db}dB" if isinstance(threshold_db, (int, float)) else str(threshold_db)
+        af = f"silencedetect=noise={threshold_text}:d={min_silence_sec}"
+
+        try:
+            cmd = [
+                'ffmpeg', '-nostdin',
+                '-i', file_path,
+                '-af', af,
+                '-f', 'null', '-'
+            ]
+            timeout = max(60, int(duration * 1.5))
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=timeout
+            )
+            stderr_text = result.stderr.decode('utf-8', errors='replace')
+
+            # silence_start / silence_end をパース
+            starts = [float(m.group(1)) for m in re.finditer(r'silence_start:\s*([\d.]+)', stderr_text)]
+            ends = [float(m.group(1)) for m in re.finditer(r'silence_end:\s*([\d.]+)', stderr_text)]
+
+            regions = []
+            for i, s in enumerate(starts):
+                e = ends[i] if i < len(ends) else duration
+                regions.append((s, e))
+
+            return regions
+
+        except Exception as e:
+            logger.error(f"無音検出中にエラー: {e}", exc_info=True)
+            return []
 
     def _build_silence_reduction_filter(self,
                                         min_silence_sec=SILENCE_TRIM_MIN_SILENCE_SEC,

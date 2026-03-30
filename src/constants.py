@@ -226,5 +226,43 @@ GEMINI_PRICING = {
         "output": 2.00,
         "pricing_type": "token_based",
         "recommended_use": "リアルタイム処理専用"
-    }
+    },
+    # Gemini 3.x系（より具体的なキーを先に配置）
+    "gemini-3.1-flash-lite": {
+        "input_text": 0.25,
+        "input_audio": 0.50,
+        "input_text_batch": 0.125,
+        "input_audio_batch": 0.25,
+        "output": 1.50,
+        "output_batch": 0.75,
+        "pricing_type": "token_based",
+        "recommended_use": "軽量・高速（3.x世代）"
+    },
+    "gemini-3.1-pro": {
+        "input_text": 2.00,
+        "input_text_over_200k": 4.00,
+        "input_audio": 2.00,  # 公式ページではtext/image/videoと同額表記
+        "output": 12.00,
+        "output_over_200k": 18.00,
+        "output_batch": 6.00,
+        "pricing_type": "token_based",
+        "recommended_use": "高品質処理（3.x世代）"
+    },
+    "gemini-3-flash": {
+        "input_text": 0.50,
+        "input_audio": 1.00,
+        "input_text_batch": 0.25,
+        "input_audio_batch": 0.50,
+        "output": 3.00,
+        "output_batch": 1.50,
+        "pricing_type": "token_based",
+        "recommended_use": "バランス型（3.x世代）"
+    },
+    "gemini-3-pro": {
+        "input_text": 2.00,
+        "input_audio": 2.00,
+        "output": 12.00,
+        "pricing_type": "token_based",
+        "recommended_use": "高品質処理（3.x世代）"
+    },
 }

@@ -235,7 +235,7 @@ def get_whisper_api_model_value(ui_elements, default='gpt-4o-mini-transcribe'):
     return default
 
 
-def get_gemini_safety_filter_recovery_value(ui_elements, default='segment'):
+def get_gemini_safety_filter_recovery_value(ui_elements, default='segment-whisper'):
     """UI要素からGemini安全性ブロック時の回復モードを取得する"""
     recovery_var = ui_elements.get('gemini_safety_filter_recovery_var', None)
     display_to_mode = ui_elements.get('gemini_safety_filter_recovery_display_to_mode', None)
@@ -309,11 +309,10 @@ def calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_inpu
             input_cost = (input_tokens / 1000000) * pricing["input_text_over_128k"]
             output_cost = (output_tokens / 1000000) * pricing["output_over_128k"]
 
-    # Gemini 2.x系（トークンベース）
+    # Gemini 2.x/3.x系（トークンベース）
     else:
         # プロンプトサイズによる料金の違いを考慮（200Kトークンが境界）
-        # gemini-2.5-flashはプロンプトサイズで料金が変わる
-        if "gemini-2.5-flash" in model_name:
+        if "input_text_over_200k" in pricing:
             if input_tokens <= 200000:
                 input_price = pricing.get("input_text", 0.15)
                 output_price = pricing.get("output", 2.50)
@@ -321,7 +320,7 @@ def calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_inpu
                 input_price = pricing.get("input_text_over_200k", pricing.get("input_text", 0.30))
                 output_price = pricing.get("output_over_200k", pricing.get("output", 5.00))
         else:
-            # その他の2.x系モデルは標準料金
+            # 標準料金（200K境界なし）
             input_price = pricing.get("input_text", 0.10)
             output_price = pricing.get("output", 0.40)
         

@@ -11,18 +11,18 @@ from .exceptions import TranscriptionError, AudioProcessingError
 from .logger import logger
 from .utils import format_duration
 
-# Whisperライブラリの選択（自動フォールバック）
+# Whisperライブラリの選択（faster-whisper優先 → openai-whisperフォールバック）
 WHISPER_BACKEND = None
 try:
-    import torch
-    import whisper
-    WHISPER_BACKEND = "openai-whisper"
-    logger.info("OpenAI Whisper backend loaded")
+    from faster_whisper import WhisperModel
+    WHISPER_BACKEND = "faster-whisper"
+    logger.info("Faster Whisper backend loaded (高速モード)")
 except ImportError:
     try:
-        from faster_whisper import WhisperModel
-        WHISPER_BACKEND = "faster-whisper"
-        logger.info("Faster Whisper backend loaded")
+        import torch
+        import whisper
+        WHISPER_BACKEND = "openai-whisper"
+        logger.info("OpenAI Whisper backend loaded")
     except ImportError:
         logger.error("No Whisper backend found. Please install openai-whisper or faster-whisper")
         WHISPER_BACKEND = None

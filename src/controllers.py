@@ -149,23 +149,26 @@ class TranscriptionController:
         try:
             # ファイルパスの正規化
             file_path = normalize_file_path(file_path)
-            
+
             if os.path.exists(file_path):
                 self.current_file = file_path
                 filename = os.path.basename(file_path)
-                
+
                 # ファイル名が長い場合、短く表示
                 display_name = truncate_display_name(filename, FILE_NAME_DISPLAY_MAX_LENGTH)
-                    
+
                 self.ui_elements['file_label'].config(text=f"選択ファイル: {display_name}")
                 self.update_status("ファイル読み込み完了")
-                
+
                 # ファイルサイズをチェック
                 size_mb = get_file_size_mb(file_path)
                 self.add_log(f"ファイルサイズ: {size_mb:.1f} MB")
+
+                # 波形データをバックグラウンドで読み込み
+                self._load_waveform(file_path)
             else:
                 raise FileProcessingError("ファイルが見つかりません")
-                
+
         except FileProcessingError as e:
             # カスタム例外の場合は詳細メッセージを使用
             user_msg = e.get_detailed_message() if hasattr(e, 'get_detailed_message') else str(e)
@@ -177,6 +180,32 @@ class TranscriptionController:
             messagebox.showerror("エラー", error_msg)
             self.update_status(error_msg)
             self.add_log(f"エラー詳細: {type(e).__name__}: {str(e)}")
+
+    def _load_waveform(self, file_path):
+        """バックグラウンドで波形データと無音区間を抽出して表示"""
+        waveform_viewer = self.ui_elements.get('waveform_viewer')
+        if not waveform_viewer:
+            return
+
+        audio_proc = self.processor.audio_processor
+
+        def _extract():
+            try:
+                samples, duration = audio_proc.extract_waveform_data(file_path)
+                if samples is None:
+                    return
+
+                silence_regions = audio_proc.detect_silence_regions(file_path)
+
+                # UIスレッドで描画
+                waveform_viewer.after(0, lambda: waveform_viewer.set_data(
+                    samples, duration, silence_regions
+                ))
+            except Exception as e:
+                logger.warning(f"波形データの読み込みに失敗: {e}")
+
+        thread = threading.Thread(target=_extract, daemon=True)
+        thread.start()
     
     def start_transcription(self):
         """文字起こし処理を開始"""
@@ -726,6 +755,12 @@ class TranscriptionController:
 
         self.update_status("キュー処理完了")
         self.ui_elements['file_label'].config(text="選択ファイル: なし")
+
+        # 波形ビューアをクリア
+        wv = self.ui_elements.get('waveform_viewer')
+        if wv:
+            wv.clear()
+
         messagebox.showinfo("キュー処理完了", summary)
 
         if self.update_queue_callback:

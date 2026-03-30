@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 
 from .ui_styles import ModernTheme, ModernWidgets, ICONS
+from .waveform_viewer import WaveformViewer
 from .whisper_api_service import WhisperApiService
 from .constants import (
     DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
@@ -749,11 +750,13 @@ def create_file_section(parent, app, theme, widgets):
     gemini_recovery_label.pack(anchor='w', pady=(10, 0))
 
     gemini_recovery_display_names = {
-        'segment': '音声を分割して再試行（推奨）',
+        'segment-whisper': '分割再試行 + ブロック区間をWhisperで補完（推奨）',
+        'segment': '音声を分割して再試行（ブロック区間は除外）',
         'whisper': 'Whisper に自動切替',
     }
     gemini_recovery_display_to_mode = {v: k for k, v in gemini_recovery_display_names.items()}
     gemini_recovery_details = {
+        'segment-whisper': 'Geminiで再試行し、弾かれた区間だけWhisperで補完',
         'segment': 'Geminiで細かく再試行し、弾かれた区間だけ除外して継続',
         'whisper': 'Geminiで弾かれたらすぐローカルWhisperへ切替',
     }
@@ -992,6 +995,10 @@ def create_file_section(parent, app, theme, widgets):
     )
     status_label.pack(side=tk.LEFT)
 
+    # ウェーブフォームビューア（プログレスバーの上に配置）
+    waveform_viewer = WaveformViewer(status_inner, theme)
+    # show() 呼び出しまで非表示
+
     progress_caption = tk.Frame(status_inner, bg=theme.colors['surface_variant'])
     progress_caption.pack(fill=tk.X, pady=(8, 4))
 
@@ -1117,7 +1124,7 @@ def create_file_section(parent, app, theme, widgets):
 
     def on_gemini_recovery_change(event=None):
         display_name = gemini_recovery_var.get()
-        recovery_mode = gemini_recovery_display_to_mode.get(display_name, 'segment')
+        recovery_mode = gemini_recovery_display_to_mode.get(display_name, 'segment-whisper')
         gemini_recovery_info.config(text=gemini_recovery_details.get(recovery_mode, ''))
         app.config.set("gemini_safety_filter_recovery", recovery_mode)
         app.config.save()
@@ -1138,6 +1145,7 @@ def create_file_section(parent, app, theme, widgets):
     frame.status_dot = status_dot
     frame.progress = progress
     frame.progress_label = progress_label
+    frame.waveform_viewer = waveform_viewer
     frame.engine_var = engine_var
     frame.whisper_model_var = whisper_model_var
     frame.whisper_model_combo = whisper_model_combo
@@ -2115,6 +2123,7 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'status_dot': file_section.status_dot,
         'progress': file_section.progress,
         'progress_label': file_section.progress_label,
+        'waveform_viewer': file_section.waveform_viewer,
         'engine_var': file_section.engine_var,
         'whisper_model_var': file_section.whisper_model_var,
         'whisper_model_combo': file_section.whisper_model_combo,
