@@ -593,11 +593,10 @@ class FileProcessor:
                     return processed_audio, segments, True
 
         # キャッシュがない場合は通常処理
-        import time as _time
-        step_start = _time.time()
+        step_start = time.time()
         update_status("音声ファイルを変換中...")
         audio_path = self.audio_processor.convert_audio(input_file, trim_long_silence=False)
-        convert_elapsed = _time.time() - step_start
+        convert_elapsed = time.time() - step_start
         logger.info(f"音声変換完了: {convert_elapsed:.1f}秒")
 
         processed_duration_sec = self.audio_processor.get_audio_duration(audio_path) or audio_duration_sec
@@ -1419,19 +1418,18 @@ class FileProcessor:
     
     def _perform_whisper_single_transcription(self, audio_path, update_status, whisper_model='base'):
         """Whisperを使用した単一ファイルの文字起こし"""
-        import time as _time
         update_status(f"Whisperで文字起こし中... (モデル: {whisper_model})")
 
         try:
             # Whisperで文字起こし
             whisper_service = self.get_whisper_service()
-            whisper_start = _time.time()
+            whisper_start = time.time()
             text, metadata = whisper_service.transcribe(
                 audio_path,
                 model_name=whisper_model,
                 language='ja'
             )
-            whisper_elapsed = _time.time() - whisper_start
+            whisper_elapsed = time.time() - whisper_start
 
             # メタデータ情報を表示
             duration = metadata.get('duration', 0)
@@ -1747,18 +1745,22 @@ class FileProcessor:
             str or None: リネーム後のパス。失敗時はNone
         """
         try:
+            safe_title = sanitize_filename(summary_title)
+            if not safe_title:
+                logger.warning("リネーム用タイトルがサニタイズ後に空になりました")
+                return None
+
             source_dir = os.path.dirname(input_file)
             ext = os.path.splitext(input_file)[1]
-            new_name = f"{summary_title}{ext}"
+            new_name = f"{safe_title}{ext}"
             new_path = os.path.join(source_dir, new_name)
 
             # 同名ファイルが存在する場合は連番を付ける
-            if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(input_file):
-                counter = 2
-                while os.path.exists(new_path):
-                    new_name = f"{summary_title}_{counter}{ext}"
-                    new_path = os.path.join(source_dir, new_name)
-                    counter += 1
+            counter = 2
+            while os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(input_file):
+                new_name = f"{safe_title}_{counter}{ext}"
+                new_path = os.path.join(source_dir, new_name)
+                counter += 1
 
             os.rename(input_file, new_path)
             logger.info(f"元ファイルをリネーム: {os.path.basename(input_file)} → {new_name}")

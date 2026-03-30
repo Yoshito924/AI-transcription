@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 import numpy as np
 
@@ -24,7 +25,8 @@ from .constants import (
     SEGMENT_DURATION_SEC,
     SILENCE_TRIM_MIN_SILENCE_SEC,
     SILENCE_TRIM_KEEP_SILENCE_SEC,
-    SILENCE_TRIM_THRESHOLD_DB
+    SILENCE_TRIM_THRESHOLD_DB,
+    VIDEO_EXTENSIONS
 )
 from .exceptions import AudioProcessingError
 from .utils import format_duration, get_file_size_mb
@@ -92,9 +94,7 @@ class AudioProcessor:
 
         # 動画ファイルかどうかを拡張子で判定
         ext = os.path.splitext(file_path)[1].lower().lstrip('.')
-        video_exts = {'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv',
-                      'mpeg', 'mpg', '3gp', '3g2', 'ts', 'mts', 'm2ts', 'flv'}
-        is_video = ext in video_exts
+        is_video = ext in VIDEO_EXTENSIONS
 
         # 長い音声（5分以上）はチャンク分割で高速化
         if duration > 300:
@@ -268,8 +268,6 @@ class AudioProcessor:
         Returns:
             str: 一時音声ファイルのパス。失敗時は None
         """
-        import time as _time
-
         # キャッシュに抽出済みの音声があればそれを返す
         cached = self._extracted_audio_cache.get(video_path)
         if cached and os.path.exists(cached):
@@ -285,7 +283,7 @@ class AudioProcessor:
             file_size_gb = os.path.getsize(video_path) / (1024 ** 3)
             copy_timeout = max(30, min(300, int(file_size_gb * 30)))
 
-            t0 = _time.time()
+            t0 = time.time()
             cmd = [
                 'ffmpeg', '-nostdin', '-y',
                 '-i', video_path,
@@ -297,7 +295,7 @@ class AudioProcessor:
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 timeout=copy_timeout
             )
-            elapsed = _time.time() - t0
+            elapsed = time.time() - t0
             if result.returncode == 0 and os.path.exists(tmp_path):
                 tmp_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
                 logger.info(f"動画から音声を高速抽出: {elapsed:.1f}秒, {tmp_size_mb:.1f}MB")
@@ -356,9 +354,7 @@ class AudioProcessor:
 
         # 動画ファイルかどうかを判定
         ext = os.path.splitext(file_path)[1].lower().lstrip('.')
-        video_exts = {'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv',
-                      'mpeg', 'mpg', '3gp', '3g2', 'ts', 'mts', 'm2ts', 'flv'}
-        is_video = ext in video_exts
+        is_video = ext in VIDEO_EXTENSIONS
 
         # 動画ファイルの場合、音声トラックだけを先に高速抽出
         tmp_audio = None
@@ -391,7 +387,6 @@ class AudioProcessor:
                 return None
 
             # --- 1. 波形表示用にダウンサンプリング ---
-            abs_raw = np.abs(raw)
             if len(raw) > target_samples:
                 chunk_size = len(raw) // target_samples
                 trimmed = raw[:chunk_size * target_samples]
@@ -479,14 +474,14 @@ class AudioProcessor:
 
         except Exception as e:
             logger.warning(f"統合波形解析に失敗: {e}")
-            return None
-        finally:
-            # 動画から抽出した一時音声ファイルを削除
+            # 失敗時のみ一時ファイルを削除（成功時はconvert_audioでの再利用のためキャッシュに残す）
             if tmp_audio and os.path.exists(tmp_audio):
+                self._extracted_audio_cache.pop(file_path, None)
                 try:
                     os.unlink(tmp_audio)
                 except OSError:
                     pass
+            return None
 
     def normalize_silence_trim_settings(self, silence_settings=None):
         """無音カット設定を正規化する"""
@@ -1105,12 +1100,10 @@ class AudioProcessor:
         """
         # 動画ファイルの場合、音声トラックだけ先に抽出して高速化
         ext = os.path.splitext(input_file)[1].lower().lstrip('.')
-        video_exts = {'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv',
-                      'mpeg', 'mpg', '3gp', '3g2', 'ts', 'mts', 'm2ts', 'flv'}
         tmp_audio_source = None
         actual_input = input_file
 
-        if ext in video_exts:
+        if ext in VIDEO_EXTENSIONS:
             logger.info(f"動画から音声トラックを先行抽出中: {os.path.basename(input_file)}")
             tmp_audio_source = self._extract_audio_from_video(input_file)
             if tmp_audio_source:
