@@ -17,7 +17,10 @@ from .constants import (
     DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
     CARD_PADDING, SECTION_SPACING, MAIN_PADDING_X,
-    MAIN_PADDING_Y, QUEUE_LISTBOX_HEIGHT
+    MAIN_PADDING_Y, QUEUE_LISTBOX_HEIGHT,
+    DEFAULT_SILENCE_TRIM_MODE,
+    DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
+    DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC
 )
 
 
@@ -785,6 +788,37 @@ def create_file_section(parent, app, theme, widgets):
     )
     gemini_recovery_info.pack(anchor='w', pady=(4, 0))
 
+    # タイトル生成エンジン選択
+    title_engine_label = tk.Label(
+        left_inner,
+        text="タイトル生成エンジン",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    title_engine_label.pack(anchor='w', pady=(10, 0))
+
+    title_engine_display_names = {
+        'auto': '自動（Gemini → Ollama）',
+        'ollama': 'Ollama（ローカル）',
+        'gemini': 'Gemini API',
+        'disabled': '無効',
+    }
+    title_engine_display_to_mode = {v: k for k, v in title_engine_display_names.items()}
+
+    saved_title_engine = app.config.get("title_generation_engine", "auto")
+    title_engine_var = tk.StringVar(
+        value=title_engine_display_names.get(saved_title_engine, title_engine_display_names['auto'])
+    )
+    title_engine_combo = ttk.Combobox(
+        left_inner,
+        textvariable=title_engine_var,
+        values=list(title_engine_display_names.values()),
+        state='readonly',
+        style='Modern.TCombobox'
+    )
+    title_engine_combo.pack(fill=tk.X, pady=(6, 0))
+
     right_inner = tk.Frame(right_panel, bg=theme.colors['surface_variant'])
     right_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
@@ -835,7 +869,7 @@ def create_file_section(parent, app, theme, widgets):
 
     trim_long_silence_desc = tk.Label(
         right_inner,
-        text="ハムノイズや環境音だけの区間が 2.5 秒以上続く場合に短く詰め、APIコストと処理時間を下げます。",
+        text="会話が無い長めの区間を短く詰めます。下の判定条件は波形プレビューと実処理の両方に反映されます。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant'],
@@ -844,6 +878,136 @@ def create_file_section(parent, app, theme, widgets):
     )
     trim_long_silence_desc.pack(anchor='w', fill=tk.X, pady=(2, 0))
     _bind_dynamic_wraplength(trim_long_silence_desc, 24)
+
+    silence_settings_shell = tk.Frame(
+        right_inner,
+        bg=theme.colors['surface'],
+        highlightbackground=theme.colors['card_border'],
+        highlightthickness=1,
+        bd=0
+    )
+    silence_settings_shell.pack(fill=tk.X, pady=(10, 0))
+
+    silence_settings_inner = tk.Frame(silence_settings_shell, bg=theme.colors['surface'])
+    silence_settings_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    silence_mode_header = tk.Frame(silence_settings_inner, bg=theme.colors['surface'])
+    silence_mode_header.pack(fill=tk.X)
+
+    tk.Label(
+        silence_mode_header,
+        text="無音カット判定",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    ).pack(side=tk.LEFT)
+
+    tk.Label(
+        silence_mode_header,
+        text="波形へ自動反映",
+        font=theme.fonts['caption'],
+        fg=theme.colors['primary'],
+        bg=theme.colors['surface']
+    ).pack(side=tk.RIGHT)
+
+    silence_trim_mode_display_to_value = {
+        "自動判定（推奨）": "auto",
+        "手動しきい値": "manual",
+    }
+    silence_trim_mode_value_to_display = {
+        value: display for display, value in silence_trim_mode_display_to_value.items()
+    }
+    silence_trim_mode_var = tk.StringVar(
+        value=silence_trim_mode_value_to_display.get(
+            app.config.get("silence_trim_mode", DEFAULT_SILENCE_TRIM_MODE),
+            "自動判定（推奨）"
+        )
+    )
+    silence_trim_threshold_db_var = tk.DoubleVar(
+        value=float(app.config.get("silence_trim_threshold_db", DEFAULT_SILENCE_TRIM_THRESHOLD_DB))
+    )
+    silence_trim_min_silence_sec_var = tk.DoubleVar(
+        value=float(app.config.get("silence_trim_min_silence_sec", DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC))
+    )
+
+    silence_trim_mode_combo = ttk.Combobox(
+        silence_settings_inner,
+        textvariable=silence_trim_mode_var,
+        values=list(silence_trim_mode_display_to_value.keys()),
+        state='readonly',
+        style='Modern.TCombobox'
+    )
+    silence_trim_mode_combo.pack(fill=tk.X, pady=(6, 8))
+
+    threshold_header = tk.Frame(silence_settings_inner, bg=theme.colors['surface'])
+    threshold_header.pack(fill=tk.X)
+
+    tk.Label(
+        threshold_header,
+        text="しきい値 (dB)",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    ).pack(side=tk.LEFT)
+
+    silence_trim_threshold_value_label = tk.Label(
+        threshold_header,
+        text="",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['primary'],
+        bg=theme.colors['surface']
+    )
+    silence_trim_threshold_value_label.pack(side=tk.RIGHT)
+
+    silence_trim_threshold_scale = ttk.Scale(
+        silence_settings_inner,
+        from_=-60,
+        to=-18,
+        orient=tk.HORIZONTAL,
+        variable=silence_trim_threshold_db_var
+    )
+    silence_trim_threshold_scale.pack(fill=tk.X, pady=(4, 8))
+
+    min_silence_header = tk.Frame(silence_settings_inner, bg=theme.colors['surface'])
+    min_silence_header.pack(fill=tk.X)
+
+    tk.Label(
+        min_silence_header,
+        text="無音とみなす長さ",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    ).pack(side=tk.LEFT)
+
+    silence_trim_min_value_label = tk.Label(
+        min_silence_header,
+        text="",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['primary'],
+        bg=theme.colors['surface']
+    )
+    silence_trim_min_value_label.pack(side=tk.RIGHT)
+
+    silence_trim_min_scale = ttk.Scale(
+        silence_settings_inner,
+        from_=0.5,
+        to=5.0,
+        orient=tk.HORIZONTAL,
+        variable=silence_trim_min_silence_sec_var
+    )
+    silence_trim_min_scale.pack(fill=tk.X, pady=(4, 4))
+
+    silence_trim_note = tk.Label(
+        silence_settings_inner,
+        text="",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface'],
+        justify='left',
+        anchor='w'
+    )
+    silence_trim_note.pack(fill=tk.X, pady=(2, 0))
+    _bind_dynamic_wraplength(silence_trim_note, 12)
 
     summary_grid = tk.Frame(frame, bg=theme.colors['surface'])
     summary_grid.pack(fill=tk.X, padx=pad, pady=(0, 8))
@@ -1058,9 +1222,65 @@ def create_file_section(parent, app, theme, widgets):
         app.config.save()
         update_save_summary()
 
+    def _save_silence_trim_settings():
+        mode_value = silence_trim_mode_display_to_value.get(
+            silence_trim_mode_var.get(),
+            DEFAULT_SILENCE_TRIM_MODE
+        )
+        app.config.set("silence_trim_mode", mode_value)
+        app.config.set("silence_trim_threshold_db", round(float(silence_trim_threshold_db_var.get()), 1))
+        app.config.set("silence_trim_min_silence_sec", round(float(silence_trim_min_silence_sec_var.get()), 1))
+        app.config.save()
+
+    def _update_silence_trim_controls():
+        mode_value = silence_trim_mode_display_to_value.get(
+            silence_trim_mode_var.get(),
+            DEFAULT_SILENCE_TRIM_MODE
+        )
+        is_manual = mode_value == 'manual'
+        threshold_value = round(float(silence_trim_threshold_db_var.get()), 1)
+        min_silence_value = round(float(silence_trim_min_silence_sec_var.get()), 1)
+        silence_trim_threshold_db_var.set(threshold_value)
+        silence_trim_min_silence_sec_var.set(min_silence_value)
+
+        silence_trim_threshold_value_label.config(
+            text=f"{threshold_value:.1f} dB" if is_manual else "自動推定"
+        )
+        silence_trim_min_value_label.config(text=f"{min_silence_value:.1f} 秒")
+        silence_trim_threshold_scale.configure(state='normal' if is_manual else 'disabled')
+
+        if trim_long_silence_var.get():
+            if is_manual:
+                note_text = "手動値をそのまま使います。波形を見ながら詰めすぎを避けたいとき向けです。"
+            else:
+                note_text = "音量分布からしきい値を推定します。環境音が変わる素材でも合わせやすくなります。"
+        else:
+            note_text = "現在は圧縮OFFです。波形プレビューだけ確認し、良さそうならオンにできます。"
+
+        silence_trim_note.config(text=note_text)
+
+    def on_silence_trim_mode_change(event=None):
+        _update_silence_trim_controls()
+        _save_silence_trim_settings()
+        app.on_silence_trim_settings_changed(immediate=True)
+
+    def on_silence_trim_threshold_change(value=None):
+        _update_silence_trim_controls()
+        app.on_silence_trim_settings_changed(immediate=False)
+
+    def on_silence_trim_min_change(value=None):
+        _update_silence_trim_controls()
+        app.on_silence_trim_settings_changed(immediate=False)
+
+    def persist_silence_trim_settings(event=None):
+        _save_silence_trim_settings()
+        app.on_silence_trim_settings_changed(immediate=False)
+
     def on_trim_long_silence_toggle():
         app.config.set("trim_long_silence", trim_long_silence_var.get())
         app.config.save()
+        _update_silence_trim_controls()
+        app.on_silence_trim_settings_changed(immediate=True)
 
     def on_engine_change():
         engine_value = engine_var.get()
@@ -1129,11 +1349,29 @@ def create_file_section(parent, app, theme, widgets):
         app.config.set("gemini_safety_filter_recovery", recovery_mode)
         app.config.save()
 
+    def on_title_engine_change(event=None):
+        display_name = title_engine_var.get()
+        mode = title_engine_display_to_mode.get(display_name, 'auto')
+        app.config.set("title_generation_engine", mode)
+        app.config.save()
+
     engine_var.trace('w', lambda *args: on_engine_change())
     whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
     whisper_api_model_combo.bind('<<ComboboxSelected>>', on_whisper_api_model_change)
     gemini_recovery_combo.bind('<<ComboboxSelected>>', on_gemini_recovery_change)
+    title_engine_combo.bind('<<ComboboxSelected>>', on_title_engine_change)
+    silence_trim_mode_combo.bind('<<ComboboxSelected>>', on_silence_trim_mode_change)
+    silence_trim_threshold_scale.configure(command=on_silence_trim_threshold_change)
+    silence_trim_threshold_scale.bind('<ButtonRelease-1>', persist_silence_trim_settings)
+    silence_trim_min_scale.configure(command=on_silence_trim_min_change)
+    silence_trim_min_scale.bind('<ButtonRelease-1>', persist_silence_trim_settings)
+    waveform_viewer.set_callbacks(
+        play_toggle_callback=app.toggle_waveform_playback,
+        stop_callback=lambda: app.stop_waveform_playback(reset_position=True, silent=True),
+        seek_callback=app.seek_waveform_playback
+    )
     update_save_summary()
+    _update_silence_trim_controls()
     on_engine_change()
     on_model_change()
     on_whisper_api_model_change()
@@ -1153,7 +1391,13 @@ def create_file_section(parent, app, theme, widgets):
     frame.whisper_api_display_to_model = whisper_api_display_to_model
     frame.gemini_safety_filter_recovery_var = gemini_recovery_var
     frame.gemini_safety_filter_recovery_display_to_mode = gemini_recovery_display_to_mode
+    frame.title_engine_var = title_engine_var
+    frame.title_engine_display_to_mode = title_engine_display_to_mode
     frame.trim_long_silence_var = trim_long_silence_var
+    frame.silence_trim_mode_var = silence_trim_mode_var
+    frame.silence_trim_mode_display_to_value = silence_trim_mode_display_to_value
+    frame.silence_trim_threshold_db_var = silence_trim_threshold_db_var
+    frame.silence_trim_min_silence_sec_var = silence_trim_min_silence_sec_var
     frame.save_to_output_var = save_to_output_var
     frame.save_to_source_var = save_to_source_var
     frame.queue_frame = queue_frame
@@ -2131,7 +2375,13 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'whisper_api_display_to_model': file_section.whisper_api_display_to_model,
         'gemini_safety_filter_recovery_var': file_section.gemini_safety_filter_recovery_var,
         'gemini_safety_filter_recovery_display_to_mode': file_section.gemini_safety_filter_recovery_display_to_mode,
+        'title_engine_var': file_section.title_engine_var,
+        'title_engine_display_to_mode': file_section.title_engine_display_to_mode,
         'trim_long_silence_var': file_section.trim_long_silence_var,
+        'silence_trim_mode_var': file_section.silence_trim_mode_var,
+        'silence_trim_mode_display_to_value': file_section.silence_trim_mode_display_to_value,
+        'silence_trim_threshold_db_var': file_section.silence_trim_threshold_db_var,
+        'silence_trim_min_silence_sec_var': file_section.silence_trim_min_silence_sec_var,
         'save_to_output_var': file_section.save_to_output_var,
         'save_to_source_var': file_section.save_to_source_var,
         'recording_status_label': recording_section.recording_status_label,

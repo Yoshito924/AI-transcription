@@ -8,6 +8,9 @@ from .constants import (
     DEFAULT_WINDOW_WIDTH, 
     DEFAULT_WINDOW_HEIGHT, 
     DEFAULT_TRIM_LONG_SILENCE,
+    DEFAULT_SILENCE_TRIM_MODE,
+    DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
+    DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
     DEFAULT_RECORDING_GAIN_PERCENT,
     CONFIG_DIR, 
     DATA_DIR, 
@@ -36,8 +39,12 @@ class Config:
             "openai_api_key": "",  # OpenAI API用（Whisper API等）
             "transcription_engine": "gemini",  # "gemini" または "whisper" または "whisper-api"
             "gemini_safety_filter_recovery": "segment",  # "segment" または "whisper"
+            "title_generation_engine": "auto",  # "auto", "ollama", "gemini", "disabled"
             "whisper_model": "base",  # "tiny", "base", "small", "medium", "large", "turbo"
             "trim_long_silence": DEFAULT_TRIM_LONG_SILENCE,
+            "silence_trim_mode": DEFAULT_SILENCE_TRIM_MODE,
+            "silence_trim_threshold_db": DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
+            "silence_trim_min_silence_sec": DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
             "save_to_output_dir": True,
             "save_to_source_dir": False,
             "recording_dir": RECORDINGS_DIR,

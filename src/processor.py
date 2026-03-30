@@ -248,7 +248,9 @@ class FileProcessor:
                     progress_value_callback=None, gemini_api_key=None,
                     time_tracker=None, whisper_api_model=None,
                     gemini_safety_filter_recovery='segment',
-                    trim_long_silence=DEFAULT_TRIM_LONG_SILENCE):
+                    trim_long_silence=DEFAULT_TRIM_LONG_SILENCE,
+                    silence_trim_settings=None,
+                    title_generation_engine='auto'):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
         self.last_transcription_model_name = None
@@ -273,7 +275,8 @@ class FileProcessor:
                 input_file,
                 update_status,
                 engine=engine,
-                trim_long_silence=trim_long_silence
+                trim_long_silence=trim_long_silence,
+                silence_trim_settings=silence_trim_settings
             )
             update_progress(10)
 
@@ -336,11 +339,23 @@ class FileProcessor:
             )
             update_progress(95)
 
-            # 要約タイトルを生成（Gemini APIキーがある場合）
+            # 要約タイトルを生成
             summary_title = None
-            if gemini_api_key:
-                update_status("要約タイトルを生成中...")
-                summary_title = self.generate_summary_title(final_text, gemini_api_key)
+            if title_generation_engine != 'disabled':
+                if title_generation_engine == 'gemini':
+                    if gemini_api_key:
+                        update_status("要約タイトルを生成中（Gemini）...")
+                        summary_title = self.generate_summary_title(final_text, gemini_api_key)
+                elif title_generation_engine == 'ollama':
+                    update_status("要約タイトルを生成中（Ollama）...")
+                    summary_title = self.generate_summary_title_ollama(final_text)
+                else:  # auto
+                    if gemini_api_key:
+                        update_status("要約タイトルを生成中...")
+                        summary_title = self.generate_summary_title(final_text, gemini_api_key)
+                    if not summary_title:
+                        update_status("要約タイトルを生成中（Ollama）...")
+                        summary_title = self.generate_summary_title_ollama(final_text)
                 if summary_title:
                     update_status(f"タイトル生成完了: {summary_title}")
 
@@ -498,7 +513,8 @@ class FileProcessor:
         )
     
     def _prepare_audio_file(self, input_file, update_status, engine='gemini',
-                            trim_long_silence=DEFAULT_TRIM_LONG_SILENCE):
+                            trim_long_silence=DEFAULT_TRIM_LONG_SILENCE,
+                            silence_trim_settings=None):
         """音声ファイルの準備（変換・圧縮・分割）
 
         キャッシュがあれば再利用、なければ処理してキャッシュに保存
@@ -517,10 +533,31 @@ class FileProcessor:
         logger.info(f"音声ファイル準備開始: {os.path.basename(input_file)}, サイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
         update_status(f"処理開始: ファイルサイズ={original_size_mb:.2f}MB, 長さ={duration_str}")
 
-        cache_profile = {
-            'preprocess_version': 2,
-            'trim_long_silence': bool(trim_long_silence),
-        }
+        if silence_trim_settings is None:
+            normalized_silence_settings = None
+            cache_profile = {
+                'preprocess_version': 2,
+                'trim_long_silence': bool(trim_long_silence),
+            }
+        else:
+            normalized_silence_settings = self.audio_processor.normalize_silence_trim_settings(
+                silence_trim_settings
+            )
+            cache_profile = {
+                'preprocess_version': 3,
+                'trim_long_silence': bool(trim_long_silence),
+                'silence_trim_mode': (
+                    normalized_silence_settings['mode'] if trim_long_silence else 'disabled'
+                ),
+                'silence_trim_min_silence_sec': (
+                    round(normalized_silence_settings['min_silence_sec'], 1) if trim_long_silence else 'n/a'
+                ),
+                'silence_trim_threshold_db': (
+                    round(normalized_silence_settings['threshold_db'], 1)
+                    if trim_long_silence and normalized_silence_settings['mode'] == 'manual'
+                    else ('auto' if trim_long_silence else 'n/a')
+                ),
+            }
 
         # キャッシュをチェック
         if self.enable_cache and self.cache_manager:
@@ -549,7 +586,8 @@ class FileProcessor:
             try:
                 trimmed_audio_path, pre_trim_duration_sec, trimmed_duration_sec = self.audio_processor.reduce_long_silence(
                     audio_path,
-                    callback=update_status
+                    callback=update_status,
+                    silence_settings=normalized_silence_settings
                 )
                 reduction_sec = pre_trim_duration_sec - trimmed_duration_sec
                 if reduction_sec >= SILENCE_TRIM_MIN_REDUCTION_SEC:
@@ -1611,6 +1649,65 @@ class FileProcessor:
 
         except Exception as e:
             logger.warning(f"タイトル生成に失敗（フォールバックで従来のファイル名を使用）: {str(e)}")
+            return None
+
+    def generate_summary_title_ollama(self, text, model='gemma3:4b',
+                                       base_url='http://localhost:11434'):
+        """Ollamaを使用して要約タイトルを生成する（Geminiが使えない場合のフォールバック）"""
+        try:
+            import urllib.request
+            import urllib.error
+
+            excerpt = text[:2000]
+            prompt = (
+                "この文字起こしの内容を15〜25文字で要約してタイトルを付けてください。\n"
+                "ファイル名に使うので記号は使わないでください。\n"
+                "タイトルのみを出力してください。説明や装飾は不要です。\n\n"
+                f"{excerpt}"
+            )
+
+            payload = json.dumps({
+                'model': model,
+                'prompt': prompt,
+                'stream': False,
+                'options': {
+                    'temperature': 0.1,
+                    'num_predict': 100,
+                }
+            }).encode('utf-8')
+
+            req = urllib.request.Request(
+                f'{base_url}/api/generate',
+                data=payload,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+
+            title = result.get('response', '').strip()
+            if not title:
+                logger.warning("Ollamaタイトル生成: 空のレスポンス")
+                return None
+
+            # 最大文字数で切り詰め
+            if len(title) > SUMMARY_TITLE_MAX_LENGTH:
+                title = title[:SUMMARY_TITLE_MAX_LENGTH]
+
+            title = sanitize_filename(title)
+            if not title:
+                logger.warning("Ollamaタイトル生成: サニタイズ後に空になりました")
+                return None
+
+            logger.info(f"Ollamaで生成されたタイトル: {title}")
+            return title
+
+        except (urllib.error.URLError, ConnectionRefusedError):
+            logger.info("Ollamaが起動していないため、タイトル生成をスキップします")
+            return None
+        except Exception as e:
+            logger.warning(f"Ollamaタイトル生成に失敗: {str(e)}")
             return None
 
     def _save_result(self, input_file, final_text, process_type, prompts, start_time, update_status,

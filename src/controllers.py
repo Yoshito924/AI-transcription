@@ -36,7 +36,8 @@ from .utils import (
     get_whisper_model_value,
     get_whisper_api_model_value,
     get_gemini_safety_filter_recovery_value,
-    get_trim_long_silence_value
+    get_trim_long_silence_value,
+    get_silence_trim_settings
 )
 from .logger import logger
 from .processing_time_tracker import ProcessingTimeTracker
@@ -65,6 +66,8 @@ class TranscriptionController:
         self.queue_errors = []
         self.history_metadata = None
         self.update_queue_callback = None
+        self._waveform_request_id = 0
+        self._waveform_cache = {}
     
     def update_status(self, message):
         """ステータスを更新"""
@@ -165,7 +168,11 @@ class TranscriptionController:
                 self.add_log(f"ファイルサイズ: {size_mb:.1f} MB")
 
                 # 波形データをバックグラウンドで読み込み
-                self._load_waveform(file_path)
+                waveform_viewer = self.ui_elements.get('waveform_viewer')
+                if waveform_viewer:
+                    waveform_viewer.set_loading("波形プレビューを生成中...")
+                self._waveform_cache = {}
+                self._load_waveform(file_path, reload_samples=True)
             else:
                 raise FileProcessingError("ファイルが見つかりません")
 
@@ -181,28 +188,97 @@ class TranscriptionController:
             self.update_status(error_msg)
             self.add_log(f"エラー詳細: {type(e).__name__}: {str(e)}")
 
-    def _load_waveform(self, file_path):
+    def refresh_waveform_preview(self):
+        """現在ファイルの波形プレビューを再解析する"""
+        if self.current_file:
+            self._load_waveform(self.current_file, reload_samples=False)
+
+    def _load_waveform(self, file_path, reload_samples=False):
         """バックグラウンドで波形データと無音区間を抽出して表示"""
         waveform_viewer = self.ui_elements.get('waveform_viewer')
         if not waveform_viewer:
             return
 
         audio_proc = self.processor.audio_processor
+        silence_settings = get_silence_trim_settings(self.ui_elements)
+        trim_enabled = get_trim_long_silence_value(self.ui_elements)
+        cached = self._waveform_cache if self._waveform_cache.get('file_path') == file_path else {}
+        preserve_view = bool(
+            not reload_samples and
+            cached.get('file_path') == file_path and
+            cached.get('samples') is not None
+        )
+        self._waveform_request_id += 1
+        request_id = self._waveform_request_id
 
         def _extract():
             try:
-                samples, duration = audio_proc.extract_waveform_data(file_path)
-                if samples is None:
-                    return
+                local_cache = dict(cached)
 
-                silence_regions = audio_proc.detect_silence_regions(file_path)
+                if preserve_view:
+                    samples = local_cache.get('samples')
+                    duration = local_cache.get('duration')
+                else:
+                    samples, duration = audio_proc.extract_waveform_data(file_path)
+                    if samples is None:
+                        return
+                    local_cache = {
+                        'file_path': file_path,
+                        'samples': samples,
+                        'duration': duration,
+                    }
 
-                # UIスレッドで描画
-                waveform_viewer.after(0, lambda: waveform_viewer.set_data(
-                    samples, duration, silence_regions
-                ))
+                resolved_settings = audio_proc.resolve_silence_parameters(
+                    file_path,
+                    silence_settings=silence_settings,
+                    precomputed_auto_threshold_db=local_cache.get('auto_threshold_db')
+                )
+                local_cache['auto_threshold_db'] = resolved_settings['resolved_threshold_db']
+
+                silence_regions = audio_proc.detect_silence_regions(
+                    file_path,
+                    silence_settings=resolved_settings
+                )
+                cut_regions, total_reduction_sec = audio_proc.build_silence_cut_preview(
+                    silence_regions,
+                    silence_settings=resolved_settings
+                )
+
+                analysis_text = (
+                    f"判定: {resolved_settings['mode_label']} "
+                    f"{resolved_settings['resolved_threshold_db']:.1f}dB / "
+                    f"{resolved_settings['min_silence_sec']:.1f}秒"
+                )
+                if not trim_enabled:
+                    analysis_text += " / 圧縮OFF"
+                cut_summary_text = (
+                    f"{'短縮見込み' if trim_enabled else '圧縮候補'}: "
+                    f"{waveform_viewer._format_duration(total_reduction_sec)}"
+                )
+
+                def _apply():
+                    if request_id != self._waveform_request_id:
+                        return
+                    self._waveform_cache = local_cache
+                    waveform_viewer.set_data(
+                        samples,
+                        duration,
+                        silence_regions,
+                        analysis_text=analysis_text,
+                        cut_regions=cut_regions,
+                        cut_summary_text=cut_summary_text,
+                        cut_enabled=trim_enabled,
+                        preserve_view=preserve_view
+                    )
+
+                waveform_viewer.after(0, _apply)
             except Exception as e:
                 logger.warning(f"波形データの読み込みに失敗: {e}")
+                def _show_error():
+                    if request_id != self._waveform_request_id:
+                        return
+                    waveform_viewer.set_loading("波形プレビューの生成に失敗しました")
+                waveform_viewer.after(0, _show_error)
 
         thread = threading.Thread(target=_extract, daemon=True)
         thread.start()
@@ -292,6 +368,7 @@ class TranscriptionController:
             whisper_api_model = get_whisper_api_model_value(self.ui_elements)
             gemini_safety_filter_recovery = get_gemini_safety_filter_recovery_value(self.ui_elements)
             trim_long_silence = get_trim_long_silence_value(self.ui_elements)
+            silence_trim_settings = get_silence_trim_settings(self.ui_elements)
 
             # エンジンに応じた開始メッセージを表示
             if engine_value == 'whisper':
@@ -307,10 +384,16 @@ class TranscriptionController:
             save_to_output_dir = save_to_output.get() if save_to_output else True
             save_to_source_dir = save_to_source.get() if save_to_source else False
 
-            # タイトル生成はGemini実行時のみ許可し、ローカルWhisperをオフラインのまま保つ
+            # タイトル生成エンジンの設定
             gemini_api_key = None
             if engine_value == 'gemini':
                 gemini_api_key = self.ui_elements['api_key_var'].get().strip() or None
+
+            title_engine_var = self.ui_elements.get('title_engine_var')
+            title_display_to_mode = self.ui_elements.get('title_engine_display_to_mode', {})
+            title_generation_engine = 'auto'
+            if title_engine_var and title_display_to_mode:
+                title_generation_engine = title_display_to_mode.get(title_engine_var.get(), 'auto')
 
             output_file = self.processor.process_file(
                 self.current_file,
@@ -328,7 +411,9 @@ class TranscriptionController:
                 time_tracker=self.time_tracker,
                 whisper_api_model=whisper_api_model,
                 gemini_safety_filter_recovery=gemini_safety_filter_recovery,
-                trim_long_silence=trim_long_silence
+                trim_long_silence=trim_long_silence,
+                silence_trim_settings=silence_trim_settings,
+                title_generation_engine=title_generation_engine
             )
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))
@@ -760,6 +845,7 @@ class TranscriptionController:
         wv = self.ui_elements.get('waveform_viewer')
         if wv:
             wv.clear()
+        self._waveform_cache = {}
 
         messagebox.showinfo("キュー処理完了", summary)
 
