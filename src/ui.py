@@ -664,14 +664,14 @@ def create_file_section(parent, app, theme, widgets):
     }
     display_to_model = {v: k for k, v in model_display_names.items()}
 
-    saved_whisper_model = app.config.get("whisper_model", "turbo")
+    saved_whisper_model = app.config.get("whisper_model", "large-v3")
     if saved_whisper_model in ['large-v3-turbo']:
         saved_whisper_model = 'turbo'
     if saved_whisper_model not in model_display_names:
-        saved_whisper_model = 'turbo'
+        saved_whisper_model = 'large-v3'
 
     whisper_model_var = tk.StringVar(
-        value=model_display_names.get(saved_whisper_model, model_display_names['turbo'])
+        value=model_display_names.get(saved_whisper_model, model_display_names['large-v3'])
     )
     whisper_model_combo = ttk.Combobox(
         left_inner,

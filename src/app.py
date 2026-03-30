@@ -11,6 +11,7 @@ from .ui import setup_ui
 from .config import Config
 from .processor import FileProcessor
 from .audio_recorder import MicrophoneRecorder
+from .audio_player import AudioPreviewPlayer
 from .controllers import TranscriptionController
 from .terminal_cleanup import schedule_launch_terminal_close
 from .usage_tracker import UsageTracker
@@ -33,6 +34,7 @@ from .utils import (
     get_whisper_model_value,
     get_gemini_safety_filter_recovery_value,
     get_trim_long_silence_value,
+    get_silence_trim_settings,
     format_duration,
     format_file_size
 )
@@ -93,6 +95,10 @@ class TranscriptionApp:
         self.recording_level_var = tk.StringVar(value="0%")
         self.recording_peak_var = tk.StringVar(value="0%")
         self.audio_recorder = MicrophoneRecorder()
+        self.preview_player = AudioPreviewPlayer()
+        self._playback_poll_job = None
+        self._waveform_refresh_job = None
+        self._last_preview_error = None
         self.audio_recorder.set_input_preferences(
             device_id=self.recording_input_device_id,
             input_channels=self._normalize_recording_input_channels(
@@ -128,7 +134,8 @@ class TranscriptionApp:
         self.controller.update_usage_callback = self.update_usage_display
         self.controller.history_metadata = self.history_metadata
         self.controller.update_queue_callback = self._update_queue_display
-        
+        self._restore_queue_state()
+
         
         # ウィンドウサイズと位置の設定を適用（UI構築後）
         self.config.apply_window_geometry(self.root)
@@ -141,7 +148,8 @@ class TranscriptionApp:
         self.audio_recorder.start_monitoring()
         self._refresh_recording_ui()
         self._start_recording_visual_loop()
-        
+        self._start_playback_poll_loop()
+
         # ウィンドウにフォーカスが戻ったとき履歴を自動更新
         self.root.bind('<FocusIn>', self._on_focus_in)
 
@@ -536,7 +544,127 @@ class TranscriptionApp:
             self._recording_timer_job = self.root.after(120, self._update_recording_elapsed)
         else:
             self._recording_timer_job = None
-    
+
+    def _start_playback_poll_loop(self):
+        """波形プレビュー再生状態のポーリングを開始する"""
+        if self._playback_poll_job is None:
+            self._playback_poll_job = self.root.after(120, self._poll_playback_state)
+
+    def _stop_playback_poll_loop(self):
+        """波形プレビュー再生状態のポーリングを停止する"""
+        if self._playback_poll_job is not None:
+            self.root.after_cancel(self._playback_poll_job)
+            self._playback_poll_job = None
+
+    def _poll_playback_state(self):
+        """再生状態をビューアへ反映する"""
+        self._playback_poll_job = None
+        viewer = self.ui_elements.get('waveform_viewer') if hasattr(self, 'ui_elements') else None
+        if viewer:
+            state = self.preview_player.get_state()
+            viewer.set_playback_state(
+                state.get('position', 0.0),
+                is_playing=state.get('is_playing', False),
+                current_db=state.get('current_db')
+            )
+            error_text = state.get('error')
+            if error_text and error_text != self._last_preview_error:
+                self._last_preview_error = error_text
+                self.controller.add_log(f"注意: 波形プレビュー再生に失敗: {error_text}")
+            elif not error_text:
+                self._last_preview_error = None
+
+        if self.root.winfo_exists():
+            self._playback_poll_job = self.root.after(120, self._poll_playback_state)
+
+    def toggle_waveform_playback(self):
+        """波形プレビューの再生/一時停止を切り替える"""
+        if not self.controller.current_file:
+            messagebox.showinfo("情報", "まず音声ファイルを選択してください。")
+            return
+
+        viewer = self.ui_elements.get('waveform_viewer')
+        if not viewer:
+            return
+
+        state = self.preview_player.get_state()
+        current_file = os.path.abspath(self.controller.current_file)
+        playing_file = state.get('file_path')
+        is_same_file = bool(playing_file and os.path.abspath(playing_file) == current_file)
+        preview_duration = self.controller._waveform_cache.get('duration')
+
+        try:
+            if state.get('is_playing') and is_same_file:
+                paused_state = self.preview_player.pause()
+                viewer.set_playback_state(paused_state.get('position', viewer.get_current_time()), is_playing=False)
+            else:
+                start_sec = viewer.get_current_time()
+                next_state = self.preview_player.play(
+                    self.controller.current_file,
+                    start_sec=start_sec,
+                    duration=preview_duration
+                )
+                viewer.set_playback_state(next_state.get('position', start_sec), is_playing=True)
+        except AudioProcessingError as exc:
+            messagebox.showerror("再生エラー", str(exc))
+            self.controller.add_log(f"注意: 波形プレビュー再生を開始できませんでした: {exc}")
+
+    def stop_waveform_playback(self, reset_position=True, silent=False):
+        """波形プレビュー再生を停止する"""
+        state = self.preview_player.stop(reset_position=reset_position, keep_file=True)
+        viewer = self.ui_elements.get('waveform_viewer') if hasattr(self, 'ui_elements') else None
+        if viewer:
+            viewer.set_playback_state(
+                0.0 if reset_position else state.get('position', viewer.get_current_time()),
+                is_playing=False
+            )
+        if not silent:
+            self._last_preview_error = None
+
+    def seek_waveform_playback(self, position_sec):
+        """波形クリック時に再生位置を移動する"""
+        if not self.controller.current_file:
+            return
+
+        current_state = self.preview_player.get_state()
+        preview_duration = self.controller._waveform_cache.get('duration')
+        resume = bool(
+            current_state.get('is_playing') and
+            current_state.get('file_path') and
+            os.path.abspath(current_state['file_path']) == os.path.abspath(self.controller.current_file)
+        )
+
+        try:
+            next_state = self.preview_player.seek(
+                position_sec,
+                file_path=self.controller.current_file,
+                duration=preview_duration,
+                resume=resume
+            )
+            viewer = self.ui_elements.get('waveform_viewer')
+            if viewer:
+                viewer.set_playback_state(position_sec, is_playing=next_state.get('is_playing', False))
+        except AudioProcessingError as exc:
+            messagebox.showerror("再生エラー", str(exc))
+            self.controller.add_log(f"注意: シークに失敗しました: {exc}")
+
+    def on_silence_trim_settings_changed(self, immediate=False):
+        """無音カット設定変更時に波形プレビューを再解析する"""
+        if self._waveform_refresh_job is not None:
+            self.root.after_cancel(self._waveform_refresh_job)
+            self._waveform_refresh_job = None
+
+        if not self.controller.current_file:
+            return
+
+        delay_ms = 0 if immediate else 250
+        self._waveform_refresh_job = self.root.after(delay_ms, self._refresh_waveform_preview)
+
+    def _refresh_waveform_preview(self):
+        """現在選択中ファイルの波形プレビューを更新する"""
+        self._waveform_refresh_job = None
+        self.controller.refresh_waveform_preview()
+
     def on_closing(self):
         """ウィンドウが閉じられるときの処理"""
         if self.controller.is_processing:
@@ -574,10 +702,17 @@ class TranscriptionApp:
         # 保存先設定を保存
         self._save_destination_settings()
         self._save_recording_settings()
+        self._persist_queue_state(save=False)
 
         # カラム幅を保存
         self._save_column_widths()
         self.config.save()
+        if self._waveform_refresh_job is not None:
+            self.root.after_cancel(self._waveform_refresh_job)
+            self._waveform_refresh_job = None
+        self.stop_waveform_playback(reset_position=False, silent=True)
+        self.preview_player.shutdown()
+        self._stop_playback_poll_loop()
         self._stop_recording_timer()
         self._stop_recording_visual_loop()
         self.audio_recorder.stop_monitoring()
@@ -696,7 +831,11 @@ class TranscriptionApp:
             if len(file_paths) == 1:
                 self.load_file(file_paths[0])
             else:
-                self._add_files_to_queue(list(file_paths))
+                paths = list(file_paths)
+                self._add_files_to_queue(paths)
+                preview_path = self._find_previewable_path(paths)
+                if preview_path:
+                    self.load_file(preview_path)
 
     def toggle_auto_queue_recordings(self):
         """録音停止後の自動キュー投入設定を保存"""
@@ -846,6 +985,7 @@ class TranscriptionApp:
     
     def load_file(self, file_path):
         """ファイルを読み込む（コントローラーに委譲）"""
+        self.stop_waveform_playback(reset_position=True, silent=True)
         self.controller.load_file(file_path)
 
     def load_files(self, raw_data):
@@ -855,6 +995,21 @@ class TranscriptionApp:
             self.load_file(paths[0])
         elif len(paths) > 1:
             self._add_files_to_queue(paths)
+            preview_path = self._find_previewable_path(paths)
+            if preview_path:
+                self.load_file(preview_path)
+
+    def _find_previewable_path(self, file_paths):
+        """波形プレビュー対象に使える最初のファイルを返す"""
+        for path in file_paths:
+            normalized_path = normalize_file_path(path)
+            if not normalized_path:
+                continue
+            abs_path = os.path.abspath(normalized_path)
+            ext = os.path.splitext(abs_path)[1].lower().lstrip('.')
+            if ext in SUPPORTED_AUDIO_FORMATS and os.path.exists(abs_path):
+                return abs_path
+        return None
 
     def _parse_dnd_paths(self, raw_data):
         """tkinterdnd2のD&Dデータからファイルパスリストを解析
@@ -927,6 +1082,115 @@ class TranscriptionApp:
             return splitlist_paths
         return normalized_paths
 
+    def _normalize_queue_path(self, file_path):
+        """キュー保存用のファイルパスを正規化する"""
+        normalized_path = normalize_file_path(file_path)
+        if not normalized_path:
+            return None
+
+        abs_path = os.path.abspath(normalized_path)
+        ext = os.path.splitext(abs_path)[1].lower().lstrip('.')
+        if ext not in SUPPORTED_AUDIO_FORMATS:
+            return None
+        return abs_path
+
+    def _get_persisted_queue_paths(self):
+        """永続化対象のキュー一覧を返す"""
+        queue_paths = list(self.controller.file_queue)
+
+        if self.controller.queue_processing and self.controller.current_file:
+            current_path = self._normalize_queue_path(self.controller.current_file)
+            first_path = os.path.abspath(queue_paths[0]) if queue_paths else None
+            if current_path and current_path != first_path:
+                queue_paths = [current_path] + queue_paths
+
+        persisted_paths = []
+        for path in queue_paths:
+            normalized_path = self._normalize_queue_path(path)
+            if normalized_path:
+                persisted_paths.append(normalized_path)
+        return persisted_paths
+
+    def _persist_queue_state(self, save=True):
+        """現在のキューを設定ファイルへ保存する"""
+        queued_files = self._get_persisted_queue_paths()
+        if self.config.get("queued_files", []) == queued_files:
+            return False
+
+        self.config.set("queued_files", queued_files)
+        if save:
+            self.config.save()
+        return True
+
+    def _restore_queue_state(self):
+        """前回終了時のキューを復元する"""
+        saved_queue = self.config.get("queued_files", [])
+        if not isinstance(saved_queue, list):
+            saved_queue = []
+
+        restored_queue = []
+        skipped_entries = 0
+        for path in saved_queue:
+            normalized_path = self._normalize_queue_path(path)
+            if normalized_path:
+                restored_queue.append(normalized_path)
+            else:
+                skipped_entries += 1
+
+        self.controller.file_queue = restored_queue
+        if restored_queue:
+            self.controller.add_log(f"前回のキューを{len(restored_queue)}件復元")
+        if skipped_entries:
+            self.controller.add_log(f"前回キューの不正な項目を{skipped_entries}件スキップ")
+        self._update_queue_display()
+
+    def _format_queue_location(self, file_path, max_length=54):
+        """キュー一覧向けにディレクトリ表示を短縮する"""
+        directory = os.path.dirname(file_path) or file_path
+        if len(directory) <= max_length:
+            return directory
+        return "..." + directory[-(max_length - 3):]
+
+    def _describe_queue_item(self, file_path, index):
+        """キュー一覧の行表示情報を返す"""
+        abs_path = os.path.abspath(file_path)
+        exists = os.path.exists(abs_path)
+
+        if exists:
+            try:
+                size_label = format_file_size(os.path.getsize(abs_path))
+                status_label = f"準備OK / {size_label}"
+            except OSError:
+                status_label = "準備OK / サイズ不明"
+        else:
+            status_label = "見つかりません"
+
+        return {
+            'iid': f"queue:{index}",
+            'values': (
+                index + 1,
+                os.path.basename(abs_path),
+                self._format_queue_location(abs_path),
+                status_label
+            ),
+            'exists': exists,
+            'tag': 'queue_ready' if exists else 'queue_missing'
+        }
+
+    def _get_selected_queue_indices(self):
+        """キュー一覧で選択中のインデックスを返す"""
+        queue_tree = self.ui_elements.get('queue_tree')
+        if not queue_tree:
+            return []
+
+        indices = []
+        for item_id in queue_tree.selection():
+            try:
+                indices.append(int(str(item_id).split(':', 1)[1]))
+            except (IndexError, ValueError):
+                continue
+        return sorted(set(indices))
+
     def _add_files_to_queue(self, file_paths, prompt_on_duplicates=True):
         """ファイルリストをキューに追加（重複検出付き）"""
         added, duplicated_paths, invalid = self.controller.add_files_to_queue(file_paths)
@@ -955,20 +1219,36 @@ class TranscriptionApp:
             self.controller.add_log(f"キューに{added}件追加（合計: {len(self.controller.file_queue)}件）")
 
     def _update_queue_display(self):
-        """キューListboxを更新"""
+        """キュー一覧を更新"""
         queue_frame = self.ui_elements.get('queue_frame')
-        queue_listbox = self.ui_elements.get('queue_listbox')
+        queue_tree = self.ui_elements.get('queue_tree')
         queue_count_label = self.ui_elements.get('queue_count_label')
-        if not queue_frame or not queue_listbox:
+        if not queue_frame or not queue_tree or not queue_count_label:
             return
 
-        queue_listbox.delete(0, tk.END)
+        for item_id in queue_tree.get_children():
+            queue_tree.delete(item_id)
+
         queue = self.controller.file_queue
 
         if queue:
-            for path in queue:
-                queue_listbox.insert(tk.END, os.path.basename(path))
-            queue_count_label.config(text=f"現在のキュー: {len(queue)}件")
+            ready_count = 0
+            missing_count = 0
+
+            for index, path in enumerate(queue):
+                item = self._describe_queue_item(path, index)
+                queue_tree.insert('', 'end', iid=item['iid'], values=item['values'], tags=(item['tag'],))
+                if item['exists']:
+                    ready_count += 1
+                else:
+                    missing_count += 1
+
+            summary_parts = [f"現在のキュー: {len(queue)}件"]
+            if ready_count:
+                summary_parts.append(f"準備OK {ready_count}件")
+            if missing_count:
+                summary_parts.append(f"見つからない {missing_count}件")
+            queue_count_label.config(text=" | ".join(summary_parts))
             # pack の前に親フレーム内の正しい位置に挿入
             if not queue_frame.winfo_ismapped():
                 # D&Dエリアの後に挿入
@@ -979,15 +1259,15 @@ class TranscriptionApp:
                 else:
                     queue_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
         else:
+            queue_count_label.config(text="現在のキュー: 0件")
             if queue_frame.winfo_ismapped():
                 queue_frame.pack_forget()
 
+        self._persist_queue_state()
+
     def remove_from_queue(self):
-        """Listboxの選択項目をキューから削除"""
-        queue_listbox = self.ui_elements.get('queue_listbox')
-        if not queue_listbox:
-            return
-        indices = list(queue_listbox.curselection())
+        """キュー一覧の選択項目を削除"""
+        indices = self._get_selected_queue_indices()
         if indices:
             self.controller.remove_from_queue(indices)
 
@@ -998,6 +1278,7 @@ class TranscriptionApp:
     def start_process(self, process_type):
         """処理を開始（コントローラーに委譲）"""
         if process_type == "transcription":
+            self.stop_waveform_playback(reset_position=False, silent=True)
             self.controller.start_queue_processing()
     
     
@@ -1035,14 +1316,8 @@ class TranscriptionApp:
         self._refresh_recording_ui(preserve_status=True)
 
     def _cleanup_queue(self):
-        """キューから存在しないファイルを除去"""
-        queue = self.controller.file_queue
-        before = len(queue)
-        self.controller.file_queue = [p for p in queue if os.path.exists(p)]
-        if len(self.controller.file_queue) < before:
-            removed = before - len(self.controller.file_queue)
-            self.controller.add_log(f"キューから{removed}件の存在しないファイルを除去")
-            self._update_queue_display()
+        """キュー内ファイルの状態表示を更新"""
+        self._update_queue_display()
 
     def open_output_file(self, event=None):
         """選択された出力ファイルを開く"""
@@ -1234,11 +1509,15 @@ class TranscriptionApp:
             save_to_output = self.ui_elements.get('save_to_output_var')
             save_to_source = self.ui_elements.get('save_to_source_var')
             trim_long_silence = get_trim_long_silence_value(self.ui_elements)
+            silence_trim_settings = get_silence_trim_settings(self.ui_elements)
             if save_to_output is not None:
                 self.config.set("save_to_output_dir", save_to_output.get())
             if save_to_source is not None:
                 self.config.set("save_to_source_dir", save_to_source.get())
             self.config.set("trim_long_silence", trim_long_silence)
+            self.config.set("silence_trim_mode", silence_trim_settings['mode'])
+            self.config.set("silence_trim_threshold_db", silence_trim_settings['threshold_db'])
+            self.config.set("silence_trim_min_silence_sec", silence_trim_settings['min_silence_sec'])
 
     def _save_recording_settings(self):
         """録音設定を保存"""

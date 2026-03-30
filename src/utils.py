@@ -15,7 +15,11 @@ from urllib.parse import unquote, urlparse
 
 from .constants import (
     DEFAULT_AUDIO_BITRATE, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS, GEMINI_PRICING,
-    AUDIO_TOKENS_PER_SECOND, MAX_AUDIO_DURATION_SEC
+    AUDIO_TOKENS_PER_SECOND, MAX_AUDIO_DURATION_SEC,
+    DEFAULT_SILENCE_TRIM_MODE,
+    DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
+    DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
+    SILENCE_TRIM_KEEP_SILENCE_SEC
 )
 
 
@@ -193,7 +197,7 @@ def get_engine_value(ui_elements, default='gemini'):
     return default
 
 
-def get_whisper_model_value(ui_elements, default='turbo'):
+def get_whisper_model_value(ui_elements, default='large-v3'):
     """UI要素からWhisperモデル値を取得する
     
     Args:
@@ -251,6 +255,37 @@ def get_trim_long_silence_value(ui_elements, default=True):
     if trim_long_silence_var is not None:
         return bool(trim_long_silence_var.get())
     return default
+
+
+def get_silence_trim_settings(ui_elements):
+    """UI要素から無音カット設定を取得する"""
+    mode_var = ui_elements.get('silence_trim_mode_var', None)
+    display_to_mode = ui_elements.get('silence_trim_mode_display_to_value', None) or {}
+    threshold_var = ui_elements.get('silence_trim_threshold_db_var', None)
+    min_silence_var = ui_elements.get('silence_trim_min_silence_sec_var', None)
+
+    mode = DEFAULT_SILENCE_TRIM_MODE
+    if mode_var is not None:
+        mode = display_to_mode.get(mode_var.get(), mode_var.get())
+    if mode not in ('auto', 'manual'):
+        mode = DEFAULT_SILENCE_TRIM_MODE
+
+    try:
+        threshold_db = float(threshold_var.get()) if threshold_var is not None else float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB)
+    except (TypeError, ValueError):
+        threshold_db = float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB)
+
+    try:
+        min_silence_sec = float(min_silence_var.get()) if min_silence_var is not None else float(DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC)
+    except (TypeError, ValueError):
+        min_silence_sec = float(DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC)
+
+    return {
+        'mode': mode,
+        'threshold_db': threshold_db,
+        'min_silence_sec': min_silence_sec,
+        'keep_silence_sec': float(SILENCE_TRIM_KEEP_SILENCE_SEC),
+    }
 
 
 def calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_input=False, audio_duration_seconds=None):
