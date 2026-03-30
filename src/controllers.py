@@ -218,14 +218,22 @@ class TranscriptionController:
                 if preserve_view:
                     samples = local_cache.get('samples')
                     duration = local_cache.get('duration')
+                    auto_threshold_db = local_cache.get('auto_threshold_db')
                 else:
-                    samples, duration = audio_proc.extract_waveform_data(file_path)
-                    if samples is None:
+                    # 1回のFFmpegで波形・しきい値・無音区間をすべて取得
+                    result = audio_proc.extract_waveform_and_silence(
+                        file_path, silence_settings=silence_settings
+                    )
+                    if result is None:
                         return
+                    samples = result['samples']
+                    duration = result['duration']
+                    auto_threshold_db = result['auto_threshold_db']
                     local_cache = {
                         'file_path': file_path,
                         'samples': samples,
                         'duration': duration,
+                        'auto_threshold_db': auto_threshold_db,
                     }
 
                 resolved_settings = audio_proc.resolve_silence_parameters(
@@ -235,10 +243,14 @@ class TranscriptionController:
                 )
                 local_cache['auto_threshold_db'] = resolved_settings['resolved_threshold_db']
 
-                silence_regions = audio_proc.detect_silence_regions(
-                    file_path,
-                    silence_settings=resolved_settings
-                )
+                if preserve_view:
+                    # キャッシュ利用時のみFFmpegで無音検出（設定変更時）
+                    silence_regions = audio_proc.detect_silence_regions(
+                        file_path,
+                        silence_settings=resolved_settings
+                    )
+                else:
+                    silence_regions = result['silence_regions']
                 cut_regions, total_reduction_sec = audio_proc.build_silence_cut_preview(
                     silence_regions,
                     silence_settings=resolved_settings
@@ -771,9 +783,24 @@ class TranscriptionController:
         file_path = self.file_queue.pop(0)
         self.current_file = file_path
         filename = os.path.basename(file_path)
+        display_name = truncate_display_name(filename, FILE_NAME_DISPLAY_MAX_LENGTH)
+
+        if not os.path.exists(file_path):
+            self.current_file = None
+            if self.update_queue_callback:
+                self.update_queue_callback()
+            self.queue_errors.append((filename, "元ファイルが見つかりません"))
+            self.ui_elements['file_label'].config(
+                text=f"スキップ {self.current_queue_index}/{self.total_queue_files}: {display_name}"
+            )
+            self.add_log(
+                f"[{self.current_queue_index}/{self.total_queue_files}] "
+                f"{filename} は見つからないためスキップ"
+            )
+            self.ui_elements['root'].after(300, self._process_next_in_queue)
+            return
 
         # UI更新
-        display_name = truncate_display_name(filename, FILE_NAME_DISPLAY_MAX_LENGTH)
         self.ui_elements['file_label'].config(
             text=f"処理中 {self.current_queue_index}/{self.total_queue_files}: {display_name}"
         )

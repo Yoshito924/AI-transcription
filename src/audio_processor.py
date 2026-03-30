@@ -257,6 +257,160 @@ class AudioProcessor:
             logger.debug(f"チャンク波形抽出に失敗、通常方式にフォールバック: {e}")
             return None, None
 
+    def extract_waveform_and_silence(self, file_path, target_samples=4000, silence_settings=None):
+        """1回のFFmpegデコードで波形データ・自動しきい値・無音区間をすべて取得する
+
+        波形プレビュー用の高速メソッド。FFmpegを1回だけ呼び出し、
+        PCMデータからnumpyで全解析を行う。
+
+        Returns:
+            dict with keys: samples, duration, auto_threshold_db, silence_regions
+            失敗時は None
+        """
+        if not os.path.exists(file_path):
+            return None
+
+        duration = self.get_audio_duration(file_path)
+        if not duration or duration <= 0:
+            return None
+
+        # 無音検出に十分な解像度のサンプルレート（RMS窓50msに対応）
+        # ただし高すぎるとデコードが遅いので上限制限
+        analysis_sr = max(1000, min(16000, int(80000 / max(1, duration / 60))))
+
+        ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+        video_exts = {'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv',
+                      'mpeg', 'mpg', '3gp', '3g2', 'ts', 'mts', 'm2ts', 'flv'}
+        is_video = ext in video_exts
+
+        try:
+            result = None
+
+            if is_video:
+                cmd_gpu = [
+                    'ffmpeg', '-nostdin',
+                    '-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda',
+                    '-i', file_path,
+                    '-vn', '-ac', '1', '-ar', str(analysis_sr),
+                    '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1'
+                ]
+                result = subprocess.run(
+                    cmd_gpu, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=max(30, int(duration * 0.3))
+                )
+                if result.returncode != 0:
+                    result = None
+
+            if result is None:
+                cmd = [
+                    'ffmpeg', '-nostdin',
+                    '-i', file_path,
+                    '-vn', '-ac', '1', '-ar', str(analysis_sr),
+                    '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1'
+                ]
+                result = subprocess.run(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=max(30, int(duration * 0.5))
+                )
+
+            if result.returncode != 0:
+                return None
+
+            raw = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+            if len(raw) == 0:
+                return None
+
+            # --- 1. 波形表示用にダウンサンプリング ---
+            abs_raw = np.abs(raw)
+            if len(raw) > target_samples:
+                chunk_size = len(raw) // target_samples
+                trimmed = raw[:chunk_size * target_samples]
+                chunks = trimmed.reshape(target_samples, chunk_size)
+                max_idx = np.argmax(np.abs(chunks), axis=1)
+                samples = chunks[np.arange(target_samples), max_idx]
+            else:
+                samples = raw.copy()
+
+            # 波形表示用に正規化
+            max_val = np.max(np.abs(samples))
+            if max_val > 0:
+                samples = samples / max_val
+
+            # --- 2. RMSベースの自動しきい値推定 ---
+            window_samples = max(256, int(analysis_sr * 0.05))
+            usable = (len(raw) // window_samples) * window_samples
+            if usable > 0:
+                windows = raw[:usable].reshape(-1, window_samples)
+                rms = np.sqrt(np.mean(windows * windows, axis=1))
+                positive_rms = rms[rms > 1e-6]
+
+                if len(positive_rms) >= 12:
+                    noise_db = self._amplitude_to_db(np.percentile(positive_rms, 20))
+                    speech_db = self._amplitude_to_db(np.percentile(positive_rms, 85))
+                    if speech_db <= noise_db + 3.0:
+                        auto_threshold_db = max(-42.0, min(-28.0, speech_db - 6.0))
+                    else:
+                        auto_threshold_db = noise_db + ((speech_db - noise_db) * 0.38)
+                        auto_threshold_db = min(auto_threshold_db, speech_db - 7.0)
+                        auto_threshold_db = max(-48.0, min(-26.0, auto_threshold_db))
+                    auto_threshold_db = round(auto_threshold_db, 1)
+                else:
+                    auto_threshold_db = float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB)
+            else:
+                rms = np.array([])
+                auto_threshold_db = float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB)
+
+            # --- 3. RMSデータから無音区間を検出 ---
+            settings = self.normalize_silence_trim_settings(silence_settings)
+            if settings['mode'] == 'auto':
+                threshold_db = auto_threshold_db
+            elif 'resolved_threshold_db' in (silence_settings or {}):
+                threshold_db = silence_settings['resolved_threshold_db']
+            else:
+                threshold_db = settings['threshold_db']
+
+            min_silence_sec = settings['min_silence_sec']
+            threshold_linear = 10.0 ** (threshold_db / 20.0)
+            window_duration = window_samples / analysis_sr
+
+            silence_regions = []
+            if len(rms) > 0:
+                is_silent = rms < threshold_linear
+                min_silent_windows = max(1, int(min_silence_sec / window_duration))
+
+                in_silence = False
+                silence_start = 0.0
+                silent_count = 0
+
+                for i, silent in enumerate(is_silent):
+                    if silent:
+                        if not in_silence:
+                            silence_start = i * window_duration
+                            in_silence = True
+                            silent_count = 0
+                        silent_count += 1
+                    else:
+                        if in_silence and silent_count >= min_silent_windows:
+                            silence_end = i * window_duration
+                            silence_regions.append((silence_start, silence_end))
+                        in_silence = False
+                        silent_count = 0
+
+                # 末尾の無音
+                if in_silence and silent_count >= min_silent_windows:
+                    silence_regions.append((silence_start, duration))
+
+            return {
+                'samples': samples,
+                'duration': duration,
+                'auto_threshold_db': auto_threshold_db,
+                'silence_regions': silence_regions,
+            }
+
+        except Exception as e:
+            logger.warning(f"統合波形解析に失敗: {e}")
+            return None
+
     def normalize_silence_trim_settings(self, silence_settings=None):
         """無音カット設定を正規化する"""
         settings = {
