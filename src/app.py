@@ -825,17 +825,18 @@ class TranscriptionApp:
                     self.ui_elements['model_label'].config(text="接続エラー")
     
     def browse_file(self, event=None):
-        """ファイル選択ダイアログを表示（複数選択対応）"""
+        """ファイル選択ダイアログを表示（複数選択・複数回追加対応）"""
         file_paths = filedialog.askopenfilenames(filetypes=SUPPORTED_MEDIA_FILE_TYPES)
         if file_paths:
-            if len(file_paths) == 1:
-                self.load_file(file_paths[0])
-            else:
-                paths = list(file_paths)
+            paths = list(file_paths)
+            # キューに既にファイルがある or 複数選択 → キューに追加
+            if len(paths) > 1 or self.controller.file_queue:
                 self._add_files_to_queue(paths)
                 preview_path = self._find_previewable_path(paths)
                 if preview_path:
                     self.load_file(preview_path)
+            else:
+                self.load_file(paths[0])
 
     def toggle_auto_queue_recordings(self):
         """録音停止後の自動キュー投入設定を保存"""
@@ -991,13 +992,16 @@ class TranscriptionApp:
     def load_files(self, raw_data):
         """D&Dデータから複数ファイルを解析してキューに追加"""
         paths = self._parse_dnd_paths(raw_data)
-        if len(paths) == 1:
-            self.load_file(paths[0])
-        elif len(paths) > 1:
+        if not paths:
+            return
+        # キューに既にファイルがある or 複数ドロップ → キューに追加
+        if len(paths) > 1 or self.controller.file_queue:
             self._add_files_to_queue(paths)
             preview_path = self._find_previewable_path(paths)
             if preview_path:
                 self.load_file(preview_path)
+        else:
+            self.load_file(paths[0])
 
     def _find_previewable_path(self, file_paths):
         """波形プレビュー対象に使える最初のファイルを返す"""
