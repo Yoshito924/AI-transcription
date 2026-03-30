@@ -266,11 +266,17 @@ class AudioProcessor:
         Returns:
             str: 一時音声ファイルのパス。失敗時は None
         """
+        import time as _time
         try:
             tmp = tempfile.NamedTemporaryFile(suffix='.m4a', delete=False)
             tmp_path = tmp.name
             tmp.close()
 
+            # ファイルサイズに応じたタイムアウト（1GBあたり30秒、最低30秒、最大300秒）
+            file_size_gb = os.path.getsize(video_path) / (1024 ** 3)
+            copy_timeout = max(30, min(300, int(file_size_gb * 30)))
+
+            t0 = _time.time()
             cmd = [
                 'ffmpeg', '-nostdin', '-y',
                 '-i', video_path,
@@ -280,13 +286,16 @@ class AudioProcessor:
             ]
             result = subprocess.run(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=30
+                timeout=copy_timeout
             )
+            elapsed = _time.time() - t0
             if result.returncode == 0 and os.path.exists(tmp_path):
-                logger.debug(f"動画から音声を高速抽出: {os.path.basename(video_path)}")
+                tmp_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
+                logger.info(f"動画から音声を高速抽出: {elapsed:.1f}秒, {tmp_size_mb:.1f}MB")
                 return tmp_path
 
             # コピーが失敗した場合（特殊コーデック）、再エンコードで抽出
+            logger.info(f"音声コピー失敗（{elapsed:.1f}秒）、再エンコードで抽出中...")
             cmd_reencode = [
                 'ffmpeg', '-nostdin', '-y',
                 '-i', video_path,
@@ -297,7 +306,7 @@ class AudioProcessor:
             ]
             result = subprocess.run(
                 cmd_reencode, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=60
+                timeout=copy_timeout * 2
             )
             if result.returncode == 0 and os.path.exists(tmp_path):
                 return tmp_path
@@ -305,10 +314,16 @@ class AudioProcessor:
             # 失敗時は一時ファイルを削除
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+            logger.warning("動画からの音声抽出に完全に失敗、元ファイルで変換します")
             return None
 
+        except subprocess.TimeoutExpired:
+            logger.warning(f"動画からの音声抽出がタイムアウト ({copy_timeout}秒, {file_size_gb:.1f}GB)")
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            return None
         except Exception as e:
-            logger.debug(f"動画からの音声抽出に失敗: {e}")
+            logger.warning(f"動画からの音声抽出に失敗: {e}")
             return None
 
     def extract_waveform_and_silence(self, file_path, target_samples=4000, silence_settings=None):

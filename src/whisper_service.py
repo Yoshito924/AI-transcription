@@ -167,6 +167,10 @@ class WhisperService:
         if self.backend == "openai-whisper":
             options['verbose'] = None
             options['fp16'] = self.device == 'cuda'
+        else:
+            # faster-whisper用の高速化オプション
+            options.setdefault('beam_size', 3)        # デフォルト5→3で高速化（精度への影響小）
+            options.setdefault('vad_filter', True)     # 無音部分をスキップして高速化
 
         options.update(kwargs)
         return options
@@ -284,7 +288,9 @@ class WhisperService:
                     model_name = actual_model_name  # 実際にロードされたモデル名を記録
                 else:  # faster-whisper
                     device = "cuda" if self.device == "cuda" else "cpu"
-                    compute_type = "float16" if device == "cuda" else "int8"
+                    # int8_float16: 重みをint8量子化し演算はfloat16で行う
+                    # float16とほぼ同精度で高速化・VRAM節約
+                    compute_type = "int8_float16" if device == "cuda" else "int8"
                     
                     # faster-whisperでのモデル名マッピング
                     # faster-whisperはlarge-v3, large-v3-turboを直接サポート
