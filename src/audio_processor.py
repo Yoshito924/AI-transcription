@@ -707,9 +707,12 @@ class AudioProcessor:
                             silence_settings=None):
         """長い近似無音区間を圧縮した音声ファイルを生成する"""
         def update_status(message):
-            logger.info(message)
+            # callbackがprocessor.update_statusの場合、そちらでもlogger.infoが呼ばれるので
+            # ここではcallbackがない場合のみログ出力する
             if callback:
                 callback(message)
+            else:
+                logger.info(message)
 
         if not os.path.exists(input_file_path):
             raise AudioProcessingError(f"ファイル {input_file_path} が見つかりません")

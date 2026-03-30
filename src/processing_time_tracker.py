@@ -118,9 +118,21 @@ class ProcessingTimeTracker:
             if not records:
                 return None
 
-        # 直近のレコードから平均倍率を計算
-        ratios = [r['ratio'] for r in records[-10:]]
-        avg_ratio = sum(ratios) / len(ratios)
+        # 直近のレコードから平均倍率を計算（異常値を除外）
+        # 音声が極端に短い記録（10秒未満）や異常な倍率は除外
+        ratios = [
+            r['ratio'] for r in records[-10:]
+            if r.get('audio_duration_sec', 0) >= 10 and r['ratio'] < 10.0
+        ]
+        if not ratios:
+            # フィルタで全部除外された場合はフィルタなしで再計算
+            ratios = [r['ratio'] for r in records[-10:]]
+        # 中央値ベースで外れ値の影響を軽減
+        ratios.sort()
+        if len(ratios) >= 3:
+            avg_ratio = ratios[len(ratios) // 2]  # 中央値
+        else:
+            avg_ratio = sum(ratios) / len(ratios)
 
         estimated_sec = audio_duration_sec * avg_ratio
         estimated_end = datetime.datetime.now() + datetime.timedelta(seconds=estimated_sec)
