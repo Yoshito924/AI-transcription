@@ -1070,13 +1070,31 @@ class AudioProcessor:
                      sample_rate=DEFAULT_SAMPLE_RATE,
                      channels=DEFAULT_CHANNELS,
                      trim_long_silence=False):
-        """音声/動画ファイルを指定したフォーマットに変換する"""
+        """音声/動画ファイルを指定したフォーマットに変換する
+
+        動画ファイルの場合は先に音声トラックだけを高速コピー抽出し、
+        その音声ファイルに対して変換を行う。
+        """
+        # 動画ファイルの場合、音声トラックだけ先に抽出して高速化
+        ext = os.path.splitext(input_file)[1].lower().lstrip('.')
+        video_exts = {'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv',
+                      'mpeg', 'mpg', '3gp', '3g2', 'ts', 'mts', 'm2ts', 'flv'}
+        tmp_audio_source = None
+        actual_input = input_file
+
+        if ext in video_exts:
+            logger.info(f"動画から音声トラックを先行抽出中: {os.path.basename(input_file)}")
+            tmp_audio_source = self._extract_audio_from_video(input_file)
+            if tmp_audio_source:
+                actual_input = tmp_audio_source
+                logger.info("音声トラック抽出完了、変換を開始します")
+
         with tempfile.NamedTemporaryFile(suffix=f'.{output_format}', delete=False) as temp_file:
             output_path = temp_file.name
 
         try:
             # 音声の長さを取得してタイムアウトを計算（最低5分、音声長の2倍）
-            duration = self.get_audio_duration(input_file)
+            duration = self.get_audio_duration(actual_input) or self.get_audio_duration(input_file)
             if duration and duration > 0:
                 timeout = max(300, int(duration * 2))
             else:
@@ -1086,7 +1104,7 @@ class AudioProcessor:
             cmd = [
                 'ffmpeg', '-y',
                 '-nostdin',                    # 標準入力を無効化
-                '-i', input_file,
+                '-i', actual_input,
                 '-vn',                         # 映像を除去
                 '-ar', str(sample_rate),       # サンプルレート
                 '-ac', str(channels),          # チャンネル数
@@ -1116,7 +1134,7 @@ class AudioProcessor:
                     fallback_cmd = [
                         'ffmpeg', '-y',
                         '-nostdin',
-                        '-i', input_file,
+                        '-i', actual_input,
                         '-vn',
                         '-ar', str(sample_rate),
                         '-ac', str(channels),
@@ -1160,3 +1178,11 @@ class AudioProcessor:
             except OSError:
                 pass
             raise AudioProcessingError(f"音声変換に失敗しました: {str(e)}")
+
+        finally:
+            # 動画から抽出した一時音声ファイルを削除
+            if tmp_audio_source and os.path.exists(tmp_audio_source):
+                try:
+                    os.unlink(tmp_audio_source)
+                except OSError:
+                    pass
