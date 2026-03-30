@@ -545,22 +545,22 @@ class WhisperService:
     
     def estimate_processing_time(self, audio_duration_sec: float, model_name: str = 'base') -> float:
         """処理時間の推定（秒）"""
-        # 大まかな推定値（デバイスとモデルサイズに基づく）
-        # 参考: 音声時間に対する処理時間の比率
-        base_factor = {
-            'tiny': 0.1,
-            'base': 0.15,
-            'small': 0.25,
-            'medium': 0.5,
-            'large': 1.0,
-            'large-v2': 1.0,
-            'large-v3': 1.0,
-            'large-v3-turbo': 0.4,  # turboは約40%高速
-            'turbo': 0.4,
-        }.get(model_name, 0.2)
-        
-        # CPUの場合は3-5倍遅い
+        # GPU (CUDA) での処理倍率（音声長に対する処理時間の比率）
+        # faster-whisper + RTX系GPUの実測ベース
+        gpu_factor = {
+            'tiny': 0.02,
+            'base': 0.03,
+            'small': 0.05,
+            'medium': 0.1,
+            'large': 0.15,
+            'large-v2': 0.15,
+            'large-v3': 0.15,
+            'large-v3-turbo': 0.06,
+            'turbo': 0.06,
+        }.get(model_name, 0.1)
+
         if self.device == 'cpu':
-            base_factor *= 4
-        
-        return audio_duration_sec * base_factor
+            # CPUの場合は5-10倍遅い
+            return audio_duration_sec * gpu_factor * 8
+
+        return audio_duration_sec * gpu_factor

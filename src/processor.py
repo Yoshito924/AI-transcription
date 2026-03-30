@@ -367,6 +367,15 @@ class FileProcessor:
             )
             update_progress(100)
 
+            # 全体の処理時間をログに記録
+            total_elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            audio_dur = self.last_audio_duration_sec or 0
+            speed = audio_dur / total_elapsed if total_elapsed > 0 else 0
+            logger.info(
+                f"処理完了: 全体{total_elapsed:.1f}秒 "
+                f"(音声{format_duration(audio_dur)}の{speed:.1f}倍速)"
+            )
+
             return output_path
             
         except (TranscriptionError, AudioProcessingError, ApiConnectionError, FileProcessingError):
@@ -577,8 +586,12 @@ class FileProcessor:
                     return processed_audio, segments, True
 
         # キャッシュがない場合は通常処理
+        import time as _time
+        step_start = _time.time()
         update_status("音声ファイルを変換中...")
         audio_path = self.audio_processor.convert_audio(input_file, trim_long_silence=False)
+        convert_elapsed = _time.time() - step_start
+        logger.info(f"音声変換完了: {convert_elapsed:.1f}秒")
 
         processed_duration_sec = self.audio_processor.get_audio_duration(audio_path) or audio_duration_sec
 
@@ -1399,27 +1412,37 @@ class FileProcessor:
     
     def _perform_whisper_single_transcription(self, audio_path, update_status, whisper_model='base'):
         """Whisperを使用した単一ファイルの文字起こし"""
+        import time as _time
         update_status(f"Whisperで文字起こし中... (モデル: {whisper_model})")
-        
+
         try:
             # Whisperで文字起こし
             whisper_service = self.get_whisper_service()
+            whisper_start = _time.time()
             text, metadata = whisper_service.transcribe(
-                audio_path, 
+                audio_path,
                 model_name=whisper_model,
                 language='ja'
             )
-            
+            whisper_elapsed = _time.time() - whisper_start
+
             # メタデータ情報を表示
             duration = metadata.get('duration', 0)
             segments = metadata.get('segments', 0)
             device = metadata.get('device', 'CPU')
-            
+
+            # 処理速度を計算（音声の何倍速で処理できたか）
+            speed_ratio = duration / whisper_elapsed if whisper_elapsed > 0 else 0
+
             update_status(
                 f"Whisper文字起こし完了: "
                 f"長さ={format_duration(duration)}, "
                 f"セグメント数={segments}, "
                 f"デバイス={device}"
+            )
+            logger.info(
+                f"Whisper処理時間: {whisper_elapsed:.1f}秒 "
+                f"(音声{format_duration(duration)}の{speed_ratio:.1f}倍速)"
             )
             
             return text
