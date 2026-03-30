@@ -14,6 +14,9 @@ from .constants import (
     DEFAULT_AUDIO_BITRATE, 
     DEFAULT_SAMPLE_RATE, 
     DEFAULT_CHANNELS,
+    DEFAULT_SILENCE_TRIM_MODE,
+    DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
+    DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
     MIN_BITRATE,
     MAX_BITRATE,
     MAX_COMPRESSION_ATTEMPTS,
@@ -66,6 +69,7 @@ class AudioProcessor:
 
         FFmpegでモノラル・低サンプルレートのPCMに変換し、
         numpyで目標サンプル数にダウンサンプリングする。
+        動画ファイルの場合はNVDEC（GPU）デコードを試行する。
 
         Args:
             file_path: 入力音声ファイルのパス
@@ -81,25 +85,65 @@ class AudioProcessor:
         if not duration or duration <= 0:
             return None, None
 
-        # 目標サンプル数に合わせたサンプルレートを計算（最低8000Hz、最大44100Hz）
-        target_sr = max(8000, min(44100, int(target_samples / duration * 4)))
+        # 必要最小限のサンプルレートを計算（ダウンサンプリングの余裕を2倍に）
+        target_sr = max(1000, min(8000, int(target_samples * 2 / duration)))
+
+        # 動画ファイルかどうかを拡張子で判定
+        ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+        video_exts = {'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv',
+                      'mpeg', 'mpg', '3gp', '3g2', 'ts', 'mts', 'm2ts', 'flv'}
+        is_video = ext in video_exts
+
+        # 長い音声（5分以上）はチャンク分割で高速化
+        if duration > 300:
+            fast_result = self._extract_waveform_chunked(
+                file_path, duration, target_samples, is_video
+            )
+            if fast_result[0] is not None:
+                return fast_result
 
         try:
-            cmd = [
-                'ffmpeg', '-nostdin',
-                '-i', file_path,
-                '-vn',
-                '-ac', '1',                # モノラル
-                '-ar', str(target_sr),      # サンプルレート
-                '-f', 's16le',              # 16bit signed little-endian PCM
-                '-acodec', 'pcm_s16le',
-                'pipe:1'
-            ]
-            timeout = max(60, int(duration * 1.5))
-            result = subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=timeout
-            )
+            result = None
+
+            # 動画ファイルの場合、NVDECでGPUデコードを試行
+            if is_video:
+                cmd_gpu = [
+                    'ffmpeg', '-nostdin',
+                    '-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda',
+                    '-i', file_path,
+                    '-vn',
+                    '-ac', '1',
+                    '-ar', str(target_sr),
+                    '-f', 's16le',
+                    '-acodec', 'pcm_s16le',
+                    'pipe:1'
+                ]
+                timeout = max(30, int(duration * 0.5))
+                result = subprocess.run(
+                    cmd_gpu, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=timeout
+                )
+                if result.returncode != 0:
+                    result = None
+
+            # CPU デコード（音声ファイル or GPUフォールバック）
+            if result is None:
+                cmd = [
+                    'ffmpeg', '-nostdin',
+                    '-i', file_path,
+                    '-vn',
+                    '-ac', '1',
+                    '-ar', str(target_sr),
+                    '-f', 's16le',
+                    '-acodec', 'pcm_s16le',
+                    'pipe:1'
+                ]
+                timeout = max(30, int(duration * 0.5))
+                result = subprocess.run(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=timeout
+                )
+
             if result.returncode != 0:
                 logger.error("波形データの抽出に失敗しました")
                 return None, None
@@ -119,7 +163,6 @@ class AudioProcessor:
                 chunk_size = len(raw) // target_samples
                 trimmed = raw[:chunk_size * target_samples]
                 chunks = trimmed.reshape(target_samples, chunk_size)
-                # 各チャンクの最大絶対値を符号付きで保持
                 max_idx = np.argmax(np.abs(chunks), axis=1)
                 samples = chunks[np.arange(target_samples), max_idx]
             else:
@@ -134,9 +177,250 @@ class AudioProcessor:
             logger.error(f"波形データ抽出中にエラー: {e}", exc_info=True)
             return None, None
 
+    def _extract_waveform_chunked(self, file_path, duration, target_samples, is_video):
+        """長い音声を等間隔にサンプリングして高速に波形データを生成する
+
+        全体をデコードする代わりに、等間隔のポイントから短い断片だけを
+        デコードすることで、長い音声でも高速に波形を取得する。
+        """
+        num_chunks = target_samples
+        chunk_duration = 0.05  # 各チャンクは50ms
+        interval = duration / num_chunks
+        all_peaks = []
+
+        # 並列度を上げるためバッチ処理（1回のFFmpeg呼び出しで複数チャンクを取得は困難なので、
+        # 代わりにサンプリング数を減らして1回のFFmpegで済ませる）
+        # 戦略: 超低サンプルレート（target_samples / duration Hz相当）で全体を1回デコード
+        minimal_sr = max(100, int(target_samples / duration))
+
+        try:
+            hwaccel_args = []
+            if is_video:
+                hwaccel_args = ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']
+
+            cmd = [
+                'ffmpeg', '-nostdin',
+                *hwaccel_args,
+                '-i', file_path,
+                '-vn',
+                '-ac', '1',
+                '-ar', str(minimal_sr),
+                '-f', 's16le',
+                '-acodec', 'pcm_s16le',
+                'pipe:1'
+            ]
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30
+            )
+
+            # GPUデコード失敗時はCPUでリトライ
+            if result.returncode != 0 and hwaccel_args:
+                cmd = [
+                    'ffmpeg', '-nostdin',
+                    '-i', file_path,
+                    '-vn',
+                    '-ac', '1',
+                    '-ar', str(minimal_sr),
+                    '-f', 's16le',
+                    '-acodec', 'pcm_s16le',
+                    'pipe:1'
+                ]
+                result = subprocess.run(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=30
+                )
+
+            if result.returncode != 0:
+                return None, None
+
+            raw = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32)
+            if len(raw) == 0:
+                return None, None
+
+            max_val = np.max(np.abs(raw))
+            if max_val > 0:
+                raw = raw / max_val
+
+            if len(raw) > target_samples:
+                chunk_size = len(raw) // target_samples
+                trimmed = raw[:chunk_size * target_samples]
+                chunks = trimmed.reshape(target_samples, chunk_size)
+                max_idx = np.argmax(np.abs(chunks), axis=1)
+                samples = chunks[np.arange(target_samples), max_idx]
+            else:
+                samples = raw
+
+            return samples, duration
+
+        except Exception as e:
+            logger.debug(f"チャンク波形抽出に失敗、通常方式にフォールバック: {e}")
+            return None, None
+
+    def normalize_silence_trim_settings(self, silence_settings=None):
+        """無音カット設定を正規化する"""
+        settings = {
+            'mode': DEFAULT_SILENCE_TRIM_MODE,
+            'threshold_db': float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB),
+            'min_silence_sec': float(DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC),
+            'keep_silence_sec': float(SILENCE_TRIM_KEEP_SILENCE_SEC),
+        }
+
+        if isinstance(silence_settings, dict):
+            mode = silence_settings.get('mode', settings['mode'])
+            if mode in ('auto', 'manual'):
+                settings['mode'] = mode
+
+            for key in ('threshold_db', 'min_silence_sec', 'keep_silence_sec'):
+                value = silence_settings.get(key, settings[key])
+                try:
+                    settings[key] = float(value)
+                except (TypeError, ValueError):
+                    pass
+
+        settings['threshold_db'] = max(-80.0, min(-5.0, settings['threshold_db']))
+        settings['min_silence_sec'] = max(0.2, min(10.0, settings['min_silence_sec']))
+        settings['keep_silence_sec'] = max(0.0, min(5.0, settings['keep_silence_sec']))
+        return settings
+
+    @staticmethod
+    def _amplitude_to_db(amplitude):
+        """線形振幅を dBFS に変換する"""
+        return 20.0 * np.log10(max(float(amplitude), 1e-6))
+
+    def estimate_auto_silence_threshold_db(self, file_path, sample_rate=16000, window_sec=0.05):
+        """音量分布から無音判定しきい値を自動推定する"""
+        if not os.path.exists(file_path):
+            return float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB)
+
+        duration = self.get_audio_duration(file_path)
+        if duration is None or duration <= 0:
+            return float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB)
+
+        window_samples = max(256, int(sample_rate * window_sec))
+        read_bytes = window_samples * 2 * 24
+        levels = []
+        process = None
+        leftover = np.array([], dtype=np.int16)
+
+        try:
+            creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            process = subprocess.Popen(
+                [
+                    'ffmpeg',
+                    '-nostdin',
+                    '-loglevel', 'error',
+                    '-i', file_path,
+                    '-vn',
+                    '-ac', '1',
+                    '-ar', str(sample_rate),
+                    '-f', 's16le',
+                    '-acodec', 'pcm_s16le',
+                    'pipe:1'
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                creationflags=creationflags
+            )
+
+            while True:
+                chunk = process.stdout.read(read_bytes) if process.stdout else b''
+                if not chunk:
+                    break
+
+                data = np.frombuffer(chunk, dtype=np.int16)
+                if leftover.size:
+                    data = np.concatenate((leftover, data))
+
+                usable = (data.size // window_samples) * window_samples
+                if usable > 0:
+                    windows = data[:usable].astype(np.float32).reshape(-1, window_samples) / 32768.0
+                    rms = np.sqrt(np.mean(windows * windows, axis=1))
+                    levels.extend(rms.tolist())
+
+                leftover = data[usable:]
+
+            if process.poll() is None:
+                process.wait(timeout=max(60, int(duration * 1.5)))
+
+            if process.returncode not in (0, None):
+                raise AudioProcessingError("音量分布の解析に失敗しました")
+        except Exception as exc:
+            logger.warning(f"自動無音しきい値の推定に失敗: {exc}")
+            return float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB)
+        finally:
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.terminate()
+                        process.wait(timeout=1.0)
+                except Exception:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+
+        positive_levels = np.array([level for level in levels if level > 1e-6], dtype=np.float32)
+        if positive_levels.size < 12:
+            return float(DEFAULT_SILENCE_TRIM_THRESHOLD_DB)
+
+        noise_db = self._amplitude_to_db(np.percentile(positive_levels, 20))
+        speech_db = self._amplitude_to_db(np.percentile(positive_levels, 85))
+
+        if speech_db <= noise_db + 3.0:
+            threshold_db = max(-42.0, min(-28.0, speech_db - 6.0))
+        else:
+            threshold_db = noise_db + ((speech_db - noise_db) * 0.38)
+            threshold_db = min(threshold_db, speech_db - 7.0)
+            threshold_db = max(-48.0, min(-26.0, threshold_db))
+
+        return round(float(threshold_db), 1)
+
+    def resolve_silence_parameters(self, file_path, silence_settings=None, precomputed_auto_threshold_db=None):
+        """自動/手動設定から実際に使う無音判定パラメータを解決する"""
+        settings = self.normalize_silence_trim_settings(silence_settings)
+        resolved_threshold_db = settings['threshold_db']
+
+        if settings['mode'] == 'auto':
+            try:
+                resolved_threshold_db = float(precomputed_auto_threshold_db)
+            except (TypeError, ValueError):
+                resolved_threshold_db = self.estimate_auto_silence_threshold_db(file_path)
+
+        resolved_threshold_db = round(float(resolved_threshold_db), 1)
+        resolved = dict(settings)
+        resolved['resolved_threshold_db'] = resolved_threshold_db
+        resolved['mode_label'] = '自動' if settings['mode'] == 'auto' else '手動'
+        return resolved
+
+    def build_silence_cut_preview(self, silence_regions, silence_settings=None):
+        """無音区間から短縮候補のプレビュー領域を作る"""
+        resolved_settings = self.normalize_silence_trim_settings(silence_settings)
+        keep_silence_sec = resolved_settings['keep_silence_sec']
+        cut_regions = []
+        total_reduction_sec = 0.0
+
+        for start_sec, end_sec in silence_regions or []:
+            duration_sec = max(0.0, float(end_sec) - float(start_sec))
+            reducible_sec = max(0.0, duration_sec - keep_silence_sec)
+            if reducible_sec <= 0.0:
+                continue
+
+            cut_start = min(float(end_sec), float(start_sec) + keep_silence_sec)
+            cut_end = float(end_sec)
+            if cut_end <= cut_start:
+                continue
+
+            cut_regions.append((cut_start, cut_end))
+            total_reduction_sec += reducible_sec
+
+        return cut_regions, total_reduction_sec
+
     def detect_silence_regions(self, file_path,
                                min_silence_sec=SILENCE_TRIM_MIN_SILENCE_SEC,
-                               threshold_db=SILENCE_TRIM_THRESHOLD_DB):
+                               threshold_db=SILENCE_TRIM_THRESHOLD_DB,
+                               silence_settings=None):
         """FFmpeg silencedetect で無音区間の開始・終了タイムスタンプを取得する
 
         Returns:
@@ -148,6 +432,16 @@ class AudioProcessor:
         duration = self.get_audio_duration(file_path)
         if not duration or duration <= 0:
             return []
+
+        normalized_settings = self.normalize_silence_trim_settings(silence_settings)
+        if silence_settings is not None:
+            min_silence_sec = normalized_settings['min_silence_sec']
+            if normalized_settings['mode'] == 'auto' and 'resolved_threshold_db' not in normalized_settings:
+                normalized_settings = self.resolve_silence_parameters(
+                    file_path,
+                    silence_settings=normalized_settings
+                )
+            threshold_db = normalized_settings.get('resolved_threshold_db', normalized_settings['threshold_db'])
 
         threshold_text = f"{threshold_db}dB" if isinstance(threshold_db, (int, float)) else str(threshold_db)
         af = f"silencedetect=noise={threshold_text}:d={min_silence_sec}"
@@ -203,7 +497,8 @@ class AudioProcessor:
     def reduce_long_silence(self, input_file_path, callback=None,
                             min_silence_sec=SILENCE_TRIM_MIN_SILENCE_SEC,
                             keep_silence_sec=SILENCE_TRIM_KEEP_SILENCE_SEC,
-                            threshold_db=SILENCE_TRIM_THRESHOLD_DB):
+                            threshold_db=SILENCE_TRIM_THRESHOLD_DB,
+                            silence_settings=None):
         """長い近似無音区間を圧縮した音声ファイルを生成する"""
         def update_status(message):
             logger.info(message)
@@ -221,15 +516,29 @@ class AudioProcessor:
             output_path = temp_file.name
 
         try:
+            if silence_settings is None:
+                normalized_settings = self.normalize_silence_trim_settings({
+                    'mode': 'manual',
+                    'min_silence_sec': min_silence_sec,
+                    'keep_silence_sec': keep_silence_sec,
+                    'threshold_db': threshold_db,
+                })
+            else:
+                normalized_settings = self.normalize_silence_trim_settings(silence_settings)
+            resolved_settings = self.resolve_silence_parameters(
+                input_file_path,
+                silence_settings=normalized_settings
+            )
             timeout = max(120, int(duration * 2))
             filter_text = self._build_silence_reduction_filter(
-                min_silence_sec=min_silence_sec,
-                keep_silence_sec=keep_silence_sec,
-                threshold_db=threshold_db
+                min_silence_sec=resolved_settings['min_silence_sec'],
+                keep_silence_sec=resolved_settings['keep_silence_sec'],
+                threshold_db=resolved_settings['resolved_threshold_db']
             )
             update_status(
                 "長い無音を圧縮中... "
-                f"(しきい値 {threshold_db}dB / {min_silence_sec:.1f}秒以上)"
+                f"({resolved_settings['mode_label']} {resolved_settings['resolved_threshold_db']:.1f}dB / "
+                f"{resolved_settings['min_silence_sec']:.1f}秒以上)"
             )
 
             command = [
