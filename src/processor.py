@@ -1808,8 +1808,40 @@ class FileProcessor:
             logger.warning(f"Ollamaタイトル生成に失敗: {str(e)}")
             return None
 
+    _DATETIME_PATTERNS = [
+        # 2024-03-30_12-30-00, 2024-03-30T12:30:00
+        re.compile(r'\d{4}[-_]\d{2}[-_]\d{2}[-_T]\d{2}[-_:]\d{2}[-_:]\d{2}'),
+        # 2024-03-30 12-30, 2024-03-30_1230
+        re.compile(r'\d{4}[-_]\d{2}[-_]\d{2}[-_]\d{3,4}'),
+        # 20240330_123000, 20240330123000
+        re.compile(r'\d{8}[-_]?\d{4,6}'),
+        # 2024-03-30, 2024_03_30
+        re.compile(r'\d{4}[-_]\d{2}[-_]\d{2}'),
+        # 20240330
+        re.compile(r'\d{8}'),
+    ]
+
+    def _extract_datetime_prefix(self, filename):
+        """ファイル名から日付日時らしき部分を抽出する
+
+        Returns:
+            tuple: (datetime_part, separator) または (None, None)
+        """
+        base = os.path.splitext(filename)[0]
+        for pattern in self._DATETIME_PATTERNS:
+            match = pattern.match(base)
+            if match:
+                dt_part = match.group()
+                rest = base[match.end():]
+                # 区切り文字を検出（_- など）
+                sep = '_'
+                if rest and rest[0] in ('_', '-', ' '):
+                    sep = rest[0]
+                return dt_part, sep
+        return None, None
+
     def _rename_source_file(self, input_file, summary_title, update_status):
-        """元ファイルを要約タイトルでリネームする
+        """元ファイルを要約タイトルでリネームする（日付日時は保持）
 
         Returns:
             str or None: リネーム後のパス。失敗時はNone
@@ -1821,8 +1853,15 @@ class FileProcessor:
                 return None
 
             source_dir = os.path.dirname(input_file)
+            original_name = os.path.basename(input_file)
             ext = os.path.splitext(input_file)[1]
-            new_name = f"{safe_title}{ext}"
+
+            # 元ファイル名から日付日時を抽出して保持
+            dt_part, sep = self._extract_datetime_prefix(original_name)
+            if dt_part:
+                new_name = f"{dt_part}{sep}{safe_title}{ext}"
+            else:
+                new_name = f"{safe_title}{ext}"
             new_path = os.path.join(source_dir, new_name)
 
             # 同名ファイルが存在する場合は連番を付ける
