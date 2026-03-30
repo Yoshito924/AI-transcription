@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 
 import numpy as np
@@ -39,6 +40,7 @@ class AudioProcessor:
         self.max_audio_size_mb = max_audio_size_mb
         # 動画から抽出した音声の一時ファイルキャッシュ（同じ動画の再抽出を防止）
         self._extracted_audio_cache = {}  # {video_path: tmp_audio_path}
+        self._extraction_lock = threading.Lock()
     
     def get_audio_duration(self, file_path):
         """FFmpegを使用して音声ファイルの長さを秒単位で取得"""
@@ -264,10 +266,16 @@ class AudioProcessor:
 
         動画のデコードをスキップし、音声ストリームをそのまま
         一時ファイルにコピーするため非常に高速。
+        スレッドセーフ：ロックで同じ動画の同時抽出を防止。
 
         Returns:
             str: 一時音声ファイルのパス。失敗時は None
         """
+        with self._extraction_lock:
+            return self._extract_audio_from_video_impl(video_path)
+
+    def _extract_audio_from_video_impl(self, video_path):
+        """_extract_audio_from_videoの実体（ロック内で呼ばれる）"""
         # キャッシュに抽出済みの音声があればそれを返す
         cached = self._extracted_audio_cache.get(video_path)
         if cached and os.path.exists(cached):
