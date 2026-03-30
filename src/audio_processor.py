@@ -257,11 +257,66 @@ class AudioProcessor:
             logger.debug(f"チャンク波形抽出に失敗、通常方式にフォールバック: {e}")
             return None, None
 
+    def _extract_audio_from_video(self, video_path):
+        """動画ファイルから音声トラックだけを高速コピー抽出する
+
+        動画のデコードをスキップし、音声ストリームをそのまま
+        一時ファイルにコピーするため非常に高速。
+
+        Returns:
+            str: 一時音声ファイルのパス。失敗時は None
+        """
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix='.m4a', delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+
+            cmd = [
+                'ffmpeg', '-nostdin', '-y',
+                '-i', video_path,
+                '-vn', '-sn',           # 映像・字幕を除外
+                '-c:a', 'copy',         # 音声はデコードせずコピー
+                tmp_path
+            ]
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30
+            )
+            if result.returncode == 0 and os.path.exists(tmp_path):
+                logger.debug(f"動画から音声を高速抽出: {os.path.basename(video_path)}")
+                return tmp_path
+
+            # コピーが失敗した場合（特殊コーデック）、再エンコードで抽出
+            cmd_reencode = [
+                'ffmpeg', '-nostdin', '-y',
+                '-i', video_path,
+                '-vn', '-sn',
+                '-ac', '1', '-ar', '16000',
+                '-c:a', 'aac', '-b:a', '64k',
+                tmp_path
+            ]
+            result = subprocess.run(
+                cmd_reencode, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=60
+            )
+            if result.returncode == 0 and os.path.exists(tmp_path):
+                return tmp_path
+
+            # 失敗時は一時ファイルを削除
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            return None
+
+        except Exception as e:
+            logger.debug(f"動画からの音声抽出に失敗: {e}")
+            return None
+
     def extract_waveform_and_silence(self, file_path, target_samples=4000, silence_settings=None):
         """1回のFFmpegデコードで波形データ・自動しきい値・無音区間をすべて取得する
 
         波形プレビュー用の高速メソッド。FFmpegを1回だけ呼び出し、
         PCMデータからnumpyで全解析を行う。
+        動画ファイルの場合は先に音声トラックだけを高速抽出してから解析する。
 
         Returns:
             dict with keys: samples, duration, auto_threshold_db, silence_regions
@@ -274,44 +329,34 @@ class AudioProcessor:
         if not duration or duration <= 0:
             return None
 
-        # 無音検出に十分な解像度のサンプルレート（RMS窓50msに対応）
-        # ただし高すぎるとデコードが遅いので上限制限
-        analysis_sr = max(1000, min(16000, int(80000 / max(1, duration / 60))))
-
+        # 動画ファイルかどうかを判定
         ext = os.path.splitext(file_path)[1].lower().lstrip('.')
         video_exts = {'mp4', 'm4v', 'mov', 'avi', 'mkv', 'webm', 'wmv',
                       'mpeg', 'mpg', '3gp', '3g2', 'ts', 'mts', 'm2ts', 'flv'}
         is_video = ext in video_exts
 
+        # 動画ファイルの場合、音声トラックだけを先に高速抽出
+        tmp_audio = None
+        analysis_path = file_path
+        if is_video:
+            tmp_audio = self._extract_audio_from_video(file_path)
+            if tmp_audio:
+                analysis_path = tmp_audio
+
+        # 無音検出に十分な解像度のサンプルレート（RMS窓50msに対応）
+        analysis_sr = max(1000, min(16000, int(80000 / max(1, duration / 60))))
+
         try:
-            result = None
-
-            if is_video:
-                cmd_gpu = [
-                    'ffmpeg', '-nostdin',
-                    '-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda',
-                    '-i', file_path,
-                    '-vn', '-ac', '1', '-ar', str(analysis_sr),
-                    '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1'
-                ]
-                result = subprocess.run(
-                    cmd_gpu, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    timeout=max(30, int(duration * 0.3))
-                )
-                if result.returncode != 0:
-                    result = None
-
-            if result is None:
-                cmd = [
-                    'ffmpeg', '-nostdin',
-                    '-i', file_path,
-                    '-vn', '-ac', '1', '-ar', str(analysis_sr),
-                    '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1'
-                ]
-                result = subprocess.run(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    timeout=max(30, int(duration * 0.5))
-                )
+            cmd = [
+                'ffmpeg', '-nostdin',
+                '-i', analysis_path,
+                '-vn', '-ac', '1', '-ar', str(analysis_sr),
+                '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1'
+            ]
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=max(30, int(duration * 0.5))
+            )
 
             if result.returncode != 0:
                 return None
@@ -410,6 +455,13 @@ class AudioProcessor:
         except Exception as e:
             logger.warning(f"統合波形解析に失敗: {e}")
             return None
+        finally:
+            # 動画から抽出した一時音声ファイルを削除
+            if tmp_audio and os.path.exists(tmp_audio):
+                try:
+                    os.unlink(tmp_audio)
+                except OSError:
+                    pass
 
     def normalize_silence_trim_settings(self, silence_settings=None):
         """無音カット設定を正規化する"""
