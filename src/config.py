@@ -47,6 +47,8 @@ class Config:
             "silence_trim_min_silence_sec": DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
             "save_to_output_dir": True,
             "save_to_source_dir": False,
+            "rename_source_file": False,
+            "queued_files": [],
             "recording_dir": RECORDINGS_DIR,
             "auto_queue_recordings": True,
             "recording_gain_percent": DEFAULT_RECORDING_GAIN_PERCENT,

@@ -250,7 +250,8 @@ class FileProcessor:
                     gemini_safety_filter_recovery='segment',
                     trim_long_silence=DEFAULT_TRIM_LONG_SILENCE,
                     silence_trim_settings=None,
-                    title_generation_engine='auto'):
+                    title_generation_engine='auto',
+                    rename_source_file=False):
         """ファイルを処理し、結果を返す"""
         start_time = datetime.datetime.now()
         self.last_transcription_model_name = None
@@ -358,6 +359,12 @@ class FileProcessor:
                         summary_title = self.generate_summary_title_ollama(final_text)
                 if summary_title:
                     update_status(f"タイトル生成完了: {summary_title}")
+
+            # 元ファイルを要約タイトルでリネーム
+            if rename_source_file and summary_title:
+                renamed_source = self._rename_source_file(input_file, summary_title, update_status)
+                if renamed_source:
+                    input_file = renamed_source  # 保存時のファイル名参照を更新
 
             # 結果をファイルに保存
             output_path = self._save_result(
@@ -1731,6 +1738,35 @@ class FileProcessor:
             return None
         except Exception as e:
             logger.warning(f"Ollamaタイトル生成に失敗: {str(e)}")
+            return None
+
+    def _rename_source_file(self, input_file, summary_title, update_status):
+        """元ファイルを要約タイトルでリネームする
+
+        Returns:
+            str or None: リネーム後のパス。失敗時はNone
+        """
+        try:
+            source_dir = os.path.dirname(input_file)
+            ext = os.path.splitext(input_file)[1]
+            new_name = f"{summary_title}{ext}"
+            new_path = os.path.join(source_dir, new_name)
+
+            # 同名ファイルが存在する場合は連番を付ける
+            if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(input_file):
+                counter = 2
+                while os.path.exists(new_path):
+                    new_name = f"{summary_title}_{counter}{ext}"
+                    new_path = os.path.join(source_dir, new_name)
+                    counter += 1
+
+            os.rename(input_file, new_path)
+            logger.info(f"元ファイルをリネーム: {os.path.basename(input_file)} → {new_name}")
+            update_status(f"元ファイルをリネーム: {new_name}")
+            return new_path
+
+        except Exception as e:
+            logger.warning(f"元ファイルのリネームに失敗: {e}")
             return None
 
     def _save_result(self, input_file, final_text, process_type, prompts, start_time, update_status,

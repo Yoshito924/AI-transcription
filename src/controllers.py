@@ -241,7 +241,7 @@ class TranscriptionController:
                     silence_settings=silence_settings,
                     precomputed_auto_threshold_db=local_cache.get('auto_threshold_db')
                 )
-                local_cache['auto_threshold_db'] = resolved_settings['resolved_threshold_db']
+                local_cache['resolved_threshold_db'] = resolved_settings['resolved_threshold_db']
 
                 if preserve_view:
                     # キャッシュ利用時のみFFmpegで無音検出（設定変更時）
@@ -407,6 +407,9 @@ class TranscriptionController:
             if title_engine_var and title_display_to_mode:
                 title_generation_engine = title_display_to_mode.get(title_engine_var.get(), 'auto')
 
+            rename_source_var = self.ui_elements.get('rename_source_var')
+            rename_source_file = rename_source_var.get() if rename_source_var else False
+
             output_file = self.processor.process_file(
                 self.current_file,
                 process_type,
@@ -425,7 +428,8 @@ class TranscriptionController:
                 gemini_safety_filter_recovery=gemini_safety_filter_recovery,
                 trim_long_silence=trim_long_silence,
                 silence_trim_settings=silence_trim_settings,
-                title_generation_engine=title_generation_engine
+                title_generation_engine=title_generation_engine,
+                rename_source_file=rename_source_file
             )
             
             self.ui_elements['root'].after(0, lambda: self._on_processing_complete(output_file))

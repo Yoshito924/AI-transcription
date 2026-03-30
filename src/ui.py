@@ -857,6 +857,17 @@ def create_file_section(parent, app, theme, widgets):
         style='Modern.TCheckbutton'
     ).pack(anchor='w', pady=(4, 0))
 
+    rename_source_var = tk.BooleanVar(value=app.config.get("rename_source_file", False))
+    ttk.Checkbutton(
+        right_inner, text="元ファイルを要約タイトルでリネーム",
+        variable=rename_source_var,
+        command=lambda: (
+            app.config.set("rename_source_file", rename_source_var.get()),
+            app.config.save()
+        ),
+        style='Modern.TCheckbutton'
+    ).pack(anchor='w', pady=(4, 0))
+
     trim_long_silence_var = tk.BooleanVar(
         value=app.config.get("trim_long_silence", True)
     )
@@ -1093,20 +1104,42 @@ def create_file_section(parent, app, theme, widgets):
     )
     queue_remove_btn.pack(side=tk.RIGHT)
 
-    queue_listbox = tk.Listbox(
-        queue_frame,
+    queue_tree_shell = tk.Frame(queue_frame, bg=theme.colors['surface'])
+    queue_tree_shell.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+    queue_tree = ttk.Treeview(
+        queue_tree_shell,
+        columns=('order', 'name', 'location', 'state'),
+        show='headings',
         height=QUEUE_LISTBOX_HEIGHT,
-        selectmode=tk.EXTENDED,
-        font=theme.fonts['body'],
-        bg=theme.colors['surface_variant'],
-        fg=theme.colors['text_primary'],
-        selectbackground=theme.colors['table_selected'],
-        selectforeground=theme.colors['text_primary'],
-        relief='solid',
-        borderwidth=1,
-        highlightthickness=0
+        style='Modern.Treeview',
+        selectmode='extended'
     )
-    queue_listbox.pack(fill=tk.X, padx=10, pady=(0, 10))
+    queue_tree.heading('order', text='#')
+    queue_tree.heading('name', text='ファイル')
+    queue_tree.heading('location', text='場所')
+    queue_tree.heading('state', text='状態')
+    queue_tree.column('order', width=42, minwidth=42, stretch=False, anchor='center')
+    queue_tree.column('name', width=240, minwidth=140, stretch=True)
+    queue_tree.column('location', width=280, minwidth=140, stretch=True)
+    queue_tree.column('state', width=132, minwidth=110, stretch=False)
+    queue_tree.tag_configure('queue_ready', background=theme.colors['surface'])
+    queue_tree.tag_configure(
+        'queue_missing',
+        background=theme.colors['error_soft'],
+        foreground=theme.colors['error']
+    )
+    queue_tree.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    queue_scrollbar = ttk.Scrollbar(
+        queue_tree_shell,
+        orient=tk.VERTICAL,
+        command=queue_tree.yview,
+        style='Modern.Vertical.TScrollbar'
+    )
+    queue_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    queue_tree.configure(yscrollcommand=queue_scrollbar.set)
+    queue_tree.bind('<Delete>', lambda _event: app.remove_from_queue())
 
     # 入力導線を先に見せるため、詳細設定はファイル追加の後ろへ並べ直す
     config_strip.pack_forget()
@@ -1400,8 +1433,9 @@ def create_file_section(parent, app, theme, widgets):
     frame.silence_trim_min_silence_sec_var = silence_trim_min_silence_sec_var
     frame.save_to_output_var = save_to_output_var
     frame.save_to_source_var = save_to_source_var
+    frame.rename_source_var = rename_source_var
     frame.queue_frame = queue_frame
-    frame.queue_listbox = queue_listbox
+    frame.queue_tree = queue_tree
     frame.queue_count_label = queue_count_label
 
     return frame
@@ -2384,6 +2418,7 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'silence_trim_min_silence_sec_var': file_section.silence_trim_min_silence_sec_var,
         'save_to_output_var': file_section.save_to_output_var,
         'save_to_source_var': file_section.save_to_source_var,
+        'rename_source_var': file_section.rename_source_var,
         'recording_status_label': recording_section.recording_status_label,
         'recording_badge_label': recording_section.recording_badge_label,
         'recording_device_label': recording_section.recording_device_label,
@@ -2400,7 +2435,7 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'recording_gain_scale': getattr(recording_section, 'recording_gain_scale', None),
         'recording_visual_canvas': recording_section.recording_visual_canvas,
         'queue_frame': file_section.queue_frame,
-        'queue_listbox': file_section.queue_listbox,
+        'queue_tree': file_section.queue_tree,
         'queue_count_label': file_section.queue_count_label,
         'usage_sessions': usage_section.sessions_value,
         'usage_tokens': usage_section.tokens_value,
