@@ -1808,11 +1808,44 @@ class FileProcessor:
             logger.warning(f"Ollamaタイトル生成に失敗: {str(e)}")
             return None
 
-    def _rename_source_file(self, input_file, summary_title, update_status):
-        """元ファイルを要約タイトルでリネームする（元ファイル名を保持）
+    # ファイル名中の日付日時パターン（長いものから順にマッチ）
+    _DATETIME_RE = re.compile(
+        r'(?P<dt>'
+        r'\d{4}[-_]\d{2}[-_]\d{2}[-_T]\d{2}[-_:]\d{2}[-_:]\d{2}'  # 2024-03-30_12-30-00
+        r'|\d{8}[-_]?\d{6}'                                         # 20260322_141819, 20260322141819
+        r'|\d{8}[-_]?\d{4}'                                         # 20240330_1230
+        r'|\d{4}[-_]\d{2}[-_]\d{2}'                                 # 2024-03-30
+        r'|\d{8}'                                                    # 20240330
+        r')'
+    )
 
-        形式: {要約タイトル}_{元ファイル名}.ext
-        例: オープン終了の意義を探る_DJI_20260322141819_0004_D.MP4
+    def _split_datetime_from_stem(self, stem):
+        """ファイル名（拡張子なし）から日時部分とそれ以外に分離する
+
+        Returns:
+            tuple: (datetime_str, remaining_stem) — 日時がなければ (None, stem)
+        """
+        match = self._DATETIME_RE.search(stem)
+        if not match:
+            return None, stem
+
+        dt_str = match.group('dt')
+        before = stem[:match.start()]
+        after = stem[match.end():]
+
+        # 前後の区切り文字を整理
+        remaining = (before.rstrip('_- ') + '_' + after.lstrip('_- ')).strip('_- ')
+        if not remaining:
+            remaining = None
+        return dt_str, remaining
+
+    def _rename_source_file(self, input_file, summary_title, update_status):
+        """元ファイルを要約タイトルでリネームする（日時先頭＋元ファイル名保持）
+
+        形式:
+          日時あり: {日時}_{要約タイトル}_{残りの元ファイル名}.ext
+          日時なし: {要約タイトル}_{元ファイル名}.ext
+        例: 20260322141819_オープン終了の意義を探る_DJI_0004_D.MP4
 
         Returns:
             str or None: リネーム後のパス。失敗時はNone
@@ -1828,12 +1861,20 @@ class FileProcessor:
             original_stem = os.path.splitext(original_name)[0]
             ext = os.path.splitext(input_file)[1]
 
-            # {要約タイトル}_{元ファイル名}.ext
-            new_name = f"{safe_title}_{original_stem}{ext}"
+            # 日時を抽出して先頭に配置
+            dt_str, remaining = self._split_datetime_from_stem(original_stem)
+            if dt_str:
+                if remaining:
+                    base_new_name = f"{dt_str}_{safe_title}_{remaining}"
+                else:
+                    base_new_name = f"{dt_str}_{safe_title}"
+            else:
+                base_new_name = f"{safe_title}_{original_stem}"
+
+            new_name = f"{base_new_name}{ext}"
             new_path = os.path.join(source_dir, new_name)
 
             # 同名ファイルが存在する場合は連番を付ける
-            base_new_name = f"{safe_title}_{original_stem}"
             counter = 2
             while os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(input_file):
                 new_name = f"{base_new_name}_{counter}{ext}"
