@@ -2237,17 +2237,23 @@ def create_history_section(parent, app, theme, widgets):
     )
     open_btn.grid(row=0, column=0, sticky='ew', padx=(0, 4), pady=(0, 6))
 
+    output_folder_btn = widgets.create_icon_button(
+        button_frame, "保存先", ICONS['folder'], 'Secondary',
+        command=app.open_selected_output_directory
+    )
+    output_folder_btn.grid(row=0, column=1, sticky='ew', padx=4, pady=(0, 6))
+
     source_folder_btn = widgets.create_icon_button(
         button_frame, "元フォルダ", ICONS['file'], 'Secondary',
         command=app.open_source_file_folder
     )
-    source_folder_btn.grid(row=0, column=1, sticky='ew', padx=4, pady=(0, 6))
+    source_folder_btn.grid(row=0, column=2, sticky='ew', padx=(4, 0), pady=(0, 6))
 
     history_folder_btn = widgets.create_icon_button(
         button_frame, "履歴データ", ICONS['folder'], 'Secondary',
         command=app.open_history_directory
     )
-    history_folder_btn.grid(row=0, column=2, sticky='ew', padx=(4, 0), pady=(0, 6))
+    history_folder_btn.grid(row=1, column=0, sticky='ew', padx=(0, 4), pady=(0, 0))
 
     delete_btn = widgets.create_icon_button(
         button_frame, "削除", ICONS['delete'], 'Secondary',
