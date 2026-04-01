@@ -372,9 +372,14 @@ class TranscriptionController:
     def _process_in_thread(self, process_type, api_key, prompts, prepared_audio=None):
         """スレッドで実行される処理"""
         try:
-            # ステータスメッセージコールバック
+            # ステータスメッセージコールバック（キュー処理中は進捗番号を付与）
             def progress_callback(msg):
-                self.ui_elements['root'].after(0, lambda: self.update_status(msg))
+                if self.queue_processing and self.total_queue_files > 1:
+                    prefix = f"[{self.current_queue_index}/{self.total_queue_files}] "
+                    display_msg = prefix + msg
+                else:
+                    display_msg = msg
+                self.ui_elements['root'].after(0, lambda m=display_msg: self.update_status(m))
 
             # プログレスバー値コールバック
             def progress_value_callback(value):
@@ -604,7 +609,21 @@ class TranscriptionController:
         """処理完了時の処理"""
         self._update_progress_bar(100)
         self.is_processing = False
-        self.update_status(f"処理完了: {os.path.basename(output_file)}")
+
+        # キュー進捗プレフィックス
+        queue_prefix = ""
+        if self.queue_processing and self.total_queue_files > 1:
+            queue_prefix = f"[{self.current_queue_index}/{self.total_queue_files}] "
+
+        # 文字起こし結果が短すぎてファイル保存がスキップされた場合
+        if output_file is None:
+            self.update_status(f"{queue_prefix}処理完了（文字起こし結果が短いためファイル保存をスキップ）")
+            self.add_log(f"{queue_prefix}文字起こし結果が100文字以下のためファイル保存・リネームをスキップしました")
+            if self.queue_processing:
+                self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
+            return
+
+        self.update_status(f"{queue_prefix}処理完了: {os.path.basename(output_file)}")
 
         # 処理時間を記録
         self._record_processing_time()

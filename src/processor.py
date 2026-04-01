@@ -377,6 +377,13 @@ class FileProcessor:
             )
             update_progress(95)
 
+            # 文字起こし結果が100文字以下の場合はファイル保存・リネームをスキップ
+            if len(final_text.strip()) <= 100:
+                update_status("文字起こし結果が100文字以下のためファイル保存・リネームをスキップしました")
+                logger.warning(f"文字起こし結果が短すぎます（{len(final_text.strip())}文字）: スキップ")
+                update_progress(100)
+                return None
+
             # 要約タイトルを生成
             summary_title = None
             if title_generation_engine != 'disabled':
