@@ -4,6 +4,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+from src.constants import OLLAMA_DEFAULT_MODEL
 from src.exceptions import ApiConnectionError, AudioProcessingError, TranscriptionError
 from src.processor import FileProcessor
 
@@ -322,6 +323,62 @@ class FileProcessorTests(unittest.TestCase):
         )
 
         self.assertEqual(title, "暑さで機械が止まる 浴衣姿も")
+
+    def test_generate_text_with_ollama_strips_thought_block(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+
+        class DummyHeaders:
+            def get_content_charset(self):
+                return 'utf-8'
+
+        class DummyResponse:
+            headers = DummyHeaders()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return (
+                    b'{"response":"<|channel>thought\\ninternal notes<channel|>\\n'
+                    b'\xe5\xae\x8c\xe4\xba\x86\xe3\x83\x86\xe3\x82\xad\xe3\x82\xb9\xe3\x83\x88"}'
+                )
+
+        with patch('urllib.request.urlopen', return_value=DummyResponse()):
+            result = processor._generate_text_with_ollama("prompt")
+
+        self.assertEqual(result, "完了テキスト")
+
+    def test_additional_processing_can_use_ollama_without_api_key(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+
+        with patch.object(processor, '_generate_text_with_ollama', return_value="ローカル要約") as generate:
+            result = processor._perform_additional_processing(
+                "文字起こし本文",
+                "summary",
+                {"summary": {"name": "要約", "prompt": "要約してください\n\n{transcription}"}},
+                api_key="",
+                update_status=lambda message: None,
+                additional_processing_engine='ollama',
+                ollama_model='gemma4:26b'
+            )
+
+        self.assertEqual(result, "ローカル要約")
+        self.assertEqual(generate.call_args.kwargs['model'], 'gemma4:26b')
+
+    def test_generate_summary_title_ollama_uses_gemma4_default_model(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+
+        with patch.object(processor, '_generate_text_with_ollama', return_value="会議メモ") as generate:
+            title = processor.generate_summary_title_ollama("これは文字起こしです")
+
+        self.assertEqual(title, "会議メモ")
+        self.assertEqual(generate.call_args.kwargs['model'], OLLAMA_DEFAULT_MODEL)
 
     def test_save_result_avoids_duplicate_summary_title_in_filename(self):
         temp_dir = self.make_output_dir()

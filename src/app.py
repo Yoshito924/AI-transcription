@@ -33,6 +33,7 @@ from .utils import (
     get_engine_value,
     get_whisper_model_value,
     get_gemini_safety_filter_recovery_value,
+    get_ollama_model_value,
     get_trim_long_silence_value,
     get_silence_trim_settings,
     format_duration,
@@ -1503,9 +1504,11 @@ class TranscriptionApp:
             engine_value = get_engine_value(self.ui_elements)
             whisper_model = get_whisper_model_value(self.ui_elements)
             gemini_safety_filter_recovery = get_gemini_safety_filter_recovery_value(self.ui_elements)
+            ollama_model = get_ollama_model_value(self.ui_elements)
             self.config.set("transcription_engine", engine_value)
             self.config.set("whisper_model", whisper_model)
             self.config.set("gemini_safety_filter_recovery", gemini_safety_filter_recovery)
+            self.config.set("ollama_model", ollama_model)
 
     def _save_destination_settings(self):
         """保存先設定を保存"""

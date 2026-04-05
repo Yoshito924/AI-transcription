@@ -19,7 +19,8 @@ from .constants import (
     DEFAULT_SILENCE_TRIM_MODE,
     DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
     DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
-    SILENCE_TRIM_KEEP_SILENCE_SEC
+    SILENCE_TRIM_KEEP_SILENCE_SEC,
+    OLLAMA_DEFAULT_MODEL
 )
 
 
@@ -246,6 +247,16 @@ def get_gemini_safety_filter_recovery_value(ui_elements, default='segment-whispe
     if recovery_var and display_to_mode:
         display_name = recovery_var.get()
         return display_to_mode.get(display_name, default)
+    return default
+
+
+def get_ollama_model_value(ui_elements, default=OLLAMA_DEFAULT_MODEL):
+    """UI要素からOllamaモデル値を取得する"""
+    ollama_model_var = ui_elements.get('ollama_model_var', None)
+    if ollama_model_var is not None:
+        model_name = str(ollama_model_var.get()).strip()
+        if model_name:
+            return model_name
     return default
 
 

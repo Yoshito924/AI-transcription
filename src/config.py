@@ -12,6 +12,7 @@ from .constants import (
     DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
     DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
     DEFAULT_RECORDING_GAIN_PERCENT,
+    OLLAMA_DEFAULT_MODEL,
     CONFIG_DIR, 
     DATA_DIR, 
     CONFIG_FILE, 
@@ -39,7 +40,9 @@ class Config:
             "openai_api_key": "",  # OpenAI API用（Whisper API等）
             "transcription_engine": "gemini",  # "gemini" または "whisper" または "whisper-api"
             "gemini_safety_filter_recovery": "segment",  # "segment" または "whisper"
+            "additional_processing_engine": "gemini",  # "gemini" または "ollama"
             "title_generation_engine": "auto",  # "auto", "ollama", "gemini", "disabled"
+            "ollama_model": OLLAMA_DEFAULT_MODEL,
             "whisper_model": "large-v3",  # "tiny", "base", "small", "medium", "large-v3", "turbo"
             "trim_long_silence": DEFAULT_TRIM_LONG_SILENCE,
             "silence_trim_mode": DEFAULT_SILENCE_TRIM_MODE,

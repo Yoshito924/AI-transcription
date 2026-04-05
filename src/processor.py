@@ -24,7 +24,9 @@ from .constants import (
     SEGMENT_MERGE_CONFIG,
     SAFETY_SETTINGS_TRANSCRIPTION,
     SUMMARY_TITLE_MAX_LENGTH,
-    TITLE_GENERATION_MODELS
+    TITLE_GENERATION_MODELS,
+    OLLAMA_BASE_URL,
+    OLLAMA_DEFAULT_MODEL
 )
 from .exceptions import (
     TranscriptionError, 
@@ -279,6 +281,8 @@ class FileProcessor:
                     trim_long_silence=DEFAULT_TRIM_LONG_SILENCE,
                     silence_trim_settings=None,
                     title_generation_engine='auto',
+                    ollama_model=OLLAMA_DEFAULT_MODEL,
+                    additional_processing_engine='gemini',
                     rename_source_file=False,
                     prepared_audio=None):
         """ファイルを処理し、結果を返す"""
@@ -373,7 +377,14 @@ class FileProcessor:
 
             # 追加処理（必要な場合）
             final_text = self._perform_additional_processing(
-                transcription, process_type, prompts, api_key, update_status, preferred_model
+                transcription,
+                process_type,
+                prompts,
+                gemini_api_key or api_key,
+                update_status,
+                preferred_model,
+                additional_processing_engine=additional_processing_engine,
+                ollama_model=ollama_model
             )
             update_progress(95)
 
@@ -393,14 +404,14 @@ class FileProcessor:
                         summary_title = self.generate_summary_title(final_text, gemini_api_key)
                 elif title_generation_engine == 'ollama':
                     update_status("要約タイトルを生成中（Ollama）...")
-                    summary_title = self.generate_summary_title_ollama(final_text)
+                    summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
                 else:  # auto
                     if gemini_api_key:
                         update_status("要約タイトルを生成中...")
                         summary_title = self.generate_summary_title(final_text, gemini_api_key)
                     if not summary_title:
                         update_status("要約タイトルを生成中（Ollama）...")
-                        summary_title = self.generate_summary_title_ollama(final_text)
+                        summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
                 if summary_title:
                     update_status(f"タイトル生成完了: {summary_title}")
 
@@ -1583,7 +1594,88 @@ class FileProcessor:
                 except OSError:
                     logger.warning(f"セグメントファイルの削除に失敗: {segment_file}")
     
-    def _perform_additional_processing(self, transcription, process_type, prompts, api_key, update_status, preferred_model=None):
+    def _strip_ollama_thinking_output(self, text):
+        """Gemma系モデルが返す thought ブロックを先頭から取り除く"""
+        if not text:
+            return text
+
+        patterns = [
+            r'^\s*<\|channel\>thought\s*.*?<channel\|>\s*',
+            r'^\s*<\|channel\|\>thought\s*.*?<\|channel\|\>\s*',
+        ]
+
+        cleaned = text
+        for pattern in patterns:
+            cleaned = re.sub(pattern, '', cleaned, count=1, flags=re.DOTALL)
+
+        return cleaned.strip()
+
+    def _generate_text_with_ollama(self, prompt, model=OLLAMA_DEFAULT_MODEL,
+                                   base_url=OLLAMA_BASE_URL,
+                                   timeout_sec=120, num_predict=4096):
+        """Ollama にテキスト生成を依頼して応答本文を返す"""
+        import urllib.error
+        import urllib.request
+
+        payload = json.dumps({
+            'model': model,
+            'prompt': prompt,
+            'stream': False,
+            'options': {
+                'temperature': 0.1,
+                'num_predict': num_predict,
+            }
+        }).encode('utf-8')
+
+        req = urllib.request.Request(
+            f'{base_url}/api/generate',
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                charset = resp.headers.get_content_charset() or 'utf-8'
+                result = json.loads(resp.read().decode(charset))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', errors='ignore')
+            try:
+                detail_json = json.loads(detail)
+                detail = detail_json.get('error', detail) or detail
+            except Exception:
+                pass
+
+            if 'not found' in detail.lower():
+                raise ApiConnectionError(
+                    f"Ollama モデル '{model}' が見つかりません。",
+                    user_message=(
+                        f"Ollama モデル '{model}' が見つかりません。\n"
+                        f"`ollama pull {model}` を実行してから再試行してください。"
+                    )
+                ) from e
+
+            raise ApiConnectionError(
+                f"Ollama へのリクエストに失敗しました: {detail}"
+            ) from e
+        except (urllib.error.URLError, ConnectionRefusedError, TimeoutError) as e:
+            raise ApiConnectionError(
+                "Ollama に接続できません。Ollama を起動し、ローカル API が利用可能か確認してください。",
+                user_message=(
+                    "Ollama に接続できませんでした。\n"
+                    "Ollama を起動してから再実行してください。"
+                )
+            ) from e
+
+        response_text = result.get('response', '')
+        response_text = self._strip_ollama_thinking_output(response_text)
+        if not response_text:
+            raise TranscriptionError("Ollama から空の応答が返されました")
+        return response_text
+
+    def _perform_additional_processing(self, transcription, process_type, prompts, api_key, update_status,
+                                       preferred_model=None, additional_processing_engine='gemini',
+                                       ollama_model=OLLAMA_DEFAULT_MODEL):
         """追加処理（要約、議事録作成など）"""
         if process_type == "transcription":
             return transcription
@@ -1591,11 +1683,24 @@ class FileProcessor:
         if process_type not in prompts:
             raise FileProcessingError(f"指定された処理タイプ '{process_type}' はプロンプト設定に存在しません")
 
+        process_name = prompts[process_type]["name"]
+        prompt = prompts[process_type]["prompt"].replace("{transcription}", transcription)
+
+        if additional_processing_engine == 'ollama':
+            logger.info(f"✓ {process_name}使用モデル: {ollama_model} (Ollama)")
+            update_status(f"✓ 使用モデル: {ollama_model} (Ollama)")
+            update_status(f"{process_name}を生成中...")
+            return self._generate_text_with_ollama(
+                prompt,
+                model=ollama_model,
+                timeout_sec=300,
+                num_predict=4096
+            )
+
         # 追加処理はGeminiが必要
         if not api_key:
             raise ApiConnectionError("追加処理（要約・議事録作成など）にはGemini APIキーが必要です")
 
-        process_name = prompts[process_type]["name"]
         with GENAI_SDK_LOCK:
             genai.configure(api_key=api_key)
             model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
@@ -1604,9 +1709,7 @@ class FileProcessor:
         logger.info(f"✓ {process_name}使用モデル: {model_name}")
         update_status(f"✓ 使用モデル: {model_name}")
         update_status(f"{process_name}を生成中...")
-        
-        prompt = prompts[process_type]["prompt"].replace("{transcription}", transcription)
-        
+
         with GENAI_SDK_LOCK:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(
@@ -1617,17 +1720,17 @@ class FileProcessor:
             response = model.generate_content(prompt)
         if not response.text:
             raise TranscriptionError(f"{process_name}の生成に失敗しました")
-        
+
         # トークン使用量と料金を計算・表示（テキスト処理）
         def update_usage_status(message):
             update_status(f"{process_name}{message}")
-        
+
         process_usage_metadata(
             response, model_name,
             is_audio_input=False,
             update_status=update_usage_status
         )
-        
+
         return response.text
     
     def _get_unique_path(self, file_path):
@@ -1759,13 +1862,10 @@ class FileProcessor:
             logger.warning(f"タイトル生成に失敗（フォールバックで従来のファイル名を使用）: {str(e)}")
             return None
 
-    def generate_summary_title_ollama(self, text, model='gemma3:4b',
-                                       base_url='http://localhost:11434'):
+    def generate_summary_title_ollama(self, text, model=OLLAMA_DEFAULT_MODEL,
+                                       base_url=OLLAMA_BASE_URL):
         """Ollamaを使用して要約タイトルを生成する（Geminiが使えない場合のフォールバック）"""
         try:
-            import urllib.request
-            import urllib.error
-
             excerpt = text[:2000]
             prompt = (
                 "この文字起こしの内容を15〜25文字で要約してタイトルを付けてください。\n"
@@ -1775,27 +1875,13 @@ class FileProcessor:
                 f"{excerpt}"
             )
 
-            payload = json.dumps({
-                'model': model,
-                'prompt': prompt,
-                'stream': False,
-                'options': {
-                    'temperature': 0.1,
-                    'num_predict': 100,
-                }
-            }).encode('utf-8')
-
-            req = urllib.request.Request(
-                f'{base_url}/api/generate',
-                data=payload,
-                headers={'Content-Type': 'application/json'},
-                method='POST'
+            title = self._generate_text_with_ollama(
+                prompt,
+                model=model,
+                base_url=base_url,
+                timeout_sec=30,
+                num_predict=100
             )
-
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read().decode('utf-8'))
-
-            title = result.get('response', '').strip()
             if not title:
                 logger.warning("Ollamaタイトル生成: 空のレスポンス")
                 return None
@@ -1805,11 +1891,11 @@ class FileProcessor:
                 logger.warning("Ollamaタイトル生成: サニタイズ後に空になりました")
                 return None
 
-            logger.info(f"Ollamaで生成されたタイトル: {title}")
+            logger.info(f"Ollamaで生成されたタイトル: {title} (model={model})")
             return title
 
-        except (urllib.error.URLError, ConnectionRefusedError):
-            logger.info("Ollamaが起動していないため、タイトル生成をスキップします")
+        except ApiConnectionError:
+            logger.info("Ollamaが利用できないため、タイトル生成をスキップします")
             return None
         except Exception as e:
             logger.warning(f"Ollamaタイトル生成に失敗: {str(e)}")
@@ -1961,7 +2047,9 @@ class FileProcessor:
 
         return result_path
     
-    def process_transcription_file(self, transcription_file, prompt_key, api_key, prompts, status_callback=None):
+    def process_transcription_file(self, transcription_file, prompt_key, api_key, prompts, status_callback=None,
+                                   additional_processing_engine='gemini',
+                                   ollama_model=OLLAMA_DEFAULT_MODEL):
         """文字起こしファイルの追加処理を実行"""
         start_time = datetime.datetime.now()
         
@@ -1995,29 +2083,45 @@ class FileProcessor:
                 if match:
                     base_name = match.group(1)
             
-            # APIを使用して処理
-            with GENAI_SDK_LOCK:
-                genai.configure(api_key=api_key)
-                model_name = self.api_utils.get_best_available_model(api_key)
-
-            # モデル名を表示
-            logger.info(f"✓ {process_name}使用モデル: {model_name}")
-            update_status(f"✓ 使用モデル: {model_name}")
-            update_status(f"{process_name}を生成中...")
-            
             # プロンプトに文字起こし結果を埋め込む
             prompt = prompt_info["prompt"].replace("{transcription}", transcription)
 
-            with GENAI_SDK_LOCK:
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(
-                    model_name,
-                    generation_config=AI_GENERATION_CONFIG
+            if additional_processing_engine == 'ollama':
+                model_name = ollama_model
+                logger.info(f"✓ {process_name}使用モデル: {model_name} (Ollama)")
+                update_status(f"✓ 使用モデル: {model_name} (Ollama)")
+                update_status(f"{process_name}を生成中...")
+                result_text = self._generate_text_with_ollama(
+                    prompt,
+                    model=model_name,
+                    timeout_sec=300,
+                    num_predict=4096
                 )
-                response = model.generate_content(prompt)
-            if not response.text:
-                raise TranscriptionError(f"{process_name}の生成に失敗しました")
-            
+            else:
+                if not api_key:
+                    raise ApiConnectionError("追加処理（要約・議事録作成など）にはGemini APIキーが必要です")
+
+                # APIを使用して処理
+                with GENAI_SDK_LOCK:
+                    genai.configure(api_key=api_key)
+                    model_name = self.api_utils.get_best_available_model(api_key)
+
+                # モデル名を表示
+                logger.info(f"✓ {process_name}使用モデル: {model_name}")
+                update_status(f"✓ 使用モデル: {model_name}")
+                update_status(f"{process_name}を生成中...")
+
+                with GENAI_SDK_LOCK:
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel(
+                        model_name,
+                        generation_config=AI_GENERATION_CONFIG
+                    )
+                    response = model.generate_content(prompt)
+                if not response.text:
+                    raise TranscriptionError(f"{process_name}の生成に失敗しました")
+                result_text = response.text
+
             # 出力ファイル名
             timestamp = get_timestamp()
             output_filename = f"{base_name}_{process_name}_{timestamp}.txt"
@@ -2025,7 +2129,7 @@ class FileProcessor:
             
             # ファイル出力
             with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(response.text)
+                f.write(result_text)
             
             # 処理完了のログ
             end_time = datetime.datetime.now()

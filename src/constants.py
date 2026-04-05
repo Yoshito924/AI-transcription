@@ -102,6 +102,15 @@ TITLE_GENERATION_MODELS = [
     "gemini-2.0-flash",
     "gemini-2.5-flash",
 ]
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_DEFAULT_MODEL = "gemma4:e4b"
+OLLAMA_MODEL_SUGGESTIONS = [
+    "gemma4:e4b",
+    "gemma4:26b",
+    "gemma4:31b",
+    "gemma4:e2b",
+    "gemma3:4b",
+]
 
 MIN_BITRATE = 32  # 最低品質確保のための最小ビットレート
 MAX_BITRATE = 256  # 最大ビットレート

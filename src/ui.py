@@ -20,7 +20,9 @@ from .constants import (
     MAIN_PADDING_Y, QUEUE_LISTBOX_HEIGHT,
     DEFAULT_SILENCE_TRIM_MODE,
     DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
-    DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC
+    DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
+    OLLAMA_DEFAULT_MODEL,
+    OLLAMA_MODEL_SUGGESTIONS
 )
 
 
@@ -342,7 +344,7 @@ def create_api_section(parent, app, theme, widgets):
 
     api_desc = tk.Label(
         card,
-        text="利用するエンジンに応じて認証情報を登録します。Gemini は要約やタイトル生成、Whisper API は OpenAI 側の音声認識に使います。",
+        text="利用するエンジンに応じて認証情報を登録します。Gemini は要約やタイトル生成、Whisper API は OpenAI 側の音声認識に使います。ローカル要約やタイトル生成は Ollama でも実行できます。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface'],
@@ -818,6 +820,42 @@ def create_file_section(parent, app, theme, widgets):
         style='Modern.TCombobox'
     )
     title_engine_combo.pack(fill=tk.X, pady=(6, 0))
+
+    ollama_model_label = tk.Label(
+        left_inner,
+        text="Ollama モデル",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    ollama_model_label.pack(anchor='w', pady=(10, 0))
+
+    saved_ollama_model = app.config.get("ollama_model", OLLAMA_DEFAULT_MODEL) or OLLAMA_DEFAULT_MODEL
+    ollama_model_var = tk.StringVar(value=saved_ollama_model)
+    ollama_model_combo = ttk.Combobox(
+        left_inner,
+        textvariable=ollama_model_var,
+        values=OLLAMA_MODEL_SUGGESTIONS,
+        state='normal',
+        style='Modern.TCombobox'
+    )
+    ollama_model_combo.pack(fill=tk.X, pady=(6, 0))
+
+    ollama_model_details = {
+        'gemma4:e4b': 'Gemma 4 E4B | 軽量・推奨',
+        'gemma4:26b': 'Gemma 4 26B | 高品質',
+        'gemma4:31b': 'Gemma 4 31B | 高品質・高負荷',
+        'gemma4:e2b': 'Gemma 4 E2B | 最軽量',
+        'gemma3:4b': 'Gemma 3 4B | 旧構成互換',
+    }
+    ollama_model_info = tk.Label(
+        left_inner,
+        text="",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    ollama_model_info.pack(anchor='w', pady=(4, 0))
 
     right_inner = tk.Frame(right_panel, bg=theme.colors['surface_variant'])
     right_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
@@ -1388,11 +1426,24 @@ def create_file_section(parent, app, theme, widgets):
         app.config.set("title_generation_engine", mode)
         app.config.save()
 
+    def on_ollama_model_change(event=None):
+        model_name = ollama_model_var.get().strip() or OLLAMA_DEFAULT_MODEL
+        if ollama_model_var.get() != model_name:
+            ollama_model_var.set(model_name)
+        ollama_model_info.config(
+            text=ollama_model_details.get(model_name, 'カスタムモデル')
+        )
+        app.config.set("ollama_model", model_name)
+        app.config.save()
+
     engine_var.trace('w', lambda *args: on_engine_change())
     whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
     whisper_api_model_combo.bind('<<ComboboxSelected>>', on_whisper_api_model_change)
     gemini_recovery_combo.bind('<<ComboboxSelected>>', on_gemini_recovery_change)
     title_engine_combo.bind('<<ComboboxSelected>>', on_title_engine_change)
+    ollama_model_combo.bind('<<ComboboxSelected>>', on_ollama_model_change)
+    ollama_model_combo.bind('<FocusOut>', on_ollama_model_change)
+    ollama_model_combo.bind('<Return>', on_ollama_model_change)
     silence_trim_mode_combo.bind('<<ComboboxSelected>>', on_silence_trim_mode_change)
     silence_trim_threshold_scale.configure(command=on_silence_trim_threshold_change)
     silence_trim_threshold_scale.bind('<ButtonRelease-1>', persist_silence_trim_settings)
@@ -1409,6 +1460,7 @@ def create_file_section(parent, app, theme, widgets):
     on_model_change()
     on_whisper_api_model_change()
     on_gemini_recovery_change()
+    on_ollama_model_change()
 
     frame.drop_area = drop_canvas
     frame.file_label = file_label
@@ -1426,6 +1478,7 @@ def create_file_section(parent, app, theme, widgets):
     frame.gemini_safety_filter_recovery_display_to_mode = gemini_recovery_display_to_mode
     frame.title_engine_var = title_engine_var
     frame.title_engine_display_to_mode = title_engine_display_to_mode
+    frame.ollama_model_var = ollama_model_var
     frame.trim_long_silence_var = trim_long_silence_var
     frame.silence_trim_mode_var = silence_trim_mode_var
     frame.silence_trim_mode_display_to_value = silence_trim_mode_display_to_value
@@ -2417,6 +2470,7 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'gemini_safety_filter_recovery_display_to_mode': file_section.gemini_safety_filter_recovery_display_to_mode,
         'title_engine_var': file_section.title_engine_var,
         'title_engine_display_to_mode': file_section.title_engine_display_to_mode,
+        'ollama_model_var': file_section.ollama_model_var,
         'trim_long_silence_var': file_section.trim_long_silence_var,
         'silence_trim_mode_var': file_section.silence_trim_mode_var,
         'silence_trim_mode_display_to_value': file_section.silence_trim_mode_display_to_value,

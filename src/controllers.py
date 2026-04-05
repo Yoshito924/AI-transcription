@@ -37,6 +37,7 @@ from .utils import (
     get_whisper_model_value,
     get_whisper_api_model_value,
     get_gemini_safety_filter_recovery_value,
+    get_ollama_model_value,
     get_trim_long_silence_value,
     get_silence_trim_settings
 )
@@ -391,6 +392,7 @@ class TranscriptionController:
             whisper_model = get_whisper_model_value(self.ui_elements)
             whisper_api_model = get_whisper_api_model_value(self.ui_elements)
             gemini_safety_filter_recovery = get_gemini_safety_filter_recovery_value(self.ui_elements)
+            ollama_model = get_ollama_model_value(self.ui_elements)
             trim_long_silence = get_trim_long_silence_value(self.ui_elements)
             silence_trim_settings = get_silence_trim_settings(self.ui_elements)
 
@@ -410,14 +412,16 @@ class TranscriptionController:
 
             # タイトル生成エンジンの設定
             gemini_api_key = None
-            if engine_value == 'gemini':
-                gemini_api_key = self.ui_elements['api_key_var'].get().strip() or None
+            gemini_api_var = self.ui_elements.get('api_key_var')
+            if gemini_api_var:
+                gemini_api_key = gemini_api_var.get().strip() or None
 
             title_engine_var = self.ui_elements.get('title_engine_var')
             title_display_to_mode = self.ui_elements.get('title_engine_display_to_mode', {})
             title_generation_engine = 'auto'
             if title_engine_var and title_display_to_mode:
                 title_generation_engine = title_display_to_mode.get(title_engine_var.get(), 'auto')
+            additional_processing_engine = self.config.get("additional_processing_engine", "gemini")
 
             rename_source_var = self.ui_elements.get('rename_source_var')
             rename_source_file = rename_source_var.get() if rename_source_var else False
@@ -441,6 +445,8 @@ class TranscriptionController:
                 trim_long_silence=trim_long_silence,
                 silence_trim_settings=silence_trim_settings,
                 title_generation_engine=title_generation_engine,
+                ollama_model=ollama_model,
+                additional_processing_engine=additional_processing_engine,
                 rename_source_file=rename_source_file,
                 prepared_audio=prepared_audio
             )

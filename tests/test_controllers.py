@@ -129,6 +129,7 @@ class ControllerErrorHandlingTests(unittest.TestCase):
             'save_to_source_var': DummyVar(False),
             'trim_long_silence_var': DummyVar(False),
             'engine_var': DummyVar("gemini"),
+            'ollama_model_var': DummyVar("gemma4:26b"),
             'gemini_safety_filter_recovery_var': DummyVar("Whisper に自動切替"),
             'gemini_safety_filter_recovery_display_to_mode': {
                 "音声を分割して再試行（推奨）": "segment",
@@ -149,6 +150,8 @@ class ControllerErrorHandlingTests(unittest.TestCase):
             'whisper'
         )
         self.assertFalse(processor.process_file.call_args.kwargs['trim_long_silence'])
+        self.assertEqual(processor.process_file.call_args.kwargs['ollama_model'], 'gemma4:26b')
+        self.assertEqual(processor.process_file.call_args.kwargs['gemini_api_key'], 'test-key')
 
 
 if __name__ == '__main__':
