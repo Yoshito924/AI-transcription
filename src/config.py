@@ -43,7 +43,7 @@ class Config:
             "additional_processing_engine": "gemini",  # "gemini" または "ollama"
             "title_generation_engine": "auto",  # "auto", "ollama", "gemini", "disabled"
             "ollama_model": OLLAMA_DEFAULT_MODEL,
-            "whisper_model": "large-v3",  # "tiny", "base", "small", "medium", "large-v3", "turbo"
+            "whisper_model": "large-v3",
             "trim_long_silence": DEFAULT_TRIM_LONG_SILENCE,
             "silence_trim_mode": DEFAULT_SILENCE_TRIM_MODE,
             "silence_trim_threshold_db": DEFAULT_SILENCE_TRIM_THRESHOLD_DB,

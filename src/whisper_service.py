@@ -31,52 +31,13 @@ except ImportError:
 class WhisperService:
     """OpenAI Whisperを使用した文字起こしサービス"""
     
-    # Whisperモデルサイズとその特性（2025年最新）
-    # 参考: https://github.com/openai/whisper
-    # 推奨順: turbo > large-v3 > medium > small > base > tiny
+    # Whisperモデル設定
     MODEL_INFO = {
-        'turbo': {
-            'size': '809M',
-            'description': '⭐推奨：高速かつ高精度',
-            'params': '809M',
-            'recommended': True
-        },
         'large-v3': {
             'size': '1550M',
             'description': '最高精度（99言語対応）',
             'params': '1550M',
-            'recommended': False
-        },
-        'medium': {
-            'size': '769M',
-            'description': '高精度・軽量バランス型',
-            'params': '769M',
-            'recommended': False
-        },
-        'small': {
-            'size': '244M',
-            'description': '中精度・軽量',
-            'params': '244M',
-            'recommended': False
-        },
-        'base': {
-            'size': '74M',
-            'description': '標準モデル',
-            'params': '74M',
-            'recommended': False
-        },
-        'tiny': {
-            'size': '39M',
-            'description': '最速・低精度（テスト用）',
-            'params': '39M',
-            'recommended': False
-        },
-        # 互換性のための別名（内部でturboに変換）
-        'large-v3-turbo': {
-            'size': '809M',
-            'description': 'turboの別名',
-            'params': '809M',
-            'alias_of': 'turbo'
+            'recommended': True
         },
     }
     
@@ -554,16 +515,9 @@ class WhisperService:
         # GPU (CUDA) での処理倍率（音声長に対する処理時間の比率）
         # faster-whisper + RTX系GPUの実測ベース
         gpu_factor = {
-            'tiny': 0.02,
-            'base': 0.03,
-            'small': 0.05,
-            'medium': 0.1,
             'large': 0.15,
-            'large-v2': 0.15,
             'large-v3': 0.15,
-            'large-v3-turbo': 0.06,
-            'turbo': 0.06,
-        }.get(model_name, 0.1)
+        }.get(model_name, 0.15)
 
         if self.device == 'cpu':
             # CPUの場合は5-10倍遅い

@@ -210,12 +210,7 @@ def get_whisper_model_value(ui_elements, default='large-v3'):
     """
     # UI表示名から内部名へのマッピング
     display_to_model = {
-        '\u2b50 turbo（推奨）': 'turbo',
         'large-v3（最高精度）': 'large-v3',
-        'medium（高精度）': 'medium',
-        'small（軽量）': 'small',
-        'base（標準）': 'base',
-        'tiny（最速）': 'tiny',
     }
     
     whisper_model_var = ui_elements.get('whisper_model_var', None)

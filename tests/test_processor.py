@@ -75,7 +75,7 @@ class FileProcessorTests(unittest.TestCase):
         result = processor._perform_whisper_segmented_transcription(
             audio_path="dummy.mp3",
             update_status=lambda message: None,
-            whisper_model='base',
+            whisper_model='large-v3',
             cached_segments=['seg1.mp3', 'seg2.mp3'],
             cleanup_segments=False
         )

@@ -657,20 +657,11 @@ def create_file_section(parent, app, theme, widgets):
     ).pack(anchor='w')
 
     model_display_names = {
-        'turbo': '\u2b50 turbo（推奨）',
         'large-v3': 'large-v3（最高精度）',
-        'medium': 'medium（高精度）',
-        'small': 'small（軽量）',
-        'base': 'base（標準）',
-        'tiny': 'tiny（最速）',
     }
     display_to_model = {v: k for k, v in model_display_names.items()}
 
-    saved_whisper_model = app.config.get("whisper_model", "large-v3")
-    if saved_whisper_model in ['large-v3-turbo']:
-        saved_whisper_model = 'turbo'
-    if saved_whisper_model not in model_display_names:
-        saved_whisper_model = 'large-v3'
+    saved_whisper_model = 'large-v3'
 
     whisper_model_var = tk.StringVar(
         value=model_display_names.get(saved_whisper_model, model_display_names['large-v3'])
@@ -685,12 +676,7 @@ def create_file_section(parent, app, theme, widgets):
     whisper_model_combo.pack(fill=tk.X, pady=(8, 0))
 
     model_details = {
-        'turbo': '809MB | 高速高精度',
         'large-v3': '1.5GB | 最高精度',
-        'medium': '769MB | バランス型',
-        'small': '244MB | 軽量',
-        'base': '74MB | テスト向け',
-        'tiny': '39MB | 最軽量',
     }
 
     whisper_model_info = tk.Label(
