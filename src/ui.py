@@ -24,6 +24,7 @@ from .constants import (
     OLLAMA_DEFAULT_MODEL,
     OLLAMA_MODEL_SUGGESTIONS
 )
+from .logger import logger
 
 
 def _bind_dynamic_wraplength(label, padding=0):
@@ -2426,11 +2427,11 @@ def setup_drag_drop(drop_area, drop_label, app):
             drop_area.drop_target_register(DND_FILES)
             drop_area.dnd_bind('<<Drop>>', lambda e: app.load_files(e.data))
         else:
-            print("警告: ドラッグ&ドロップを有効にするには、ルートウィンドウをTkinterDnD.Tkとして作成する必要があります")
+            logger.warning("ドラッグ&ドロップを有効にするには、ルートウィンドウをTkinterDnD.Tkとして作成する必要があります")
     except ImportError:
-        print("警告: tkinterdnd2が見つかりません。ドラッグ&ドロップ機能は無効です。")
+        logger.warning("tkinterdnd2が見つかりません。ドラッグ&ドロップ機能は無効です。")
     except Exception as e:
-        print(f"ドラッグ&ドロップの設定中にエラーが発生しました: {str(e)}")
+        logger.error(f"ドラッグ&ドロップの設定中にエラーが発生しました: {str(e)}", exc_info=True)
 
 
 def collect_ui_elements(api_section, file_section, recording_section, usage_section, history_section, log_section):

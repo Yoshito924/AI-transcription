@@ -40,6 +40,7 @@ from .utils import (
     format_file_size
 )
 from .exceptions import AudioProcessingError, FileProcessingError
+from .logger import logger
 
 class TranscriptionApp:
     def __init__(self, root):
@@ -1476,7 +1477,7 @@ class TranscriptionApp:
             with open(self.history_meta_path, 'w', encoding='utf-8') as f:
                 json.dump(self.history_metadata, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"処理履歴メタデータの保存エラー: {e}")
+            logger.error(f"処理履歴メタデータの保存エラー: {e}", exc_info=True)
 
     def update_usage_display(self):
         """使用量表示を更新"""
@@ -1496,7 +1497,7 @@ class TranscriptionApp:
             self.ui_elements['usage_cost_jpy'].config(text=f"¥{usage_data['total_cost_jpy']:.0f}")
             
         except Exception as e:
-            print(f"使用量表示の更新エラー: {e}")
+            logger.error(f"使用量表示の更新エラー: {e}", exc_info=True)
     
     def _save_engine_settings(self):
         """エンジン設定を保存"""

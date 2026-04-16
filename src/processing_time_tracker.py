@@ -14,6 +14,7 @@ import datetime
 from typing import Dict, List, Optional
 
 from .utils import format_duration
+from .logger import logger
 
 
 class ProcessingTimeTracker:
@@ -44,7 +45,7 @@ class ProcessingTimeTracker:
             with open(self.data_file, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
         except IOError as e:
-            print(f"処理時間データの保存に失敗しました: {e}")
+            logger.error(f"処理時間データの保存に失敗しました: {e}", exc_info=True)
 
     # ── モデルキー正規化 ──
 
