@@ -25,6 +25,9 @@ from .constants import (
     SAFETY_SETTINGS_TRANSCRIPTION,
     SUMMARY_TITLE_MAX_LENGTH,
     TITLE_GENERATION_MODELS,
+    TITLE_GENERATION_EXCERPT_LENGTH,
+    TITLE_GENERATION_MAX_TOKENS,
+    MIN_TRANSCRIPTION_LENGTH_FOR_SAVE,
     OLLAMA_BASE_URL,
     OLLAMA_DEFAULT_MODEL
 )
@@ -388,9 +391,11 @@ class FileProcessor:
             )
             update_progress(95)
 
-            # 文字起こし結果が100文字以下の場合はファイル保存・リネームをスキップ
-            if len(final_text.strip()) <= 100:
-                update_status("文字起こし結果が100文字以下のためファイル保存・リネームをスキップしました")
+            # 文字起こし結果が極端に短い場合はファイル保存・リネームをスキップ
+            if len(final_text.strip()) <= MIN_TRANSCRIPTION_LENGTH_FOR_SAVE:
+                update_status(
+                    f"文字起こし結果が{MIN_TRANSCRIPTION_LENGTH_FOR_SAVE}文字以下のためファイル保存・リネームをスキップしました"
+                )
                 logger.warning(f"文字起こし結果が短すぎます（{len(final_text.strip())}文字）: スキップ")
                 update_progress(100)
                 return None
@@ -1823,8 +1828,8 @@ class FileProcessor:
 
             logger.info(f"タイトル生成モデル: {model_name}")
 
-            # テキストの先頭2000文字を使用
-            excerpt = text[:2000]
+            # タイトル生成に渡す本文は先頭から抽出
+            excerpt = text[:TITLE_GENERATION_EXCERPT_LENGTH]
 
             prompt = (
                 "この文字起こしの内容を15〜25文字で要約してタイトルを付けてください。\n"
@@ -1840,7 +1845,7 @@ class FileProcessor:
                     model_name,
                     generation_config={
                         'temperature': 0.1,
-                        'max_output_tokens': 100,
+                        'max_output_tokens': TITLE_GENERATION_MAX_TOKENS,
                         'candidate_count': 1
                     }
                 )
@@ -1866,7 +1871,7 @@ class FileProcessor:
                                        base_url=OLLAMA_BASE_URL):
         """Ollamaを使用して要約タイトルを生成する（Geminiが使えない場合のフォールバック）"""
         try:
-            excerpt = text[:2000]
+            excerpt = text[:TITLE_GENERATION_EXCERPT_LENGTH]
             prompt = (
                 "この文字起こしの内容を15〜25文字で要約してタイトルを付けてください。\n"
                 "ファイル名に使うので記号は使わないでください。\n"
@@ -1880,7 +1885,7 @@ class FileProcessor:
                 model=model,
                 base_url=base_url,
                 timeout_sec=30,
-                num_predict=100
+                num_predict=TITLE_GENERATION_MAX_TOKENS
             )
             if not title:
                 logger.warning("Ollamaタイトル生成: 空のレスポンス")

@@ -102,6 +102,12 @@ TITLE_GENERATION_MODELS = [
     "gemini-2.0-flash",
     "gemini-2.5-flash",
 ]
+# タイトル生成に渡す本文の先頭抽出長（文字数）
+TITLE_GENERATION_EXCERPT_LENGTH = 2000
+# タイトル生成の最大出力トークン数
+TITLE_GENERATION_MAX_TOKENS = 100
+# 文字起こし結果の保存/リネームを行う最小文字数（これ以下はスキップ）
+MIN_TRANSCRIPTION_LENGTH_FOR_SAVE = 100
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_DEFAULT_MODEL = "gemma4:e4b"
 OLLAMA_MODEL_SUGGESTIONS = [
