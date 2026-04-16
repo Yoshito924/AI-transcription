@@ -50,6 +50,7 @@ prompts.json
 # 一時ファイル
 temp/
 tmp/
+tmp*/
 *.tmp
 
 # ログファイル
