@@ -654,21 +654,24 @@ def create_file_section(parent, app, theme, widgets):
 
     saved_whisper_model = 'large-v3'
 
+    # 選択肢が large-v3 のみのため、ドロップダウンは廃止して固定表示にする
     whisper_model_var = tk.StringVar(
         value=model_display_names.get(saved_whisper_model, model_display_names['large-v3'])
     )
-    whisper_model_combo = ttk.Combobox(
-        whisper_local_panel,
-        textvariable=whisper_model_var,
-        values=list(model_display_names.values()),
-        state='readonly',
-        style='Modern.TCombobox'
-    )
-    whisper_model_combo.pack(fill=tk.X, pady=(6, 0))
+    whisper_model_combo = None  # 後方互換: 旧コードからの参照用に残す
 
     model_details = {
         'large-v3': '1.5GB | 最高精度',
     }
+
+    whisper_model_value = tk.Label(
+        whisper_local_panel,
+        text=model_display_names.get(saved_whisper_model, ''),
+        font=theme.fonts['body_bold'],
+        fg=theme.colors['text_primary'],
+        bg=theme.colors['surface_variant']
+    )
+    whisper_model_value.pack(anchor='w', pady=(6, 0))
 
     whisper_model_info = tk.Label(
         whisper_local_panel,
@@ -677,7 +680,7 @@ def create_file_section(parent, app, theme, widgets):
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
     )
-    whisper_model_info.pack(anchor='w', pady=(4, 0))
+    whisper_model_info.pack(anchor='w', pady=(2, 0))
 
     # === Whisper API 専用設定 ===
     whisper_api_panel = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
@@ -803,8 +806,11 @@ def create_file_section(parent, app, theme, widgets):
     )
     title_engine_combo.pack(fill=tk.X, pady=(6, 0))
 
+    # === Ollama モデル選択（タイトル生成が ollama/auto の時のみ表示） ===
+    ollama_panel = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
+
     ollama_model_label = tk.Label(
-        left_inner,
+        ollama_panel,
         text="Ollama モデル",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
@@ -815,7 +821,7 @@ def create_file_section(parent, app, theme, widgets):
     saved_ollama_model = app.config.get("ollama_model", OLLAMA_DEFAULT_MODEL) or OLLAMA_DEFAULT_MODEL
     ollama_model_var = tk.StringVar(value=saved_ollama_model)
     ollama_model_combo = ttk.Combobox(
-        left_inner,
+        ollama_panel,
         textvariable=ollama_model_var,
         values=OLLAMA_MODEL_SUGGESTIONS,
         state='normal',
@@ -831,13 +837,14 @@ def create_file_section(parent, app, theme, widgets):
         'gemma3:4b': 'Gemma 3 4B | 旧構成互換',
     }
     ollama_model_info = tk.Label(
-        left_inner,
+        ollama_panel,
         text="",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
     )
     ollama_model_info.pack(anchor='w', pady=(4, 0))
+    ollama_panel.pack(fill=tk.X)  # 初期表示。on_title_engine_change で必要に応じて畳む
 
     right_inner = tk.Frame(right_panel, bg=theme.colors['surface_variant'])
     right_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
@@ -1161,11 +1168,7 @@ def create_file_section(parent, app, theme, widgets):
     queue_tree.configure(yscrollcommand=queue_scrollbar.set)
     queue_tree.bind('<Delete>', lambda _event: app.remove_from_queue())
 
-    # 入力導線を先に見せるため、詳細設定はファイル追加の後ろへ並べ直す
-    config_strip.pack_forget()
-    summary_grid.pack_forget()
-    config_strip.pack(fill=tk.X, padx=pad, pady=(0, 8))
-    summary_grid.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    # 最終並びは status_card / transcribe_btn 生成後にまとめて確定する
 
     status_card = tk.Frame(
         frame,
@@ -1248,6 +1251,14 @@ def create_file_section(parent, app, theme, widgets):
         command=lambda: app.start_process("transcription")
     )
     transcribe_btn.pack(fill=tk.X, padx=pad, pady=(0, pad))
+
+    # 主要動線を集約: drop → queue → 現在の設定サマリー → 状態 → 開始ボタン → 詳細設定
+    for w in (config_strip, summary_grid, status_card, transcribe_btn):
+        w.pack_forget()
+    summary_grid.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    status_card.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    transcribe_btn.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    config_strip.pack(fill=tk.X, padx=pad, pady=(0, pad))
 
     def update_save_summary():
         destinations = []
@@ -1399,6 +1410,10 @@ def create_file_section(parent, app, theme, widgets):
     def on_title_engine_change(event=None):
         display_name = title_engine_var.get()
         mode = title_engine_display_to_mode.get(display_name, 'auto')
+        # Ollama を使う可能性がある時だけ Ollama モデル欄を見せる
+        ollama_panel.pack_forget()
+        if mode in ('auto', 'ollama'):
+            ollama_panel.pack(fill=tk.X)
         app.config.set("title_generation_engine", mode)
         app.config.save()
 
@@ -1413,7 +1428,8 @@ def create_file_section(parent, app, theme, widgets):
         app.config.save()
 
     engine_var.trace('w', lambda *args: on_engine_change())
-    whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
+    if whisper_model_combo is not None:
+        whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
     whisper_api_model_combo.bind('<<ComboboxSelected>>', on_whisper_api_model_change)
     gemini_recovery_combo.bind('<<ComboboxSelected>>', on_gemini_recovery_change)
     title_engine_combo.bind('<<ComboboxSelected>>', on_title_engine_change)
@@ -1601,7 +1617,6 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     controls.pack(fill=tk.X, pady=(8, 0))
     controls.grid_columnconfigure(0, weight=1)
     controls.grid_columnconfigure(1, weight=1)
-    controls.grid_columnconfigure(2, weight=1)
 
     record_button = widgets.create_icon_button(
         controls, "録音開始", ICONS['microphone'], 'Primary',
@@ -1617,40 +1632,19 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     stop_record_button.idle_text = f"{ICONS['stop']} 停止して保存"
     stop_record_button.active_text = f"{ICONS['stop']} 保存して停止"
 
-    queue_recordings_button = widgets.create_icon_button(
-        controls, "録音をキュー追加", ICONS['plus'], 'Secondary',
-        command=app.add_recordings_to_queue
-    )
-
-    action_layout_state = {'wide': None}
-
-    def _relayout_action_controls(event=None):
-        width = controls.winfo_width()
-        want_wide = width >= 660
-        if action_layout_state['wide'] == want_wide:
-            return
-        action_layout_state['wide'] = want_wide
-
-        for button in (record_button, stop_record_button, queue_recordings_button):
-            button.grid_forget()
-
-        if want_wide:
-            record_button.grid(row=0, column=0, sticky='ew', padx=(0, 6))
-            stop_record_button.grid(row=0, column=1, sticky='ew', padx=6)
-            queue_recordings_button.grid(row=0, column=2, sticky='ew', padx=(6, 0))
-        else:
-            record_button.grid(row=0, column=0, sticky='ew', padx=(0, 4))
-            stop_record_button.grid(row=0, column=1, sticky='ew', padx=(4, 0))
-            queue_recordings_button.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(8, 0))
-
-    controls.bind('<Configure>', _relayout_action_controls)
-    controls.after_idle(_relayout_action_controls)
+    record_button.grid(row=0, column=0, sticky='ew', padx=(0, 6))
+    stop_record_button.grid(row=0, column=1, sticky='ew', padx=(6, 0))
 
     folder_actions = tk.Frame(action_inner, bg=theme.colors['hero_surface'])
     folder_actions.pack(fill=tk.X, pady=(8, 0))
     folder_actions.grid_columnconfigure(0, weight=1)
     folder_actions.grid_columnconfigure(1, weight=1)
+    folder_actions.grid_columnconfigure(2, weight=1)
 
+    queue_recordings_button = widgets.create_icon_button(
+        folder_actions, "キュー追加", ICONS['plus'], 'Secondary',
+        command=app.add_recordings_to_queue
+    )
     choose_recording_folder_button = widgets.create_icon_button(
         folder_actions, "保存先変更", ICONS['folder'], 'Secondary',
         command=app.choose_recording_folder
@@ -1669,15 +1663,17 @@ def _create_recording_card(parent, app, theme, widgets, pad):
             return
         folder_action_layout_state['wide'] = want_wide
 
-        choose_recording_folder_button.grid_forget()
-        open_recording_folder_button.grid_forget()
+        for button in (queue_recordings_button, choose_recording_folder_button, open_recording_folder_button):
+            button.grid_forget()
 
         if want_wide:
-            choose_recording_folder_button.grid(row=0, column=0, sticky='ew', padx=(0, 6))
-            open_recording_folder_button.grid(row=0, column=1, sticky='ew', padx=(6, 0))
+            queue_recordings_button.grid(row=0, column=0, sticky='ew', padx=(0, 6))
+            choose_recording_folder_button.grid(row=0, column=1, sticky='ew', padx=6)
+            open_recording_folder_button.grid(row=0, column=2, sticky='ew', padx=(6, 0))
         else:
-            choose_recording_folder_button.grid(row=0, column=0, columnspan=2, sticky='ew')
-            open_recording_folder_button.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(8, 0))
+            queue_recordings_button.grid(row=0, column=0, columnspan=3, sticky='ew')
+            choose_recording_folder_button.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(6, 0))
+            open_recording_folder_button.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(6, 0))
 
     folder_actions.bind('<Configure>', _relayout_folder_actions)
     folder_actions.after_idle(_relayout_folder_actions)
