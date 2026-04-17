@@ -563,20 +563,7 @@ def create_file_section(parent, app, theme, widgets):
         theme.colors['warning']
     ).grid(row=0, column=2, sticky='ew', padx=(6, 0))
 
-    quick_action_row = tk.Frame(frame, bg=theme.colors['surface'])
-    quick_action_row.pack(fill=tk.X, padx=pad, pady=(0, 10))
-
-    quick_file_btn = widgets.create_icon_button(
-        quick_action_row, "ファイルを追加", ICONS['folder'], 'Primary',
-        command=app.browse_file
-    )
-    quick_file_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-    quick_run_btn = widgets.create_icon_button(
-        quick_action_row, "文字起こし開始", ICONS['play'], 'Secondary',
-        command=lambda: app.start_process("transcription")
-    )
-    quick_run_btn.pack(side=tk.LEFT)
+    # （重複していたクイック操作ボタンは削除。ドロップ領域と最下部の実行ボタンに集約）
 
     config_strip = tk.Frame(frame, bg=theme.colors['surface'])
     config_strip.pack(fill=tk.X, padx=pad, pady=(0, 8))
@@ -649,13 +636,16 @@ def create_file_section(parent, app, theme, widgets):
             style='Modern.TRadiobutton'
         ).pack(side=tk.LEFT, padx=(0, 12))
 
+    # === Whisper (ローカル) 専用設定 ===
+    whisper_local_panel = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
+
     tk.Label(
-        left_inner,
+        whisper_local_panel,
         text="Whisper モデル",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
-    ).pack(anchor='w')
+    ).pack(anchor='w', pady=(10, 0))
 
     model_display_names = {
         'large-v3': 'large-v3（最高精度）',
@@ -668,30 +658,32 @@ def create_file_section(parent, app, theme, widgets):
         value=model_display_names.get(saved_whisper_model, model_display_names['large-v3'])
     )
     whisper_model_combo = ttk.Combobox(
-        left_inner,
+        whisper_local_panel,
         textvariable=whisper_model_var,
         values=list(model_display_names.values()),
         state='readonly',
         style='Modern.TCombobox'
     )
-    whisper_model_combo.pack(fill=tk.X, pady=(8, 0))
+    whisper_model_combo.pack(fill=tk.X, pady=(6, 0))
 
     model_details = {
         'large-v3': '1.5GB | 最高精度',
     }
 
     whisper_model_info = tk.Label(
-        left_inner,
+        whisper_local_panel,
         text=model_details.get(saved_whisper_model, ''),
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
     )
-    whisper_model_info.pack(anchor='w', pady=(6, 0))
+    whisper_model_info.pack(anchor='w', pady=(4, 0))
 
-    # Whisper API モデル選択
+    # === Whisper API 専用設定 ===
+    whisper_api_panel = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
+
     whisper_api_model_label = tk.Label(
-        left_inner,
+        whisper_api_panel,
         text="Whisper API モデル",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
@@ -712,7 +704,7 @@ def create_file_section(parent, app, theme, widgets):
         value=whisper_api_display_names.get(saved_whisper_api_model, '')
     )
     whisper_api_model_combo = ttk.Combobox(
-        left_inner,
+        whisper_api_panel,
         textvariable=whisper_api_model_var,
         values=list(whisper_api_display_names.values()),
         state='readonly',
@@ -724,7 +716,7 @@ def create_file_section(parent, app, theme, widgets):
         k: f"${v}/分" for k, v in WhisperApiService.MODEL_PRICING.items()
     }
     whisper_api_model_info = tk.Label(
-        left_inner,
+        whisper_api_panel,
         text=whisper_api_pricing_text.get(saved_whisper_api_model, ''),
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
@@ -732,8 +724,11 @@ def create_file_section(parent, app, theme, widgets):
     )
     whisper_api_model_info.pack(anchor='w', pady=(4, 0))
 
+    # === Gemini 専用設定（ブロック時の動作） ===
+    gemini_recovery_panel = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
+
     gemini_recovery_label = tk.Label(
-        left_inner,
+        gemini_recovery_panel,
         text="Gemini ブロック時の動作",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
@@ -760,7 +755,7 @@ def create_file_section(parent, app, theme, widgets):
         value=gemini_recovery_display_names.get(saved_gemini_recovery, '')
     )
     gemini_recovery_combo = ttk.Combobox(
-        left_inner,
+        gemini_recovery_panel,
         textvariable=gemini_recovery_var,
         values=list(gemini_recovery_display_names.values()),
         state='readonly',
@@ -769,7 +764,7 @@ def create_file_section(parent, app, theme, widgets):
     gemini_recovery_combo.pack(fill=tk.X, pady=(6, 0))
 
     gemini_recovery_info = tk.Label(
-        left_inner,
+        gemini_recovery_panel,
         text=gemini_recovery_details.get(saved_gemini_recovery, ''),
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
@@ -1346,21 +1341,15 @@ def create_file_section(parent, app, theme, widgets):
         is_whisper = engine_value == "whisper"
         is_whisper_api = engine_value == "whisper-api"
 
-        whisper_model_combo.config(state='readonly' if is_whisper else 'disabled')
-        whisper_model_info.config(
-            fg=theme.colors['text_secondary'] if is_whisper else theme.colors['text_disabled']
-        )
-
-        # Whisper APIモデル選択の有効/無効切り替え
-        whisper_api_model_combo.config(state='readonly' if is_whisper_api else 'disabled')
-        api_label_color = theme.colors['text_secondary'] if is_whisper_api else theme.colors['text_disabled']
-        whisper_api_model_label.config(fg=api_label_color)
-        whisper_api_model_info.config(fg=api_label_color)
-
-        gemini_recovery_combo.config(state='readonly' if is_gemini else 'disabled')
-        recovery_label_color = theme.colors['text_secondary'] if is_gemini else theme.colors['text_disabled']
-        gemini_recovery_label.config(fg=recovery_label_color)
-        gemini_recovery_info.config(fg=recovery_label_color)
+        # 関係ないエンジンの設定パネルは非表示にして画面を軽くする
+        for panel in (whisper_local_panel, whisper_api_panel, gemini_recovery_panel):
+            panel.pack_forget()
+        if is_whisper:
+            whisper_local_panel.pack(fill=tk.X, before=title_engine_label)
+        elif is_whisper_api:
+            whisper_api_panel.pack(fill=tk.X, before=title_engine_label)
+        elif is_gemini:
+            gemini_recovery_panel.pack(fill=tk.X, before=title_engine_label)
 
         engine_map = {
             'gemini': 'Gemini',
