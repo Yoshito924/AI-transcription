@@ -182,7 +182,7 @@ def truncate_status_message(message, max_length):
     return message
 
 
-def get_engine_value(ui_elements, default='gemini'):
+def get_engine_value(ui_elements, default='whisper'):
     """UI要素からエンジン値を取得する
     
     Args:

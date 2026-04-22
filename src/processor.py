@@ -276,16 +276,16 @@ class FileProcessor:
         }
 
     def process_file(self, input_file, process_type, api_key, prompts, status_callback=None,
-                    preferred_model=None, engine='gemini', whisper_model='large-v3',
+                    preferred_model=None, engine='whisper', whisper_model='large-v3',
                     save_to_output_dir=True, save_to_source_dir=False,
                     progress_value_callback=None, gemini_api_key=None,
                     time_tracker=None, whisper_api_model=None,
-                    gemini_safety_filter_recovery='segment',
+                    gemini_safety_filter_recovery='segment-whisper',
                     trim_long_silence=DEFAULT_TRIM_LONG_SILENCE,
                     silence_trim_settings=None,
-                    title_generation_engine='auto',
+                    title_generation_engine='ollama',
                     ollama_model=OLLAMA_DEFAULT_MODEL,
-                    additional_processing_engine='gemini',
+                    additional_processing_engine='ollama',
                     rename_source_file=False,
                     prepared_audio=None):
         """ファイルを処理し、結果を返す"""
@@ -361,7 +361,8 @@ class FileProcessor:
                         cleanup_segments=not from_cache
                     )
             except TranscriptionError as e:
-                if engine == 'gemini' and getattr(e, 'error_code', None) == "SAFETY_FILTER":
+                recoverable_codes = {"SAFETY_FILTER", "COPYRIGHT_CONTENT"}
+                if engine == 'gemini' and getattr(e, 'error_code', None) in recoverable_codes:
                     transcription = self._recover_from_gemini_safety_filter(
                         e,
                         audio_path,
@@ -411,12 +412,11 @@ class FileProcessor:
                     update_status("要約タイトルを生成中（Ollama）...")
                     summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
                 else:  # auto
-                    if gemini_api_key:
-                        update_status("要約タイトルを生成中...")
+                    update_status("要約タイトルを生成中（Ollama）...")
+                    summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
+                    if not summary_title and gemini_api_key:
+                        update_status("要約タイトルを生成中（Gemini）...")
                         summary_title = self.generate_summary_title(final_text, gemini_api_key)
-                    if not summary_title:
-                        update_status("要約タイトルを生成中（Ollama）...")
-                        summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
                 if summary_title:
                     update_status(f"タイトル生成完了: {summary_title}")
 
@@ -454,15 +454,16 @@ class FileProcessor:
 
     def _fallback_to_whisper_on_safety(self, exception, audio_path, update_status, whisper_model='large-v3',
                                        cached_segments=None, progress_callback=None, cleanup_segments=True):
-        """Geminiの安全性ブロック時にWhisperへ自動フォールバックする"""
+        """Geminiのブロック（安全性/著作権）時にWhisperへ自動フォールバックする"""
         root_message = getattr(exception, 'user_message', str(exception))
+        reason_label = self._block_reason_label(exception)
         fallback_warning = (
-            "注意: Gemini が安全性フィルターでブロックされたため、Whisper に自動切り替えしました。\n"
+            f"注意: Gemini が{reason_label}でブロックされたため、Whisper に自動切り替えしました。\n"
             f"- ブロック内容: {root_message}\n"
             f"- フォールバックモデル: {whisper_model}"
         )
         logger.warning(
-            "Gemini安全性ブロックのためWhisperへ自動フォールバック: "
+            f"Geminiブロック({reason_label})のためWhisperへ自動フォールバック: "
             f"model={whisper_model}, reason={root_message}"
         )
         update_status(fallback_warning)
@@ -497,18 +498,28 @@ class FileProcessor:
             return max(60, int(audio_duration_sec / 3))
         return SEGMENT_DURATION_SEC
 
+    def _block_reason_label(self, exception):
+        """TranscriptionErrorのerror_codeから日本語の理由ラベルを返す"""
+        code = getattr(exception, 'error_code', None)
+        if code == 'COPYRIGHT_CONTENT':
+            return '著作権保護コンテンツ'
+        if code == 'SAFETY_FILTER':
+            return '安全性フィルター'
+        return 'ブロック判定'
+
     def _recover_from_gemini_safety_filter(self, exception, audio_path, api_key, update_status,
                                            preferred_model=None, whisper_model='large-v3',
                                            cached_segments=None, progress_callback=None,
                                            cleanup_segments=True, recovery_mode='segment'):
-        """Gemini安全性ブロック時に分割再試行し、だめならWhisperへフォールバックする"""
+        """Geminiのブロック（安全性/著作権）時に分割再試行し、だめならWhisperへフォールバックする"""
         root_message = getattr(exception, 'user_message', str(exception))
+        reason_label = self._block_reason_label(exception)
         normalized_recovery_mode = recovery_mode if recovery_mode in ('segment', 'segment-whisper', 'whisper') else 'segment'
         recovery_notice = (
-            "注意: Gemini が安全性フィルターでブロックされました。代替経路で処理を継続します。\n"
+            f"注意: Gemini が{reason_label}でブロックされました。代替経路で処理を継続します。\n"
             f"- ブロック内容: {root_message}"
         )
-        logger.warning(f"Gemini安全性ブロックを検出: {root_message}")
+        logger.warning(f"Geminiブロックを検出 ({reason_label}): {root_message}")
         update_status(recovery_notice)
 
         if normalized_recovery_mode == 'whisper':
@@ -544,7 +555,7 @@ class FileProcessor:
         if retry_segments and len(retry_segments) > 1:
             whisper_note = "（ブロック区間はWhisperで補完）" if normalized_recovery_mode == 'segment-whisper' else ""
             segmented_warning = (
-                "注意: Gemini が単一ファイルでは安全性フィルターにかかったため、"
+                f"注意: Gemini が単一ファイルでは{reason_label}にかかったため、"
                 f"セグメント単位で再試行しました。{whisper_note}"
             )
             update_status(f"{segmented_warning}\n- セグメント数: {len(retry_segments)}")
@@ -1199,9 +1210,10 @@ class FileProcessor:
 
                 # エラーチェック: エラーテキストは結果に含めない
                 if error_info is not None:
-                    # 安全性フィルターブロック時にWhisperフォールバック
+                    # 安全性/著作権ブロック時にWhisperフォールバック
+                    blocked_categories = {'安全性フィルター', '著作権保護コンテンツ'}
                     if (whisper_fallback_for_blocked
-                            and error_info['category'] == '安全性フィルター'):
+                            and error_info['category'] in blocked_categories):
                         whisper_text = self._whisper_fallback_single_segment(
                             segment_file, i+1, total, update_status, whisper_model
                         )
@@ -1679,7 +1691,7 @@ class FileProcessor:
         return response_text
 
     def _perform_additional_processing(self, transcription, process_type, prompts, api_key, update_status,
-                                       preferred_model=None, additional_processing_engine='gemini',
+                                       preferred_model=None, additional_processing_engine='ollama',
                                        ollama_model=OLLAMA_DEFAULT_MODEL):
         """追加処理（要約、議事録作成など）"""
         if process_type == "transcription":
@@ -1869,7 +1881,7 @@ class FileProcessor:
 
     def generate_summary_title_ollama(self, text, model=OLLAMA_DEFAULT_MODEL,
                                        base_url=OLLAMA_BASE_URL):
-        """Ollamaを使用して要約タイトルを生成する（Geminiが使えない場合のフォールバック）"""
+        """Ollamaを使用して要約タイトルを生成する"""
         try:
             excerpt = text[:TITLE_GENERATION_EXCERPT_LENGTH]
             prompt = (
@@ -2053,7 +2065,7 @@ class FileProcessor:
         return result_path
     
     def process_transcription_file(self, transcription_file, prompt_key, api_key, prompts, status_callback=None,
-                                   additional_processing_engine='gemini',
+                                   additional_processing_engine='ollama',
                                    ollama_model=OLLAMA_DEFAULT_MODEL):
         """文字起こしファイルの追加処理を実行"""
         start_time = datetime.datetime.now()

@@ -38,10 +38,10 @@ class Config:
             "last_open_tab": "file",
             "api_key": "",  # Gemini API用
             "openai_api_key": "",  # OpenAI API用（Whisper API等）
-            "transcription_engine": "gemini",  # "gemini" または "whisper" または "whisper-api"
-            "gemini_safety_filter_recovery": "segment",  # "segment" または "whisper"
-            "additional_processing_engine": "gemini",  # "gemini" または "ollama"
-            "title_generation_engine": "auto",  # "auto", "ollama", "gemini", "disabled"
+            "transcription_engine": "whisper",  # "gemini" または "whisper" または "whisper-api"
+            "gemini_safety_filter_recovery": "segment-whisper",  # "segment-whisper", "segment", "whisper"
+            "additional_processing_engine": "ollama",  # "gemini" または "ollama"
+            "title_generation_engine": "ollama",  # "ollama", "auto", "gemini", "disabled"
             "ollama_model": OLLAMA_DEFAULT_MODEL,
             "whisper_model": "large-v3",
             "trim_long_silence": DEFAULT_TRIM_LONG_SILENCE,

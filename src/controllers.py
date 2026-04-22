@@ -418,10 +418,18 @@ class TranscriptionController:
 
             title_engine_var = self.ui_elements.get('title_engine_var')
             title_display_to_mode = self.ui_elements.get('title_engine_display_to_mode', {})
-            title_generation_engine = 'auto'
+            title_generation_engine = 'ollama'
             if title_engine_var and title_display_to_mode:
-                title_generation_engine = title_display_to_mode.get(title_engine_var.get(), 'auto')
-            additional_processing_engine = self.config.get("additional_processing_engine", "gemini")
+                title_generation_engine = title_display_to_mode.get(title_engine_var.get(), 'ollama')
+
+            # 要約・議事録 LLM（UI のラジオボタンから。無ければ config フォールバック）
+            additional_engine_var = self.ui_elements.get('additional_engine_var')
+            if additional_engine_var:
+                additional_processing_engine = additional_engine_var.get() or 'ollama'
+            else:
+                additional_processing_engine = self.config.get("additional_processing_engine", "ollama")
+            if additional_processing_engine not in ('gemini', 'ollama'):
+                additional_processing_engine = 'ollama'
 
             rename_source_var = self.ui_elements.get('rename_source_var')
             rename_source_file = rename_source_var.get() if rename_source_var else False

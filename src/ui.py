@@ -333,19 +333,17 @@ def create_api_section(parent, app, theme, widgets):
     header_frame = tk.Frame(card, bg=theme.colors['surface'])
     header_frame.pack(fill=tk.X, padx=CARD_PADDING, pady=(CARD_PADDING, 8))
 
-    header = widgets.create_section_header(header_frame, "API 設定")
+    header = widgets.create_section_header(header_frame, "API 設定（任意）")
     header.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     api_status = widgets.create_pill_label(
-        header_frame, "\u25cf 未接続", tone='error',
-        bg=theme.colors['error_soft'],
-        fg=theme.colors['error']
+        header_frame, "\u25cf ローカルOK", tone='info'
     )
     api_status.pack(side=tk.RIGHT)
 
     api_desc = tk.Label(
         card,
-        text="利用するエンジンに応じて認証情報を登録します。Gemini は要約やタイトル生成、Whisper API は OpenAI 側の音声認識に使います。ローカル要約やタイトル生成は Ollama でも実行できます。",
+        text="ローカル構成だけなら API キーは不要です。基本は Whisper で文字起こしし、要約やタイトルは Ollama でローカル処理します。Gemini や Whisper API を使うときだけ登録してください。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface'],
@@ -377,7 +375,7 @@ def create_api_section(parent, app, theme, widgets):
 
     tk.Label(
         gemini_inner,
-        text="Gemini エンジンとタイトル生成で使用",
+        text="Gemini のクラウド文字起こしやクラウド要約・タイトル生成で使用",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
@@ -413,7 +411,7 @@ def create_api_section(parent, app, theme, widgets):
 
     tk.Label(
         openai_inner,
-        text="Whisper API モードで使用",
+        text="Whisper API（クラウド音声認識）でのみ使用",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
@@ -456,7 +454,7 @@ def create_api_section(parent, app, theme, widgets):
 
     tk.Label(
         model_inner,
-        text="現在の接続先",
+        text="クラウド接続先",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
@@ -464,7 +462,7 @@ def create_api_section(parent, app, theme, widgets):
 
     model_name = tk.Label(
         model_inner,
-        text="未接続",
+        text="ローカル運用 / 未確認",
         font=theme.fonts['body_bold'],
         fg=theme.colors['primary'],
         bg=theme.colors['surface_variant']
@@ -613,22 +611,36 @@ def create_file_section(parent, app, theme, widgets):
 
     tk.Label(
         left_inner,
-        text="エンジン",
+        text="文字起こしエンジン",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
     ).pack(anchor='w')
 
-    saved_engine = app.config.get("transcription_engine", "gemini")
+    engine_desc = tk.Label(
+        left_inner,
+        text="基本は Whisper のローカル文字起こしです。API キー不要で、そのまま使えます。Gemini / Whisper API はクラウド文字起こしが必要なときだけ選びます。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant'],
+        justify='left',
+        anchor='w'
+    )
+    engine_desc.pack(anchor='w', fill=tk.X, pady=(2, 4))
+    _bind_dynamic_wraplength(engine_desc, 24)
+
+    saved_engine = app.config.get("transcription_engine", "whisper")
+    if saved_engine not in ("gemini", "whisper", "whisper-api"):
+        saved_engine = "whisper"
     engine_var = tk.StringVar(value=saved_engine)
 
     engine_row = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
     engine_row.pack(fill=tk.X, pady=(6, 8))
 
     for text, value in [
-        ("Gemini", "gemini"),
-        ("Whisper (ローカル)", "whisper"),
-        ("Whisper API", "whisper-api")
+        ("Whisper（ローカル）", "whisper"),
+        ("Gemini（クラウド）", "gemini"),
+        ("Whisper API（クラウド）", "whisper-api"),
     ]:
         ttk.Radiobutton(
             engine_row, text=text,
@@ -750,9 +762,9 @@ def create_file_section(parent, app, theme, widgets):
         'segment': 'Geminiで細かく再試行し、弾かれた区間だけ除外して継続',
         'whisper': 'Geminiで弾かれたらすぐローカルWhisperへ切替',
     }
-    saved_gemini_recovery = app.config.get("gemini_safety_filter_recovery", "segment")
+    saved_gemini_recovery = app.config.get("gemini_safety_filter_recovery", "segment-whisper")
     if saved_gemini_recovery not in gemini_recovery_display_names:
-        saved_gemini_recovery = 'segment'
+        saved_gemini_recovery = 'segment-whisper'
 
     gemini_recovery_var = tk.StringVar(
         value=gemini_recovery_display_names.get(saved_gemini_recovery, '')
@@ -775,27 +787,80 @@ def create_file_section(parent, app, theme, widgets):
     )
     gemini_recovery_info.pack(anchor='w', pady=(4, 0))
 
+    # ===== テキスト処理 LLM（要約・議事録・タイトル生成） =====
+    # 要約・議事録エンジン（additional_processing_engine）
+    additional_engine_label = tk.Label(
+        left_inner,
+        text="要約・議事録 LLM",
+        font=theme.fonts['caption_bold'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant']
+    )
+    additional_engine_label.pack(anchor='w', pady=(14, 0))
+
+    additional_engine_desc = tk.Label(
+        left_inner,
+        text="要約や議事録も基本は Ollama のローカル LLM を使います。Gemini API はクラウド処理が必要なときだけ選びます。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant'],
+        justify='left',
+        anchor='w'
+    )
+    additional_engine_desc.pack(anchor='w', fill=tk.X, pady=(2, 4))
+    _bind_dynamic_wraplength(additional_engine_desc, 24)
+
+    saved_additional_engine = app.config.get("additional_processing_engine", "ollama")
+    if saved_additional_engine not in ("gemini", "ollama"):
+        saved_additional_engine = "ollama"
+    additional_engine_var = tk.StringVar(value=saved_additional_engine)
+
+    additional_engine_row = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
+    additional_engine_row.pack(fill=tk.X, pady=(2, 8))
+
+    for text, value in [
+        ("Ollama（ローカルLLM）", "ollama"),
+        ("Gemini API（クラウド）", "gemini"),
+    ]:
+        ttk.Radiobutton(
+            additional_engine_row, text=text,
+            variable=additional_engine_var, value=value,
+            style='Modern.TRadiobutton'
+        ).pack(side=tk.LEFT, padx=(0, 12))
+
     # タイトル生成エンジン選択
     title_engine_label = tk.Label(
         left_inner,
-        text="タイトル生成エンジン",
+        text="タイトル生成 LLM",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
     )
     title_engine_label.pack(anchor='w', pady=(10, 0))
 
+    title_engine_desc = tk.Label(
+        left_inner,
+        text="タイトル生成もローカル優先です。通常は Ollama、必要なら Gemini へ切り替えます。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant'],
+        justify='left',
+        anchor='w'
+    )
+    title_engine_desc.pack(anchor='w', fill=tk.X, pady=(2, 4))
+    _bind_dynamic_wraplength(title_engine_desc, 24)
+
     title_engine_display_names = {
-        'auto': '自動（Gemini → Ollama）',
-        'ollama': 'Ollama（ローカル）',
-        'gemini': 'Gemini API',
-        'disabled': '無効',
+        'ollama': 'Ollama（ローカルLLM）',
+        'auto': '自動（Ollama → Gemini）',
+        'gemini': 'Gemini API（クラウド）',
+        'disabled': '無効（タイトル生成しない）',
     }
     title_engine_display_to_mode = {v: k for k, v in title_engine_display_names.items()}
 
-    saved_title_engine = app.config.get("title_generation_engine", "auto")
+    saved_title_engine = app.config.get("title_generation_engine", "ollama")
     title_engine_var = tk.StringVar(
-        value=title_engine_display_names.get(saved_title_engine, title_engine_display_names['auto'])
+        value=title_engine_display_names.get(saved_title_engine, title_engine_display_names['ollama'])
     )
     title_engine_combo = ttk.Combobox(
         left_inner,
@@ -1053,10 +1118,10 @@ def create_file_section(parent, app, theme, widgets):
     summary_grid.grid_columnconfigure(1, weight=1)
     summary_grid.grid_columnconfigure(2, weight=1)
 
-    engine_tile = widgets.create_metric_tile(summary_grid, "エンジン", "Gemini", tone='primary')
+    engine_tile = widgets.create_metric_tile(summary_grid, "エンジン", "Whisper", tone='primary')
     engine_tile.grid(row=0, column=0, sticky='ew', padx=(0, 6))
 
-    model_tile = widgets.create_metric_tile(summary_grid, "モデル", "自動選択", tone='info')
+    model_tile = widgets.create_metric_tile(summary_grid, "モデル", "large-v3", tone='info')
     model_tile.grid(row=0, column=1, sticky='ew', padx=6)
 
     save_tile = widgets.create_metric_tile(summary_grid, "保存先", "output", tone='warning')
@@ -1353,21 +1418,22 @@ def create_file_section(parent, app, theme, widgets):
         is_whisper_api = engine_value == "whisper-api"
 
         # 関係ないエンジンの設定パネルは非表示にして画面を軽くする
+        # 文字起こしエンジン関連の補助パネルは、要約・議事録 LLM セクションの直前に配置する
         for panel in (whisper_local_panel, whisper_api_panel, gemini_recovery_panel):
             panel.pack_forget()
         if is_whisper:
-            whisper_local_panel.pack(fill=tk.X, before=title_engine_label)
+            whisper_local_panel.pack(fill=tk.X, before=additional_engine_label)
         elif is_whisper_api:
-            whisper_api_panel.pack(fill=tk.X, before=title_engine_label)
+            whisper_api_panel.pack(fill=tk.X, before=additional_engine_label)
         elif is_gemini:
-            gemini_recovery_panel.pack(fill=tk.X, before=title_engine_label)
+            gemini_recovery_panel.pack(fill=tk.X, before=additional_engine_label)
 
         engine_map = {
             'gemini': 'Gemini',
             'whisper': 'Whisper',
             'whisper-api': 'Whisper API'
         }
-        engine_tile.value_label.config(text=engine_map.get(engine_value, 'Gemini'))
+        engine_tile.value_label.config(text=engine_map.get(engine_value, 'Whisper'))
 
         if engine_value == 'gemini':
             model_tile.value_label.config(text="自動選択")
@@ -1377,14 +1443,14 @@ def create_file_section(parent, app, theme, widgets):
             model_tile.value_label.config(text=api_model)
         else:
             display_name = whisper_model_var.get()
-            model_tile.value_label.config(text=display_to_model.get(display_name, 'turbo'))
+            model_tile.value_label.config(text=display_to_model.get(display_name, 'large-v3'))
 
         app.config.set("transcription_engine", engine_value)
         app.config.save()
 
     def on_model_change(event=None):
         display_name = whisper_model_var.get()
-        model_name = display_to_model.get(display_name, 'turbo')
+        model_name = display_to_model.get(display_name, 'large-v3')
         whisper_model_info.config(text=model_details.get(model_name, ''))
         if engine_var.get() == 'whisper':
             model_tile.value_label.config(text=model_name)
@@ -1407,15 +1473,33 @@ def create_file_section(parent, app, theme, widgets):
         app.config.set("gemini_safety_filter_recovery", recovery_mode)
         app.config.save()
 
+    def _update_ollama_panel_visibility():
+        """タイトル生成 or 要約・議事録 のいずれかで Ollama を使う時だけ表示する"""
+        title_display = title_engine_var.get()
+        title_mode = title_engine_display_to_mode.get(title_display, 'ollama')
+        uses_ollama = (
+            title_mode in ('auto', 'ollama')
+            or additional_engine_var.get() == 'ollama'
+        )
+        ollama_panel.pack_forget()
+        if uses_ollama:
+            ollama_panel.pack(fill=tk.X)
+
     def on_title_engine_change(event=None):
         display_name = title_engine_var.get()
-        mode = title_engine_display_to_mode.get(display_name, 'auto')
-        # Ollama を使う可能性がある時だけ Ollama モデル欄を見せる
-        ollama_panel.pack_forget()
-        if mode in ('auto', 'ollama'):
-            ollama_panel.pack(fill=tk.X)
+        mode = title_engine_display_to_mode.get(display_name, 'ollama')
         app.config.set("title_generation_engine", mode)
         app.config.save()
+        _update_ollama_panel_visibility()
+
+    def on_additional_engine_change(*_args):
+        value = additional_engine_var.get()
+        if value not in ("gemini", "ollama"):
+            value = "ollama"
+            additional_engine_var.set(value)
+        app.config.set("additional_processing_engine", value)
+        app.config.save()
+        _update_ollama_panel_visibility()
 
     def on_ollama_model_change(event=None):
         model_name = ollama_model_var.get().strip() or OLLAMA_DEFAULT_MODEL
@@ -1428,6 +1512,7 @@ def create_file_section(parent, app, theme, widgets):
         app.config.save()
 
     engine_var.trace('w', lambda *args: on_engine_change())
+    additional_engine_var.trace('w', on_additional_engine_change)
     if whisper_model_combo is not None:
         whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
     whisper_api_model_combo.bind('<<ComboboxSelected>>', on_whisper_api_model_change)
@@ -1453,6 +1538,7 @@ def create_file_section(parent, app, theme, widgets):
     on_whisper_api_model_change()
     on_gemini_recovery_change()
     on_ollama_model_change()
+    _update_ollama_panel_visibility()
 
     frame.drop_area = drop_canvas
     frame.file_label = file_label
@@ -1470,6 +1556,7 @@ def create_file_section(parent, app, theme, widgets):
     frame.gemini_safety_filter_recovery_display_to_mode = gemini_recovery_display_to_mode
     frame.title_engine_var = title_engine_var
     frame.title_engine_display_to_mode = title_engine_display_to_mode
+    frame.additional_engine_var = additional_engine_var
     frame.ollama_model_var = ollama_model_var
     frame.trim_long_silence_var = trim_long_silence_var
     frame.silence_trim_mode_var = silence_trim_mode_var
@@ -2442,6 +2529,7 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'gemini_safety_filter_recovery_display_to_mode': file_section.gemini_safety_filter_recovery_display_to_mode,
         'title_engine_var': file_section.title_engine_var,
         'title_engine_display_to_mode': file_section.title_engine_display_to_mode,
+        'additional_engine_var': file_section.additional_engine_var,
         'ollama_model_var': file_section.ollama_model_var,
         'trim_long_silence_var': file_section.trim_long_silence_var,
         'silence_trim_mode_var': file_section.silence_trim_mode_var,
