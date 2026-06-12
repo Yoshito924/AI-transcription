@@ -44,6 +44,7 @@ from .utils import (
 )
 from .logger import logger
 from .processing_time_tracker import ProcessingTimeTracker
+from .engines import resolve_api_key, get_engine_spec
 
 
 class TranscriptionController:
@@ -318,22 +319,10 @@ class TranscriptionController:
         engine_value = get_engine_value(self.ui_elements)
         
         # エンジンに応じたAPIキーを取得
-        if engine_value == 'whisper-api':
-            # Whisper APIの場合はOpenAI APIキーを使用
-            api_key = self.ui_elements.get('openai_api_key_var')
-            api_key = api_key.get().strip() if api_key else ""
-            if not api_key:
-                messagebox.showerror("エラー", "Whisper APIモードではOpenAI APIキーを入力してください。")
-                return
-        elif engine_value == 'gemini':
-            # GeminiはGemini APIキーを使用
-            api_key = self.ui_elements['api_key_var'].get().strip()
-            if not api_key:
-                messagebox.showerror("エラー", "GeminiモードではGemini APIキーを入力してください。")
-                return
-        else:
-            # Whisper（ローカル）の場合はAPIキー不要
-            api_key = ""
+        api_key, api_key_error = resolve_api_key(engine_value, self.ui_elements)
+        if api_key_error:
+            messagebox.showerror("エラー", api_key_error)
+            return
         
         # 固定プロンプト（文字起こし専用）
         prompts = {
@@ -397,13 +386,15 @@ class TranscriptionController:
             trim_long_silence = get_trim_long_silence_value(self.ui_elements)
             silence_trim_settings = get_silence_trim_settings(self.ui_elements)
 
-            # エンジンに応じた開始メッセージを表示
+            # エンジンに応じた開始メッセージを表示（ローカル/APIはモデル名を併記）
+            engine_label = get_engine_spec(engine_value).label
             if engine_value == 'whisper':
-                self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Whisper処理開始 (モデル: {whisper_model}) ━━━"))
+                start_message = f"━━━ {engine_label}処理開始 (モデル: {whisper_model}) ━━━"
             elif engine_value == 'whisper-api':
-                self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Whisper API処理開始 (モデル: {whisper_api_model}) ━━━"))
+                start_message = f"━━━ {engine_label}処理開始 (モデル: {whisper_api_model}) ━━━"
             else:
-                self.ui_elements['root'].after(0, lambda: self.add_log(f"━━━ Gemini処理開始 ━━━"))
+                start_message = f"━━━ {engine_label}処理開始 ━━━"
+            self.ui_elements['root'].after(0, lambda m=start_message: self.add_log(m))
 
             # 保存先設定の取得
             save_to_output = self.ui_elements.get('save_to_output_var')
@@ -918,26 +909,19 @@ class TranscriptionController:
 
         self.add_log(f"[{self.current_queue_index}/{self.total_queue_files}] {filename} を文字起こし開始")
 
-        # APIキー取得
+        # APIキー取得（キュー処理では未設定時にエラー記録してスキップ）
         engine_value = get_engine_value(self.ui_elements)
-
-        if engine_value == 'whisper-api':
-            api_key = self.ui_elements.get('openai_api_key_var')
-            api_key = api_key.get().strip() if api_key else ""
-            if not api_key:
-                self.queue_errors.append((filename, "OpenAI APIキー未設定"))
-                self.add_log(f"エラー: OpenAI APIキー未設定 - {filename} をスキップ")
-                self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
-                return
-        elif engine_value == 'gemini':
-            api_key = self.ui_elements['api_key_var'].get().strip()
-            if not api_key:
-                self.queue_errors.append((filename, "Gemini APIキー未設定"))
-                self.add_log(f"エラー: Gemini APIキー未設定 - {filename} をスキップ")
-                self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
-                return
-        else:
-            api_key = ""
+        api_key, api_key_error = resolve_api_key(engine_value, self.ui_elements)
+        if api_key_error:
+            # 既存挙動を維持: エンジンごとの短いキー未設定メッセージで記録
+            short_error = {
+                'whisper-api': "OpenAI APIキー未設定",
+                'gemini': "Gemini APIキー未設定",
+            }.get(engine_value, "APIキー未設定")
+            self.queue_errors.append((filename, short_error))
+            self.add_log(f"エラー: {short_error} - {filename} をスキップ")
+            self.ui_elements['root'].after(300, self._process_next_in_queue_pipeline)
+            return
 
         prompts = {
             "transcription": {

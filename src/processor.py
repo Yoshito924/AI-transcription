@@ -336,28 +336,21 @@ class FileProcessor:
                 if eta_msg:
                     update_status(eta_msg)
 
-            # 文字起こし実行（エンジンに応じて分岐）
+            # 文字起こし実行（エンジンに応じてディスパッチ）
             # キャッシュからセグメントを取得した場合は、それを使用
             try:
-                if engine == 'whisper':
-                    transcription = self._perform_whisper_transcription(
-                        audio_path, update_status, whisper_model, cached_segments,
-                        progress_callback=update_progress,
-                        cleanup_segments=not from_cache
-                    )
-                elif engine == 'whisper-api':
-                    transcription = self._perform_whisper_api_transcription(
-                        audio_path, api_key, update_status, cached_segments,
-                        progress_callback=update_progress,
-                        cleanup_segments=not from_cache,
-                        whisper_api_model=whisper_api_model
-                    )
-                else:  # gemini
-                    transcription = self._perform_transcription(
-                        audio_path, api_key, update_status, preferred_model, cached_segments,
-                        progress_callback=update_progress,
-                        cleanup_segments=not from_cache
-                    )
+                transcription = self._dispatch_transcription(
+                    engine,
+                    audio_path,
+                    api_key,
+                    update_status,
+                    preferred_model=preferred_model,
+                    whisper_model=whisper_model,
+                    whisper_api_model=whisper_api_model,
+                    cached_segments=cached_segments,
+                    progress_callback=update_progress,
+                    cleanup_segments=not from_cache
+                )
             except TranscriptionError as e:
                 recoverable_codes = {"SAFETY_FILTER", "COPYRIGHT_CONTENT"}
                 if engine == 'gemini' and getattr(e, 'error_code', None) in recoverable_codes:
@@ -834,6 +827,45 @@ class FileProcessor:
             user_message=warning_message,
             solution="詳細はエラーサマリーJSONとログを確認してください。"
         )
+
+    def _dispatch_transcription(self, engine, audio_path, api_key, update_status,
+                                preferred_model=None, whisper_model=DEFAULT_WHISPER_MODEL,
+                                whisper_api_model=None, cached_segments=None,
+                                progress_callback=None, cleanup_segments=True):
+        """エンジンキーに応じて対応する文字起こしメソッドへディスパッチする
+
+        各 _perform_* メソッドはシグネチャが異なるため、薄いラッパーを
+        エンジンキーごとに dict で持ち、共通の引数から呼び分ける。
+        未知のエンジンは Gemini 扱い（従来の else 分岐と同じ挙動）。
+        """
+        def _whisper():
+            return self._perform_whisper_transcription(
+                audio_path, update_status, whisper_model, cached_segments,
+                progress_callback=progress_callback,
+                cleanup_segments=cleanup_segments
+            )
+
+        def _whisper_api():
+            return self._perform_whisper_api_transcription(
+                audio_path, api_key, update_status, cached_segments,
+                progress_callback=progress_callback,
+                cleanup_segments=cleanup_segments,
+                whisper_api_model=whisper_api_model
+            )
+
+        def _gemini():
+            return self._perform_transcription(
+                audio_path, api_key, update_status, preferred_model, cached_segments,
+                progress_callback=progress_callback,
+                cleanup_segments=cleanup_segments
+            )
+
+        dispatch = {
+            'whisper': _whisper,
+            'whisper-api': _whisper_api,
+            'gemini': _gemini,
+        }
+        return dispatch.get(engine, _gemini)()
 
     def _perform_transcription(self, audio_path, api_key, update_status, preferred_model=None,
                                cached_segments=None, progress_callback=None, cleanup_segments=True):

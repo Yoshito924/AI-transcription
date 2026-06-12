@@ -13,6 +13,7 @@ from tkinter import ttk, scrolledtext
 from .ui_styles import ModernTheme, ModernWidgets, ICONS
 from .waveform_viewer import WaveformViewer
 from .whisper_api_service import WhisperApiService
+from .engines import ENGINES
 from .constants import (
     DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
@@ -1432,12 +1433,9 @@ def create_file_section(parent, app, theme, widgets):
         elif is_gemini:
             gemini_recovery_panel.pack(fill=tk.X, before=additional_engine_label)
 
-        engine_map = {
-            'gemini': 'Gemini',
-            'whisper': 'Whisper',
-            'whisper-api': 'Whisper API'
-        }
-        engine_tile.value_label.config(text=engine_map.get(engine_value, 'Whisper'))
+        # エンジン表示名は EngineSpec の label を参照（未知のキーは Whisper 扱い）
+        engine_label = ENGINES[engine_value].label if engine_value in ENGINES else 'Whisper'
+        engine_tile.value_label.config(text=engine_label)
 
         if engine_value == 'gemini':
             model_tile.value_label.config(text="自動選択")
