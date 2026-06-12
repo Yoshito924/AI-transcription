@@ -20,7 +20,7 @@ import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.constants import SUPPORTED_AUDIO_FORMATS
 from src.utils import sanitize_filename

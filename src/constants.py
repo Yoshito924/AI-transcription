@@ -91,9 +91,6 @@ PREFERRED_MODELS = [
     "gemini-2.5-flash-lite",             # Flash Lite 2.5
     "gemini-2.0-flash-lite",             # 最軽量・最速
     "gemini-2.0-flash",                  # Flash 2.0
-    "gemini-1.5-flash",                  # Flash 1.5（後方互換性）
-    "gemini-1.5-pro",                    # Pro 1.5
-    "gemini-pro"                         # 従来版
 ]
 # タイトル生成用の軽量モデル（優先順位順）
 TITLE_GENERATION_MODELS = [
@@ -179,7 +176,6 @@ RECORDINGS_DIR = "recordings"
 
 # ファイル名
 CONFIG_FILE = "config.json"
-PROMPT_FILE = "prompts.json"
 
 # Gemini API料金設定（100万トークンあたりの米ドル）
 # 注意: 音声入力の場合、モデルによって計算方法が異なる

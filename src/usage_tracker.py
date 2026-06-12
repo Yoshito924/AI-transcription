@@ -10,6 +10,8 @@ import os
 import datetime
 from typing import Dict, List, Optional
 
+from .logger import logger
+
 
 class UsageTracker:
     """使用量と料金の追跡クラス"""
@@ -73,7 +75,7 @@ class UsageTracker:
             with open(self.usage_file, 'w', encoding='utf-8') as f:
                 json.dump(self.usage_data, f, ensure_ascii=False, indent=2)
         except IOError as e:
-            print(f"使用量データの保存に失敗しました: {e}")
+            logger.warning(f"使用量データの保存に失敗しました: {e}")
     
     def record_usage(self, model: str, input_tokens: int, output_tokens: int, 
                     file_name: str = "", file_size_mb: float = 0.0):

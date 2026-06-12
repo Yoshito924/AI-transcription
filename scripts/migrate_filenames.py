@@ -15,7 +15,7 @@ import sys
 import time
 
 # プロジェクトルートをパスに追加
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import google.generativeai as genai
 from src.constants import SUMMARY_TITLE_MAX_LENGTH, TITLE_GENERATION_MODELS
