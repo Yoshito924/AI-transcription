@@ -8,12 +8,9 @@ tiktoken>=0.3.0
 --find-links https://download.pytorch.org/whl/torch_stable.html
 torch>=2.0.0
 torchaudio>=2.0.0
-# Whisper（faster-whisper優先、openai-whisperフォールバック）
+# Whisper（faster-whisperのみサポート）
 # faster-whisper: CTranslate2ベースの高速版（約4倍高速）
 # 参考: https://github.com/SYSTRAN/faster-whisper
 faster-whisper>=1.0.0
-# openai-whisper: 公式版（faster-whisperがない場合のフォールバック）
-# 参考: https://github.com/openai/whisper
-openai-whisper>=20231117
 # OpenAI Whisper API
 openai>=1.0.0

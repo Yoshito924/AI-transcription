@@ -11,21 +11,14 @@ from .exceptions import TranscriptionError, AudioProcessingError
 from .logger import logger
 from .utils import format_duration
 
-# Whisperライブラリの選択（faster-whisper優先 → openai-whisperフォールバック）
-WHISPER_BACKEND = None
+# ローカル文字起こしバックエンド（faster-whisper のみサポート）
 try:
     from faster_whisper import WhisperModel
-    WHISPER_BACKEND = "faster-whisper"
-    logger.info("Faster Whisper backend loaded (高速モード)")
+    FASTER_WHISPER_AVAILABLE = True
+    logger.info("Faster Whisper backend loaded")
 except ImportError:
-    try:
-        import torch
-        import whisper
-        WHISPER_BACKEND = "openai-whisper"
-        logger.info("OpenAI Whisper backend loaded")
-    except ImportError:
-        logger.error("No Whisper backend found. Please install openai-whisper or faster-whisper")
-        WHISPER_BACKEND = None
+    FASTER_WHISPER_AVAILABLE = False
+    logger.error("faster-whisper が見つかりません。`pip install faster-whisper` でインストールしてください")
 
 
 class WhisperService:
@@ -42,31 +35,25 @@ class WhisperService:
     }
     
     def __init__(self):
-        if WHISPER_BACKEND is None:
-            raise AudioProcessingError("Whisperライブラリが見つかりません。openai-whisper または faster-whisper をインストールしてください。")
+        if not FASTER_WHISPER_AVAILABLE:
+            raise AudioProcessingError("faster-whisper が見つかりません。`pip install faster-whisper` でインストールしてください。")
 
-        self.backend = WHISPER_BACKEND
         self.model = None
         self.current_model_name = None
 
         # Whisperキャッシュディレクトリを設定（書き込み可能な場所を確保）
         self._setup_cache_directory()
 
-        # デバイス検出（torchの可用性を確認）
+        # デバイス検出（torchはCUDA検出にのみ使用）
         try:
-            if self.backend == "openai-whisper":
-                # openai-whisperの場合、既にtorchがインポートされている
-                self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            else:
-                # faster-whisperの場合は独自にtorchをインポート
-                import torch as torch_check
-                self.device = "cuda" if torch_check.cuda.is_available() else "cpu"
-        except (NameError, ImportError):
+            import torch
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
             # torchが利用できない場合はCPUにフォールバック
             self.device = "cpu"
             logger.warning("PyTorchが見つからないため、CPUモードで動作します")
 
-        logger.info(f"WhisperService初期化: backend={self.backend}, デバイス={self.device}")
+        logger.info(f"WhisperService初期化: デバイス={self.device}")
 
     def _setup_cache_directory(self):
         """Whisperのキャッシュディレクトリを設定"""
@@ -115,7 +102,7 @@ class WhisperService:
     def _build_transcribe_options(self, language: Optional[str] = 'ja',
                                   initial_prompt: Optional[str] = None,
                                   **kwargs) -> Dict[str, Any]:
-        """バックエンド差異を吸収した文字起こしオプションを構築"""
+        """文字起こしオプションを構築"""
         options: Dict[str, Any] = {
             'task': 'transcribe',
         }
@@ -125,42 +112,16 @@ class WhisperService:
         if initial_prompt:
             options['initial_prompt'] = initial_prompt
 
-        if self.backend == "openai-whisper":
-            options['verbose'] = None
-            options['fp16'] = self.device == 'cuda'
-        else:
-            # faster-whisper用の高速化オプション
-            options.setdefault('beam_size', 3)        # デフォルト5→3で高速化（精度への影響小）
-            options.setdefault('vad_filter', True)     # 無音部分をスキップして高速化
+        # 高速化オプション
+        options.setdefault('beam_size', 3)        # デフォルト5→3で高速化（精度への影響小）
+        options.setdefault('vad_filter', True)     # 無音部分をスキップして高速化
 
         options.update(kwargs)
         return options
 
     def _run_transcription(self, model, audio_path: str,
                            options: Dict[str, Any]) -> Dict[str, Any]:
-        """バックエンドごとのレスポンスを共通形式に正規化"""
-        if self.backend == "openai-whisper":
-            result = model.transcribe(audio_path, **options)
-            if not result or 'text' not in result:
-                raise TranscriptionError("Whisperからの応答が不正です")
-
-            segments = []
-            for index, seg in enumerate(result.get('segments', [])):
-                segment_text = (seg.get('text') or '').strip()
-                segments.append({
-                    'id': seg.get('id', index),
-                    'start': seg.get('start', 0.0),
-                    'end': seg.get('end', 0.0),
-                    'text': segment_text
-                })
-
-            return {
-                'text': (result.get('text') or '').strip(),
-                'language': result.get('language', options.get('language')),
-                'duration': result.get('duration', 0),
-                'segments': segments
-            }
-
+        """faster-whisperのレスポンスを共通形式に正規化"""
         segments_iter, info = model.transcribe(audio_path, **options)
         segments = []
         text_parts = []
@@ -200,84 +161,36 @@ class WhisperService:
         if self.model is None or self.current_model_name != model_name or force_reload:
             logger.info(f"Whisperモデルをロード中: {model_name}")
             try:
-                if self.backend == "openai-whisper":
-                    # モデル名の正規化
-                    # turboとlarge-v3-turboは同じモデル
-                    actual_model_name = model_name
-                    
-                    # turbo系モデルの処理
-                    if model_name in ['turbo', 'large-v3-turbo']:
-                        # 優先順位: turbo → large-v3-turbo → large-v3 → large
-                        for turbo_variant in ['turbo', 'large-v3-turbo', 'large-v3', 'large']:
-                            try:
-                                self.model = whisper.load_model(turbo_variant, device=self.device)
-                                actual_model_name = turbo_variant
-                                logger.info(f"モデル（{turbo_variant}）のロードに成功")
-                                break
-                            except Exception as e:
-                                logger.warning(f"{turbo_variant}のロードに失敗: {str(e)}")
-                                continue
-                        
-                        # すべて失敗した場合
-                        if self.model is None:
-                            raise AudioProcessingError("turbo系モデルのロードに失敗しました")
-                    # large-v3の処理
-                    elif model_name == 'large-v3':
-                        for variant in ['large-v3', 'large']:
-                            try:
-                                self.model = whisper.load_model(variant, device=self.device)
-                                actual_model_name = variant
-                                logger.info(f"モデル（{variant}）のロードに成功")
-                                break
-                            except Exception as e:
-                                logger.warning(f"{variant}のロードに失敗: {str(e)}")
-                                continue
-                    # large-v2の処理
-                    elif model_name == 'large-v2':
-                        for variant in ['large-v2', 'large']:
-                            try:
-                                self.model = whisper.load_model(variant, device=self.device)
-                                actual_model_name = variant
-                                logger.info(f"モデル（{variant}）のロードに成功")
-                                break
-                            except Exception as e:
-                                logger.warning(f"{variant}のロードに失敗: {str(e)}")
-                                continue
-                    else:
-                        self.model = whisper.load_model(actual_model_name, device=self.device)
-                    
-                    model_name = actual_model_name  # 実際にロードされたモデル名を記録
-                else:  # faster-whisper
-                    device = "cuda" if self.device == "cuda" else "cpu"
-                    # int8_float16: 重みをint8量子化し演算はfloat16で行う
-                    # float16とほぼ同精度で高速化・VRAM節約
-                    compute_type = "int8_float16" if device == "cuda" else "int8"
-                    
-                    # faster-whisperでのモデル名マッピング
-                    # faster-whisperはlarge-v3, large-v3-turboを直接サポート
-                    fw_model_map = {
-                        'turbo': 'large-v3-turbo',
-                        'large': 'large-v3',  # largeは最新のlarge-v3を使用
-                    }
-                    fw_model_name = fw_model_map.get(model_name, model_name)
-                    
-                    try:
-                        self.model = WhisperModel(fw_model_name, device=device, compute_type=compute_type)
-                        model_name = fw_model_name
-                    except Exception as e:
-                        logger.warning(f"{fw_model_name}のロードに失敗: {str(e)}")
-                        # フォールバック: large-v3 → large-v2 → large
-                        for fallback in ['large-v3', 'large-v2', 'large']:
-                            if fallback == fw_model_name:
-                                continue
-                            try:
-                                self.model = WhisperModel(fallback, device=device, compute_type=compute_type)
-                                model_name = fallback
-                                logger.info(f"フォールバックモデル（{fallback}）のロードに成功")
-                                break
-                            except Exception:
-                                continue
-                
+                device = "cuda" if self.device == "cuda" else "cpu"
+                # int8_float16: 重みをint8量子化し演算はfloat16で行う
+                # float16とほぼ同精度で高速化・VRAM節約
+                compute_type = "int8_float16" if device == "cuda" else "int8"
+
+                # faster-whisperでのモデル名マッピング
+                # faster-whisperはlarge-v3, large-v3-turboを直接サポート
+                fw_model_map = {
+                    'turbo': 'large-v3-turbo',
+                    'large': 'large-v3',  # largeは最新のlarge-v3を使用
+                }
+                fw_model_name = fw_model_map.get(model_name, model_name)
+
+                try:
+                    self.model = WhisperModel(fw_model_name, device=device, compute_type=compute_type)
+                    model_name = fw_model_name
+                except Exception as e:
+                    logger.warning(f"{fw_model_name}のロードに失敗: {str(e)}")
+                    # フォールバック: large-v3 → large-v2 → large
+                    for fallback in ['large-v3', 'large-v2', 'large']:
+                        if fallback == fw_model_name:
+                            continue
+                        try:
+                            self.model = WhisperModel(fallback, device=device, compute_type=compute_type)
+                            model_name = fallback
+                            logger.info(f"フォールバックモデル（{fallback}）のロードに成功")
+                            break
+                        except Exception:
+                            continue
+
                 self.current_model_name = model_name
                 logger.info(f"モデルロード完了: {model_name} (デバイス: {self.device})")
             except Exception as e:
@@ -496,15 +409,10 @@ class WhisperService:
         """デバイス情報を取得"""
         if self.device == 'cuda':
             try:
-                if self.backend == "openai-whisper":
-                    gpu_name = torch.cuda.get_device_name(0)
-                    gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                    return f"GPU: {gpu_name} (メモリ: {gpu_memory:.1f}GB)"
-                else:
-                    import torch as torch_check
-                    gpu_name = torch_check.cuda.get_device_name(0)
-                    gpu_memory = torch_check.cuda.get_device_properties(0).total_memory / (1024**3)
-                    return f"GPU: {gpu_name} (メモリ: {gpu_memory:.1f}GB)"
+                import torch
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                return f"GPU: {gpu_name} (メモリ: {gpu_memory:.1f}GB)"
             except (NameError, ImportError):
                 return "GPU (詳細不明)"
         else:
