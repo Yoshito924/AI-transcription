@@ -408,9 +408,14 @@ class FileProcessor:
                     if gemini_api_key:
                         update_status("要約タイトルを生成中（Gemini）...")
                         summary_title = self.generate_summary_title(final_text, gemini_api_key)
+                    else:
+                        update_status("Gemini APIキーが未設定のためタイトル生成をスキップしました")
                 elif title_generation_engine == 'ollama':
                     update_status("要約タイトルを生成中（Ollama）...")
                     summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
+                    if not summary_title and rename_source_file and gemini_api_key:
+                        update_status("Ollamaでタイトル生成できなかったため、Geminiで再試行します...")
+                        summary_title = self.generate_summary_title(final_text, gemini_api_key)
                 else:  # auto
                     update_status("要約タイトルを生成中（Ollama）...")
                     summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
@@ -419,12 +424,14 @@ class FileProcessor:
                         summary_title = self.generate_summary_title(final_text, gemini_api_key)
                 if summary_title:
                     update_status(f"タイトル生成完了: {summary_title}")
+                elif rename_source_file:
+                    update_status("タイトルを生成できなかったため、元ファイルのリネームをスキップしました")
+            elif rename_source_file:
+                update_status("タイトル生成が無効のため、元ファイルのリネームをスキップしました")
 
             # 元ファイルを要約タイトルでリネーム
             if rename_source_file and summary_title:
-                renamed_source = self._rename_source_file(input_file, summary_title, update_status)
-                if renamed_source:
-                    input_file = renamed_source  # 保存時のファイル名参照を更新
+                self._rename_source_file(input_file, summary_title, update_status)
 
             # 結果をファイルに保存
             output_path = self._save_result(

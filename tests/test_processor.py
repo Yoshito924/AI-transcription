@@ -2,7 +2,7 @@ import datetime
 import os
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from src.constants import OLLAMA_DEFAULT_MODEL
 from src.exceptions import ApiConnectionError, AudioProcessingError, TranscriptionError
@@ -404,6 +404,62 @@ class FileProcessorTests(unittest.TestCase):
         self.assertEqual(result, "output.txt")
         processor.generate_summary_title_ollama.assert_called_once_with(long_transcription, model=OLLAMA_DEFAULT_MODEL)
         processor.generate_summary_title.assert_not_called()
+
+    def test_rename_source_file_retries_title_generation_with_gemini_when_ollama_fails(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        long_transcription = "文字起こし本文。" * 20
+        statuses = []
+        processor._prepare_audio_file = MagicMock(return_value=("prepared.mp3", None, False))
+        processor._perform_whisper_transcription = MagicMock(return_value=long_transcription)
+        processor._save_result = MagicMock(return_value="output.txt")
+        processor._rename_source_file = MagicMock(return_value="renamed.mp3")
+        processor.generate_summary_title_ollama = MagicMock(return_value=None)
+        processor.generate_summary_title = MagicMock(return_value="会議メモ")
+
+        result = processor.process_file(
+            input_file="dummy.mp3",
+            process_type="transcription",
+            api_key="",
+            prompts={"transcription": {"name": "文字起こし", "prompt": "{transcription}"}},
+            status_callback=statuses.append,
+            engine='whisper',
+            title_generation_engine='ollama',
+            gemini_api_key='gemini-key',
+            rename_source_file=True
+        )
+
+        self.assertEqual(result, "output.txt")
+        processor.generate_summary_title_ollama.assert_called_once_with(long_transcription, model=OLLAMA_DEFAULT_MODEL)
+        processor.generate_summary_title.assert_called_once_with(long_transcription, 'gemini-key')
+        processor._rename_source_file.assert_called_once_with("dummy.mp3", "会議メモ", ANY)
+        self.assertEqual(processor._save_result.call_args.args[0], "dummy.mp3")
+        self.assertTrue(any("Geminiで再試行" in message for message in statuses))
+
+    def test_rename_source_file_reports_skip_when_title_generation_disabled(self):
+        temp_dir = self.make_output_dir()
+        processor = FileProcessor(temp_dir, enable_cache=False)
+        long_transcription = "文字起こし本文。" * 20
+        statuses = []
+        processor._prepare_audio_file = MagicMock(return_value=("prepared.mp3", None, False))
+        processor._perform_whisper_transcription = MagicMock(return_value=long_transcription)
+        processor._save_result = MagicMock(return_value="output.txt")
+        processor._rename_source_file = MagicMock(side_effect=AssertionError("rename should not run"))
+
+        result = processor.process_file(
+            input_file="dummy.mp3",
+            process_type="transcription",
+            api_key="",
+            prompts={"transcription": {"name": "文字起こし", "prompt": "{transcription}"}},
+            status_callback=statuses.append,
+            engine='whisper',
+            title_generation_engine='disabled',
+            rename_source_file=True
+        )
+
+        self.assertEqual(result, "output.txt")
+        processor._rename_source_file.assert_not_called()
+        self.assertTrue(any("タイトル生成が無効" in message for message in statuses))
 
     def test_save_result_avoids_duplicate_summary_title_in_filename(self):
         temp_dir = self.make_output_dir()
