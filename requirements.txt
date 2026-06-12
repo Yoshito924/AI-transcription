@@ -1,6 +1,8 @@
 google-genai>=2.0.0
 tkinterdnd2>=0.3.0
 sounddevice>=0.4.6
+# APIキーをOSキーストア（Windows資格情報マネージャー等）に保存
+keyring>=24.0.0
 # 基本パッケージ（順序重要）
 numpy>=1.24.0
 # PyTorch（CPU版、Python 3.13対応）
