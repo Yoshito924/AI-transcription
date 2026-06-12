@@ -1,16 +1,47 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import threading
 import time
 
-from .constants import PREFERRED_MODELS, AI_GENERATION_CONFIG
+from google import genai
+from google.genai import types
+
+from .constants import PREFERRED_MODELS, AI_GENERATION_CONFIG, SAFETY_SETTINGS_TRANSCRIPTION
 from .exceptions import ApiConnectionError
 from .logger import logger
 
 # モデルリストキャッシュのTTL（秒）
 _MODEL_LIST_CACHE_TTL = 300  # 5分
-GENAI_SDK_LOCK = threading.RLock()
+
+
+def create_genai_client(api_key):
+    """Gemini APIクライアントを生成する
+
+    新SDK（google-genai）はクライアントインスタンス単位でAPIキーを管理する
+    ため、旧SDKの genai.configure() のようなグローバル状態やロックは不要。
+    """
+    return genai.Client(api_key=api_key)
+
+
+def build_generation_config(relax_safety=True, **overrides):
+    """生成設定（GenerateContentConfig）を構築する
+
+    Args:
+        relax_safety: Trueなら文字起こし用に安全性フィルターを緩和する
+        overrides: AI_GENERATION_CONFIG を上書きする生成パラメータ
+    """
+    params = dict(AI_GENERATION_CONFIG)
+    params.update(overrides)
+
+    safety_settings = None
+    if relax_safety:
+        safety_settings = [
+            types.SafetySetting(category=s["category"], threshold=s["threshold"])
+            for s in SAFETY_SETTINGS_TRANSCRIPTION
+        ]
+
+    return types.GenerateContentConfig(safety_settings=safety_settings, **params)
+
 
 class ApiUtils:
     """API接続関連のユーティリティクラス"""
@@ -23,40 +54,34 @@ class ApiUtils:
 
     def _get_available_models(self, api_key):
         """利用可能なGeminiモデルのリストを取得（キャッシュ付き）"""
-        import google.generativeai as genai
-
         now = time.time()
         if (self._model_list_cache is not None
                 and self._model_list_cache_key == api_key
                 and now - self._model_list_cache_time < _MODEL_LIST_CACHE_TTL):
             return self._model_list_cache
 
-        with GENAI_SDK_LOCK:
-            genai.configure(api_key=api_key)
-            models = list(genai.list_models())
-            available = [
-                m.name for m in models
-                if 'gemini' in m.name.lower() and 'generateContent' in m.supported_generation_methods
-            ]
+        client = create_genai_client(api_key)
+        available = [
+            m.name for m in client.models.list()
+            if 'gemini' in m.name.lower() and 'generateContent' in (m.supported_actions or [])
+        ]
 
         self._model_list_cache = available
         self._model_list_cache_time = now
         self._model_list_cache_key = api_key
         logger.info(f"モデルリスト取得・キャッシュ更新 ({len(available)}個)")
         return available
-    
+
     def test_api_connection(self, api_key):
         """GeminiAPIの接続テスト"""
         try:
-            import google.generativeai as genai
-
             # キャッシュをクリアして最新のリストを取得（接続テストなので）
             self._model_list_cache = None
             available_gemini_models = self._get_available_models(api_key)
 
             if not available_gemini_models:
                 raise ApiConnectionError("利用可能なGeminiモデルが見つかりません")
-            
+
             # 優先度順に使用可能なモデルを選択
             model_name = None
             for preferred in self.preferred_models:
@@ -66,7 +91,7 @@ class ApiUtils:
                         break
                 if model_name:
                     break
-            
+
             # 見つからなければ最初のモデルを使用
             if not model_name:
                 model_name = available_gemini_models[0]
@@ -75,25 +100,24 @@ class ApiUtils:
                 logger.info(f"使用モデル: {model_name} (優先度リストから選択)")
 
             logger.info(f"利用可能なGeminiモデル一覧: {', '.join(available_gemini_models)}")
-            
+
             # 選択したモデルでテスト
-            with GENAI_SDK_LOCK:
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(
-                    model_name,
-                    generation_config=AI_GENERATION_CONFIG
-                )
-                response = model.generate_content("こんにちは")
-            
+            client = create_genai_client(api_key)
+            response = client.models.generate_content(
+                model=model_name,
+                contents="こんにちは",
+                config=build_generation_config(relax_safety=False)
+            )
+
             # 応答がある場合は成功（モデル名を返す）
             if response and hasattr(response, 'text'):
                 logger.info(f"API接続テスト成功: {model_name}")
                 return model_name
             raise ApiConnectionError("API応答が正常ではありません")
-            
+
         except Exception as e:
             raise ApiConnectionError(f"API接続エラー: {str(e)}")
-    
+
     def _rank_models_by_priority(self, available_models):
         """利用可能なモデルを優先順位でランク付け（音声処理用）
 

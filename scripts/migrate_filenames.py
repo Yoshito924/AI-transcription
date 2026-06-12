@@ -17,7 +17,7 @@ import time
 # プロジェクトルートをパスに追加
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import google.generativeai as genai
+from src.api_utils import create_genai_client, build_generation_config
 from src.constants import SUMMARY_TITLE_MAX_LENGTH, TITLE_GENERATION_MODELS
 from src.utils import sanitize_filename
 
@@ -50,13 +50,11 @@ def get_api_key():
     return api_key
 
 
-def select_model(api_key):
+def select_model(client):
     """タイトル生成用の軽量モデルを選択"""
-    genai.configure(api_key=api_key)
-    models = genai.list_models()
     available_names = [
-        m.name for m in models
-        if 'gemini' in m.name.lower() and 'generateContent' in m.supported_generation_methods
+        m.name for m in client.models.list()
+        if 'gemini' in m.name.lower() and 'generateContent' in (m.supported_actions or [])
     ]
 
     for preferred in TITLE_GENERATION_MODELS:
@@ -67,7 +65,7 @@ def select_model(api_key):
     return available_names[0] if available_names else None
 
 
-def generate_title(model_name, text):
+def generate_title(client, model_name, text):
     """テキストから要約タイトルを生成"""
     excerpt = text[:2000]
 
@@ -78,16 +76,16 @@ def generate_title(model_name, text):
         f"{excerpt}"
     )
 
-    model = genai.GenerativeModel(
-        model_name,
-        generation_config={
-            'temperature': 0.1,
-            'max_output_tokens': 100,
-            'candidate_count': 1
-        }
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=build_generation_config(
+            relax_safety=False,
+            temperature=0.1,
+            max_output_tokens=100,
+            candidate_count=1
+        )
     )
-
-    response = model.generate_content(prompt)
 
     if not response.text or not response.text.strip():
         return None
@@ -155,9 +153,10 @@ def main():
         print("エラー: APIキーが設定されていません。")
         return
 
-    # モデル選択
+    # クライアント生成・モデル選択
+    client = create_genai_client(api_key)
     print("\nモデルを選択中...")
-    model_name = select_model(api_key)
+    model_name = select_model(client)
     if not model_name:
         print("エラー: 利用可能なモデルが見つかりません。")
         return
@@ -188,7 +187,7 @@ def main():
 
         # タイトル生成
         try:
-            title = generate_title(model_name, text)
+            title = generate_title(client, model_name, text)
         except Exception as e:
             print(f"  タイトル生成エラー: {e}")
             errors += 1

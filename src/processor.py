@@ -9,7 +9,9 @@ import datetime
 import tempfile
 import time
 import threading
-import google.generativeai as genai
+
+from google import genai
+from google.genai import types
 
 from .constants import (
     DEFAULT_TRIM_LONG_SILENCE,
@@ -20,9 +22,7 @@ from .constants import (
     SILENCE_TRIM_MIN_REDUCTION_SEC,
     AUDIO_MIME_TYPE,
     OUTPUT_DIR,
-    AI_GENERATION_CONFIG,
     SEGMENT_MERGE_CONFIG,
-    SAFETY_SETTINGS_TRANSCRIPTION,
     SUMMARY_TITLE_MAX_LENGTH,
     TITLE_GENERATION_MODELS,
     TITLE_GENERATION_EXCERPT_LENGTH,
@@ -42,7 +42,7 @@ from .exceptions import (
     FileProcessingError
 )
 from .audio_processor import AudioProcessor
-from .api_utils import ApiUtils, GENAI_SDK_LOCK
+from .api_utils import ApiUtils, create_genai_client, build_generation_config
 from .whisper_service import WhisperService
 from .whisper_api_service import WhisperApiService
 from .text_merger import EnhancedTextMerger
@@ -186,15 +186,19 @@ class FileProcessor:
             finish_reason = candidate.finish_reason
             segment_info = f"セグメント {segment_num}: " if segment_num else ""
 
-            # finish_reasonの種類:
-            # 0 or FINISH_REASON_STOP: 正常終了
-            # 1 or FINISH_REASON_MAX_TOKENS: トークン数上限
-            # 2 or FINISH_REASON_SAFETY: 安全性フィルターによるブロック
-            # 3 or FINISH_REASON_RECITATION: 引用/転載の検出
-            # 4: 著作権保護コンテンツの検出
-            # 5 or FINISH_REASON_OTHER: その他の理由
+            # 新SDK（google-genai）の finish_reason は str enum（types.FinishReason）。
+            # .name で文字列名に正規化して判定する。
+            #   STOP / MAX_TOKENS: 正常終了系
+            #   SAFETY / PROHIBITED_CONTENT / BLOCKLIST / SPII: 安全性フィルターによるブロック
+            #   RECITATION: 引用/転載（著作権含む）の検出 → 警告のみで続行
+            #   その他: 異常終了として警告
+            reason_name = getattr(finish_reason, 'name', None) or str(finish_reason)
+            reason_name = reason_name.upper()
 
-            if finish_reason == 2:
+            normal_reasons = {'STOP', 'MAX_TOKENS', 'FINISH_REASON_UNSPECIFIED'}
+            safety_reasons = {'SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'}
+
+            if reason_name in safety_reasons:
                 error_msg = f"{segment_info}安全性フィルター - 音声の内容が安全性基準に抵触する可能性があります"
                 solution = (
                     "安全性フィルターは緩和設定済みですが、それでもブロックされました。\n"
@@ -210,22 +214,12 @@ class FileProcessor:
                     user_message=f"{error_msg}\n💡 対処法: {solution}",
                     solution=solution
                 )
-            elif finish_reason == 3:
+            elif reason_name == 'RECITATION':
                 error_msg = f"{segment_info}応答が既存コンテンツの引用として検出されました。"
                 logger.warning(error_msg)
                 # 引用検出は警告のみで続行
-            elif finish_reason == 4:
-                error_msg = f"{segment_info}応答が著作権保護コンテンツとして検出されました"
-                solution = "音声に含まれる音楽やBGMを削除するか、別の音声ファイルを使用してください。"
-                logger.error(f"{error_msg} - 対処法: {solution}")
-                raise TranscriptionError(
-                    error_msg,
-                    error_code="COPYRIGHT_CONTENT",
-                    user_message=f"{error_msg}\n💡 対処法: {solution}",
-                    solution=solution
-                )
-            elif finish_reason not in [0, 1]:
-                error_msg = f"{segment_info}異常な終了理由が検出されました (finish_reason={finish_reason})"
+            elif reason_name not in normal_reasons:
+                error_msg = f"{segment_info}異常な終了理由が検出されました (finish_reason={reason_name})"
                 logger.warning(error_msg)
 
         except TranscriptionError:
@@ -1057,46 +1051,45 @@ class FileProcessor:
         update_status("セグメント統合完了")
         return merged_text
 
-    def _upload_gemini_audio_file(self, audio_path, update_status):
+    def _upload_gemini_audio_file(self, client, audio_path, update_status):
         """Gemini Files API に音声をアップロードして利用可能状態まで待つ"""
         update_status("Gemini Files API に音声をアップロード中...")
 
-        with GENAI_SDK_LOCK:
-            uploaded_file = genai.upload_file(audio_path, mime_type=AUDIO_MIME_TYPE)
+        uploaded_file = client.files.upload(
+            file=audio_path,
+            config={'mime_type': AUDIO_MIME_TYPE}
+        )
 
         state = getattr(uploaded_file, 'state', None)
-        if state == genai.protos.File.State.ACTIVE:
+        if state == types.FileState.ACTIVE:
             return uploaded_file
 
         for _ in range(120):
             time.sleep(2)
-            with GENAI_SDK_LOCK:
-                uploaded_file = genai.get_file(uploaded_file.name)
+            uploaded_file = client.files.get(name=uploaded_file.name)
             state = getattr(uploaded_file, 'state', None)
 
-            if state == genai.protos.File.State.ACTIVE:
+            if state == types.FileState.ACTIVE:
                 update_status("Gemini Files API の音声準備が完了しました")
                 return uploaded_file
-            if state == genai.protos.File.State.FAILED:
+            if state == types.FileState.FAILED:
                 raise TranscriptionError("Gemini Files API で音声ファイルの処理に失敗しました")
 
         raise TranscriptionError("Gemini Files API の音声処理がタイムアウトしました")
 
-    def _delete_gemini_audio_file(self, uploaded_file):
+    def _delete_gemini_audio_file(self, client, uploaded_file):
         """Gemini Files API の一時ファイルを削除する"""
         if not uploaded_file:
             return
         try:
-            with GENAI_SDK_LOCK:
-                genai.delete_file(uploaded_file)
+            client.files.delete(name=uploaded_file.name)
         except Exception as e:
             logger.warning(f"Gemini Files API 一時ファイルの削除に失敗: {str(e)}")
 
     def _perform_single_transcription(self, audio_path, api_key, update_status, preferred_model=None):
         """単一ファイルの文字起こし"""
-        with GENAI_SDK_LOCK:
-            genai.configure(api_key=api_key)
-            model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
+        client = create_genai_client(api_key)
+        model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
 
         # 音声の長さを取得（料金計算用）
         audio_duration_sec = self.audio_processor.get_audio_duration(audio_path)
@@ -1108,13 +1101,8 @@ class FileProcessor:
         update_status(f"✓ 使用モデル: {model_name}")
         update_status(f"音声ファイルから文字起こし中...")
 
-        with GENAI_SDK_LOCK:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config=AI_GENERATION_CONFIG,
-                safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 文字起こし用に安全性フィルターを緩和
-            )
+        # 生成設定（文字起こし用に安全性フィルターを緩和）
+        generation_config = build_generation_config()
 
         prompt = """この音声の文字起こしを日本語でお願いします。以下の点を守って正確に書き起こしてください：
 
@@ -1129,20 +1117,23 @@ class FileProcessor:
         uploaded_file = None
         try:
             if file_size_mb > MAX_AUDIO_SIZE_MB:
-                uploaded_file = self._upload_gemini_audio_file(audio_path, update_status)
+                uploaded_file = self._upload_gemini_audio_file(client, audio_path, update_status)
                 parts = [uploaded_file, prompt]
             else:
                 with open(audio_path, 'rb') as audio_file:
                     audio_data = audio_file.read()
                 parts = [
-                    {"inline_data": {"mime_type": AUDIO_MIME_TYPE, "data": audio_data}},
-                    {"text": prompt}
+                    types.Part.from_bytes(data=audio_data, mime_type=AUDIO_MIME_TYPE),
+                    prompt
                 ]
 
-            with GENAI_SDK_LOCK:
-                response = model.generate_content(parts)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=parts,
+                config=generation_config
+            )
         finally:
-            self._delete_gemini_audio_file(uploaded_file)
+            self._delete_gemini_audio_file(client, uploaded_file)
 
         # レスポンスの安全性チェック
         self._check_response_safety(response)
@@ -1164,9 +1155,8 @@ class FileProcessor:
                                         cached_segments=None, progress_callback=None, cleanup_segments=True,
                                         whisper_fallback_for_blocked=False, whisper_model=DEFAULT_WHISPER_MODEL):
         """分割された音声ファイルの文字起こし（スマート統合付き）"""
-        with GENAI_SDK_LOCK:
-            genai.configure(api_key=api_key)
-            model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
+        client = create_genai_client(api_key)
+        model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
         self.last_transcription_model_name = model_name
 
         # モデル名を目立つように表示
@@ -1187,15 +1177,9 @@ class FileProcessor:
                 raise AudioProcessingError("音声ファイルの分割に失敗しました")
 
             update_status(f"{len(segment_files)}個のセグメントに分割しました")
-        
-        # モデルインスタンスを一度だけ生成（全セグメントで共有）
-        with GENAI_SDK_LOCK:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config=AI_GENERATION_CONFIG,
-                safety_settings=SAFETY_SETTINGS_TRANSCRIPTION
-            )
+
+        # 生成設定を一度だけ構築（全セグメントで共有）
+        generation_config = build_generation_config()
 
         segment_transcriptions = []
         segment_info = []
@@ -1214,7 +1198,8 @@ class FileProcessor:
 
                 # セグメントの文字起こし（改善版）
                 segment_transcription, cost_info, error_info = self._transcribe_segment_enhanced(
-                    segment_file, api_key, i+1, total, model_name, model=model
+                    segment_file, api_key, i+1, total, model_name,
+                    client=client, generation_config=generation_config
                 )
                 if cost_info:
                     segment_costs.append(cost_info)
@@ -1297,21 +1282,18 @@ class FileProcessor:
             # 従来の方法で結合
             return "\n\n".join(segment_transcriptions)
     
-    def _transcribe_segment_enhanced(self, segment_file, api_key, segment_num, total_segments, model_name, model=None):
+    def _transcribe_segment_enhanced(self, segment_file, api_key, segment_num, total_segments, model_name,
+                                     client=None, generation_config=None):
         """改善された単一セグメントの文字起こし"""
         try:
             # セグメントの音声の長さを取得（料金計算用）
             segment_duration_sec = self.audio_processor.get_audio_duration(segment_file)
 
-            # モデルインスタンスが渡されない場合のみ生成
-            if model is None:
-                with GENAI_SDK_LOCK:
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(
-                        model_name,
-                        generation_config=AI_GENERATION_CONFIG,
-                        safety_settings=SAFETY_SETTINGS_TRANSCRIPTION
-                    )
+            # クライアント／生成設定が渡されない場合のみ生成
+            if client is None:
+                client = create_genai_client(api_key)
+            if generation_config is None:
+                generation_config = build_generation_config()
 
             with open(segment_file, 'rb') as audio_file:
                 audio_data = audio_file.read()
@@ -1339,12 +1321,15 @@ class FileProcessor:
 正確性と一貫性を最優先にし、後で他のセグメントと統合されることを考慮してください。"""
 
             parts = [
-                {"inline_data": {"mime_type": AUDIO_MIME_TYPE, "data": audio_data}},
-                {"text": prompt}
+                types.Part.from_bytes(data=audio_data, mime_type=AUDIO_MIME_TYPE),
+                prompt
             ]
 
-            with GENAI_SDK_LOCK:
-                response = model.generate_content(parts)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=parts,
+                config=generation_config
+            )
 
             # レスポンスの安全性チェック
             self._check_response_safety(response, segment_num=segment_num)
@@ -1729,23 +1714,20 @@ class FileProcessor:
         if not api_key:
             raise ApiConnectionError("追加処理（要約・議事録作成など）にはGemini APIキーが必要です")
 
-        with GENAI_SDK_LOCK:
-            genai.configure(api_key=api_key)
-            model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
+        client = create_genai_client(api_key)
+        model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
 
         # モデル名を表示
         logger.info(f"✓ {process_name}使用モデル: {model_name}")
         update_status(f"✓ 使用モデル: {model_name}")
         update_status(f"{process_name}を生成中...")
 
-        with GENAI_SDK_LOCK:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config=AI_GENERATION_CONFIG,
-                safety_settings=SAFETY_SETTINGS_TRANSCRIPTION  # 安全性フィルターを緩和
-            )
-            response = model.generate_content(prompt)
+        # 安全性フィルターを緩和した生成設定
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=build_generation_config()
+        )
         if not response.text:
             raise TranscriptionError(f"{process_name}の生成に失敗しました")
 
@@ -1824,8 +1806,7 @@ class FileProcessor:
             str or None: 要約タイトル。失敗時はNone
         """
         try:
-            with GENAI_SDK_LOCK:
-                genai.configure(api_key=api_key)
+            client = create_genai_client(api_key)
 
             # キャッシュ付きモデルリストを使用（音声処理不向きモデルを除外）
             all_names = self.api_utils._get_available_models(api_key)
@@ -1862,17 +1843,16 @@ class FileProcessor:
                 f"{excerpt}"
             )
 
-            with GENAI_SDK_LOCK:
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(
-                    model_name,
-                    generation_config={
-                        'temperature': 0.1,
-                        'max_output_tokens': TITLE_GENERATION_MAX_TOKENS,
-                        'candidate_count': 1
-                    }
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=build_generation_config(
+                    relax_safety=False,
+                    temperature=0.1,
+                    max_output_tokens=TITLE_GENERATION_MAX_TOKENS,
+                    candidate_count=1
                 )
-                response = model.generate_content(prompt)
+            )
 
             if not response.text or not response.text.strip():
                 logger.warning("タイトル生成: 空のレスポンス")
@@ -2130,22 +2110,19 @@ class FileProcessor:
                     raise ApiConnectionError("追加処理（要約・議事録作成など）にはGemini APIキーが必要です")
 
                 # APIを使用して処理
-                with GENAI_SDK_LOCK:
-                    genai.configure(api_key=api_key)
-                    model_name = self.api_utils.get_best_available_model(api_key)
+                client = create_genai_client(api_key)
+                model_name = self.api_utils.get_best_available_model(api_key)
 
                 # モデル名を表示
                 logger.info(f"✓ {process_name}使用モデル: {model_name}")
                 update_status(f"✓ 使用モデル: {model_name}")
                 update_status(f"{process_name}を生成中...")
 
-                with GENAI_SDK_LOCK:
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(
-                        model_name,
-                        generation_config=AI_GENERATION_CONFIG
-                    )
-                    response = model.generate_content(prompt)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=build_generation_config(relax_safety=False)
+                )
                 if not response.text:
                     raise TranscriptionError(f"{process_name}の生成に失敗しました")
                 result_text = response.text
