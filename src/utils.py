@@ -20,7 +20,9 @@ from .constants import (
     DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
     DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
     SILENCE_TRIM_KEEP_SILENCE_SEC,
-    OLLAMA_DEFAULT_MODEL
+    OLLAMA_DEFAULT_MODEL,
+    DEFAULT_TRANSCRIPTION_ENGINE,
+    DEFAULT_WHISPER_MODEL
 )
 
 
@@ -182,7 +184,7 @@ def truncate_status_message(message, max_length):
     return message
 
 
-def get_engine_value(ui_elements, default='whisper'):
+def get_engine_value(ui_elements, default=DEFAULT_TRANSCRIPTION_ENGINE):
     """UI要素からエンジン値を取得する
     
     Args:
@@ -198,7 +200,7 @@ def get_engine_value(ui_elements, default='whisper'):
     return default
 
 
-def get_whisper_model_value(ui_elements, default='large-v3'):
+def get_whisper_model_value(ui_elements, default=DEFAULT_WHISPER_MODEL):
     """UI要素からWhisperモデル値を取得する
     
     Args:

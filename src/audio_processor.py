@@ -41,7 +41,16 @@ class AudioProcessor:
         # 動画から抽出した音声の一時ファイルキャッシュ（同じ動画の再抽出を防止）
         self._extracted_audio_cache = {}  # {video_path: tmp_audio_path}
         self._extraction_lock = threading.Lock()
-    
+
+    @staticmethod
+    def _safe_unlink(path):
+        """一時ファイルを存在チェック付きで安全に削除する"""
+        if path and os.path.exists(path):
+            try:
+                os.unlink(path)
+            except OSError:
+                logger.debug(f"一時ファイルの削除に失敗: {path}")
+
     def get_audio_duration(self, file_path):
         """FFmpegを使用して音声ファイルの長さを秒単位で取得"""
         try:
@@ -282,6 +291,7 @@ class AudioProcessor:
             logger.info(f"抽出済み音声をキャッシュから再利用: {os.path.basename(video_path)}")
             return cached
 
+        tmp_path = None
         try:
             tmp = tempfile.NamedTemporaryFile(suffix='.m4a', delete=False)
             tmp_path = tmp.name
@@ -328,18 +338,19 @@ class AudioProcessor:
                 return tmp_path
 
             # 失敗時は一時ファイルを削除
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+            self._safe_unlink(tmp_path)
             logger.warning("動画からの音声抽出に完全に失敗、元ファイルで変換します")
             return None
 
         except subprocess.TimeoutExpired:
             logger.warning(f"動画からの音声抽出がタイムアウト ({copy_timeout}秒, {file_size_gb:.1f}GB)")
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+            self._safe_unlink(tmp_path)
             return None
         except Exception as e:
             logger.warning(f"動画からの音声抽出に失敗: {e}")
+            # キャッシュ登録前の一時ファイルが残らないよう後始末する
+            if tmp_path and self._extracted_audio_cache.get(video_path) != tmp_path:
+                self._safe_unlink(tmp_path)
             return None
 
     def extract_waveform_and_silence(self, file_path, target_samples=4000, silence_settings=None):
@@ -918,6 +929,7 @@ class AudioProcessor:
                 permanent_segments = []
                 for i, segment_file in enumerate(segment_files):
                     if os.path.exists(segment_file):
+                        perm_path = None
                         try:
                             # 新しい一時ファイルを作成
                             with tempfile.NamedTemporaryFile(suffix=f'_segment_{i:03d}.mp3', delete=False) as temp_file:
@@ -934,8 +946,13 @@ class AudioProcessor:
                                 permanent_segments.append(perm_path)
                             else:
                                 update_status(f"警告: セグメント {i+1} のデータが空です")
+                                # 空ファイルは保持リストへ入れず削除する
+                                self._safe_unlink(perm_path)
                         except Exception as e:
                             update_status(f"エラー: セグメント {i+1} のコピー中に例外が発生: {str(e)}")
+                            # コピー失敗時は作成済みの一時ファイルを残さない
+                            if perm_path and perm_path not in permanent_segments:
+                                self._safe_unlink(perm_path)
                 
                 update_status(f"音声ファイルを {len(permanent_segments)} 個のセグメントに分割しました")
                 return permanent_segments

@@ -29,7 +29,11 @@ from .constants import (
     TITLE_GENERATION_MAX_TOKENS,
     MIN_TRANSCRIPTION_LENGTH_FOR_SAVE,
     OLLAMA_BASE_URL,
-    OLLAMA_DEFAULT_MODEL
+    OLLAMA_DEFAULT_MODEL,
+    DEFAULT_TRANSCRIPTION_ENGINE,
+    DEFAULT_WHISPER_MODEL,
+    DEFAULT_TITLE_GENERATION_ENGINE,
+    DEFAULT_ADDITIONAL_PROCESSING_ENGINE
 )
 from .exceptions import (
     TranscriptionError, 
@@ -276,16 +280,16 @@ class FileProcessor:
         }
 
     def process_file(self, input_file, process_type, api_key, prompts, status_callback=None,
-                    preferred_model=None, engine='whisper', whisper_model='large-v3',
+                    preferred_model=None, engine=DEFAULT_TRANSCRIPTION_ENGINE, whisper_model=DEFAULT_WHISPER_MODEL,
                     save_to_output_dir=True, save_to_source_dir=False,
                     progress_value_callback=None, gemini_api_key=None,
                     time_tracker=None, whisper_api_model=None,
                     gemini_safety_filter_recovery='segment-whisper',
                     trim_long_silence=DEFAULT_TRIM_LONG_SILENCE,
                     silence_trim_settings=None,
-                    title_generation_engine='ollama',
+                    title_generation_engine=DEFAULT_TITLE_GENERATION_ENGINE,
                     ollama_model=OLLAMA_DEFAULT_MODEL,
-                    additional_processing_engine='ollama',
+                    additional_processing_engine=DEFAULT_ADDITIONAL_PROCESSING_ENGINE,
                     rename_source_file=False,
                     prepared_audio=None):
         """ファイルを処理し、結果を返す"""
@@ -459,7 +463,7 @@ class FileProcessor:
             update_status(f"処理エラー: {str(e)}")
             raise FileProcessingError(f"ファイル処理に失敗しました: {str(e)}")
 
-    def _fallback_to_whisper_on_safety(self, exception, audio_path, update_status, whisper_model='large-v3',
+    def _fallback_to_whisper_on_safety(self, exception, audio_path, update_status, whisper_model=DEFAULT_WHISPER_MODEL,
                                        cached_segments=None, progress_callback=None, cleanup_segments=True):
         """Geminiのブロック（安全性/著作権）時にWhisperへ自動フォールバックする"""
         root_message = getattr(exception, 'user_message', str(exception))
@@ -515,7 +519,7 @@ class FileProcessor:
         return 'ブロック判定'
 
     def _recover_from_gemini_safety_filter(self, exception, audio_path, api_key, update_status,
-                                           preferred_model=None, whisper_model='large-v3',
+                                           preferred_model=None, whisper_model=DEFAULT_WHISPER_MODEL,
                                            cached_segments=None, progress_callback=None,
                                            cleanup_segments=True, recovery_mode='segment'):
         """Geminiのブロック（安全性/著作権）時に分割再試行し、だめならWhisperへフォールバックする"""
@@ -871,7 +875,7 @@ class FileProcessor:
                 progress_callback(80)
             return result
     
-    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model='large-v3',
+    def _perform_whisper_transcription(self, audio_path, update_status, whisper_model=DEFAULT_WHISPER_MODEL,
                                        cached_segments=None, progress_callback=None, cleanup_segments=True):
         """Whisperを使用した文字起こしを実行"""
         self.last_engine_used = 'whisper'
@@ -1158,7 +1162,7 @@ class FileProcessor:
     
     def _perform_segmented_transcription(self, audio_path, api_key, update_status, preferred_model=None,
                                         cached_segments=None, progress_callback=None, cleanup_segments=True,
-                                        whisper_fallback_for_blocked=False, whisper_model='large-v3'):
+                                        whisper_fallback_for_blocked=False, whisper_model=DEFAULT_WHISPER_MODEL):
         """分割された音声ファイルの文字起こし（スマート統合付き）"""
         with GENAI_SDK_LOCK:
             genai.configure(api_key=api_key)
@@ -1371,7 +1375,7 @@ class FileProcessor:
             )
 
     def _whisper_fallback_single_segment(self, segment_file, segment_num, total_segments,
-                                          update_status, whisper_model='large-v3'):
+                                          update_status, whisper_model=DEFAULT_WHISPER_MODEL):
         """安全性フィルターでブロックされた単一セグメントをWhisperで文字起こしする
 
         Returns:
@@ -1495,7 +1499,7 @@ class FileProcessor:
 
         return error_category, error_detail
     
-    def _perform_whisper_single_transcription(self, audio_path, update_status, whisper_model='large-v3'):
+    def _perform_whisper_single_transcription(self, audio_path, update_status, whisper_model=DEFAULT_WHISPER_MODEL):
         """Whisperを使用した単一ファイルの文字起こし"""
         update_status(f"Whisperで文字起こし中... (モデル: {whisper_model})")
 
@@ -1535,7 +1539,7 @@ class FileProcessor:
             logger.error(f"Whisper文字起こしエラー: {str(e)}")
             raise TranscriptionError(f"Whisper文字起こしに失敗しました: {str(e)}")
     
-    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model='large-v3',
+    def _perform_whisper_segmented_transcription(self, audio_path, update_status, whisper_model=DEFAULT_WHISPER_MODEL,
                                                 cached_segments=None, progress_callback=None,
                                                 cleanup_segments=True):
         """Whisperを使用した分割ファイルの文字起こし"""
@@ -1698,7 +1702,7 @@ class FileProcessor:
         return response_text
 
     def _perform_additional_processing(self, transcription, process_type, prompts, api_key, update_status,
-                                       preferred_model=None, additional_processing_engine='ollama',
+                                       preferred_model=None, additional_processing_engine=DEFAULT_ADDITIONAL_PROCESSING_ENGINE,
                                        ollama_model=OLLAMA_DEFAULT_MODEL):
         """追加処理（要約、議事録作成など）"""
         if process_type == "transcription":
@@ -2072,7 +2076,7 @@ class FileProcessor:
         return result_path
     
     def process_transcription_file(self, transcription_file, prompt_key, api_key, prompts, status_callback=None,
-                                   additional_processing_engine='ollama',
+                                   additional_processing_engine=DEFAULT_ADDITIONAL_PROCESSING_ENGINE,
                                    ollama_model=OLLAMA_DEFAULT_MODEL):
         """文字起こしファイルの追加処理を実行"""
         start_time = datetime.datetime.now()

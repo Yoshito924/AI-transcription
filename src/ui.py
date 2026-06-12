@@ -22,7 +22,11 @@ from .constants import (
     DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
     DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
     OLLAMA_DEFAULT_MODEL,
-    OLLAMA_MODEL_SUGGESTIONS
+    OLLAMA_MODEL_SUGGESTIONS,
+    DEFAULT_TRANSCRIPTION_ENGINE,
+    DEFAULT_WHISPER_MODEL,
+    DEFAULT_TITLE_GENERATION_ENGINE,
+    DEFAULT_ADDITIONAL_PROCESSING_ENGINE
 )
 from .logger import logger
 
@@ -629,9 +633,9 @@ def create_file_section(parent, app, theme, widgets):
     engine_desc.pack(anchor='w', fill=tk.X, pady=(2, 4))
     _bind_dynamic_wraplength(engine_desc, 24)
 
-    saved_engine = app.config.get("transcription_engine", "whisper")
+    saved_engine = app.config.get("transcription_engine", DEFAULT_TRANSCRIPTION_ENGINE)
     if saved_engine not in ("gemini", "whisper", "whisper-api"):
-        saved_engine = "whisper"
+        saved_engine = DEFAULT_TRANSCRIPTION_ENGINE
     engine_var = tk.StringVar(value=saved_engine)
 
     engine_row = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
@@ -664,7 +668,7 @@ def create_file_section(parent, app, theme, widgets):
     }
     display_to_model = {v: k for k, v in model_display_names.items()}
 
-    saved_whisper_model = 'large-v3'
+    saved_whisper_model = DEFAULT_WHISPER_MODEL
 
     # 選択肢が large-v3 のみのため、ドロップダウンは廃止して固定表示にする
     whisper_model_var = tk.StringVar(
@@ -810,9 +814,9 @@ def create_file_section(parent, app, theme, widgets):
     additional_engine_desc.pack(anchor='w', fill=tk.X, pady=(2, 4))
     _bind_dynamic_wraplength(additional_engine_desc, 24)
 
-    saved_additional_engine = app.config.get("additional_processing_engine", "ollama")
+    saved_additional_engine = app.config.get("additional_processing_engine", DEFAULT_ADDITIONAL_PROCESSING_ENGINE)
     if saved_additional_engine not in ("gemini", "ollama"):
-        saved_additional_engine = "ollama"
+        saved_additional_engine = DEFAULT_ADDITIONAL_PROCESSING_ENGINE
     additional_engine_var = tk.StringVar(value=saved_additional_engine)
 
     additional_engine_row = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
@@ -858,7 +862,7 @@ def create_file_section(parent, app, theme, widgets):
     }
     title_engine_display_to_mode = {v: k for k, v in title_engine_display_names.items()}
 
-    saved_title_engine = app.config.get("title_generation_engine", "ollama")
+    saved_title_engine = app.config.get("title_generation_engine", DEFAULT_TITLE_GENERATION_ENGINE)
     title_engine_var = tk.StringVar(
         value=title_engine_display_names.get(saved_title_engine, title_engine_display_names['ollama'])
     )

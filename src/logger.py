@@ -18,11 +18,14 @@ def setup_logger(name, log_dir='logs'):
     # ロガーの設定
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
-    
-    # 既存のハンドラーをクリア
-    if logger.hasHandlers():
-        logger.handlers.clear()
-    
+    # ルートロガーへの伝播を止め、二重出力を防ぐ
+    logger.propagate = False
+
+    # すでにハンドラーが登録済みなら再登録せずそのまま返す
+    # （複数回 setup_logger が呼ばれてもハンドラーが増殖しない）
+    if logger.handlers:
+        return logger
+
     # ファイルハンドラー（詳細ログ）
     file_handler = logging.FileHandler(log_filename, encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)

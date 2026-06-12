@@ -717,8 +717,9 @@ class TranscriptionApp:
         self._stop_playback_poll_loop()
         self._stop_recording_timer()
         self._stop_recording_visual_loop()
-        self.audio_recorder.stop_monitoring()
-        
+        # 録音スレッド・モニター・ファイルハンドルをまとめて解放
+        self.audio_recorder.close()
+
         # アプリケーションを終了
         self.root.destroy()
         try:

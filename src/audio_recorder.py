@@ -348,6 +348,45 @@ class MicrophoneRecorder:
         self._clear_handles(keep_file_path=False)
         return result
 
+    def close(self):
+        """録音・モニターを停止し、スレッドとファイルハンドルを確実に解放する
+
+        アプリ終了時に呼び出してリソースリークを防ぐ。録音中であれば
+        書き込みスレッドの完了を待ってから WAV ハンドルを閉じる。
+        """
+        # 録音中ならストリームを止めて書き込みスレッドを終了させる
+        if self.is_recording:
+            self._stop_event.set()
+            if self._stream is not None:
+                try:
+                    self._stream.stop()
+                    self._stream.close()
+                except Exception as exc:
+                    logger.warning(f"終了時の録音ストリーム停止で警告: {exc}")
+                finally:
+                    self._stream = None
+            if self._writer_thread is not None:
+                # writer ループの finally で WAV ハンドルがクローズされるのを待つ
+                self._writer_done_event.wait(timeout=5)
+                if self._writer_thread.is_alive():
+                    self._writer_thread.join(timeout=5)
+                self._writer_thread = None
+            self.is_recording = False
+            self.started_at = None
+
+        # 待機中モニターを停止
+        self.stop_monitoring()
+
+        # 取りこぼした WAV ハンドルがあれば閉じる
+        if self._wave_handle is not None:
+            try:
+                self._wave_handle.close()
+            except Exception:
+                pass
+            self._wave_handle = None
+
+        self._clear_handles(keep_file_path=False)
+
     def _resolve_input_settings(self):
         """既定入力デバイスの安全な録音設定を解決する"""
         try:

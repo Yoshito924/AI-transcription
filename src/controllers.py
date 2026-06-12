@@ -19,7 +19,8 @@ from .constants import (
     TOKEN_ESTIMATION_FACTOR,
     OUTPUT_TOKEN_RATIO,
     SUPPORTED_AUDIO_FORMATS,
-    OPENAI_BILLING_OVERVIEW_URL
+    OPENAI_BILLING_OVERVIEW_URL,
+    DEFAULT_ADDITIONAL_PROCESSING_ENGINE
 )
 from .exceptions import (
     TranscriptionError,
@@ -427,7 +428,7 @@ class TranscriptionController:
             if additional_engine_var:
                 additional_processing_engine = additional_engine_var.get() or 'ollama'
             else:
-                additional_processing_engine = self.config.get("additional_processing_engine", "ollama")
+                additional_processing_engine = self.config.get("additional_processing_engine", DEFAULT_ADDITIONAL_PROCESSING_ENGINE)
             if additional_processing_engine not in ('gemini', 'ollama'):
                 additional_processing_engine = 'ollama'
 

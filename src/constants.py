@@ -107,6 +107,13 @@ TITLE_GENERATION_MAX_TOKENS = 100
 MIN_TRANSCRIPTION_LENGTH_FOR_SAVE = 100
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_DEFAULT_MODEL = "gemma4:e4b"
+
+# エンジン・モデルの既定値（ローカルLLM優先方針）
+# config.py の defaults と、各モジュールのデフォルト引数のフォールバックで共有する
+DEFAULT_TRANSCRIPTION_ENGINE = "whisper"          # "gemini" / "whisper" / "whisper-api"
+DEFAULT_WHISPER_MODEL = "large-v3"                # Whisper の既定モデル
+DEFAULT_TITLE_GENERATION_ENGINE = "ollama"        # "ollama" / "auto" / "gemini" / "disabled"
+DEFAULT_ADDITIONAL_PROCESSING_ENGINE = "ollama"   # "gemini" / "ollama"
 OLLAMA_MODEL_SUGGESTIONS = [
     "gemma4:e4b",
     "gemma4:26b",
