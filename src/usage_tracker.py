@@ -10,18 +10,41 @@ import os
 import datetime
 from typing import Dict, List, Optional
 
+from .constants import DEFAULT_GEMINI_MODEL
 from .logger import logger
 
 
 class UsageTracker:
     """使用量と料金の追跡クラス"""
     
-    # Gemini API料金（2026年2月時点）
+    # Gemini API料金（2026年8月時点）
     # 注意: 音声入力（文字起こし用途）の料金を使用。テキスト入力より高い場合あり。
     # 参考: https://ai.google.dev/gemini-api/docs/pricing?hl=ja
-    # 注意: gemini-2.5-flashはプロンプトサイズ（200Kトークン）で料金が変わるが、
-    # ここでは標準料金（200Kトークン以下）を使用
     PRICING = {
+        'gemini-3.7-flash': {
+            'input_per_1k': 0.001,       # $1.00 per 1M tokens（音声入力概算）
+            'output_per_1k': 0.003,      # $3.00 per 1M tokens
+        },
+        'gemini-3.6-flash': {
+            'input_per_1k': 0.001,
+            'output_per_1k': 0.003,
+        },
+        'gemini-3.5-flash': {
+            'input_per_1k': 0.001,
+            'output_per_1k': 0.003,
+        },
+        'gemini-3.5-flash-lite': {
+            'input_per_1k': 0.0005,      # $0.50 per 1M tokens（音声入力概算）
+            'output_per_1k': 0.0015,     # $1.50 per 1M tokens
+        },
+        'gemini-3.1-flash-lite': {
+            'input_per_1k': 0.0005,
+            'output_per_1k': 0.0015,
+        },
+        'gemini-3-flash': {
+            'input_per_1k': 0.001,
+            'output_per_1k': 0.003,
+        },
         'gemini-2.5-flash': {
             'input_per_1k': 0.001,       # $1.00 per 1M tokens（音声入力）= $0.001 per 1K tokens
             'output_per_1k': 0.0025,     # $2.50 per 1M tokens = $0.0025 per 1K tokens
@@ -31,11 +54,11 @@ class UsageTracker:
             'output_per_1k': 0.0004,     # $0.40 per 1M tokens = $0.0004 per 1K tokens
         },
         'gemini-2.0-flash-lite': {
-            'input_per_1k': 0.000075,    # $0.075 per 1M tokens
+            'input_per_1k': 0.000075,    # $0.075 per 1M tokens（過去ログ用）
             'output_per_1k': 0.0003,     # $0.30 per 1M tokens = $0.0003 per 1K tokens
         },
         'gemini-2.0-flash': {
-            'input_per_1k': 0.0007,      # $0.70 per 1M tokens（音声入力）= $0.0007 per 1K tokens
+            'input_per_1k': 0.0007,      # $0.70 per 1M tokens（過去ログ用）
             'output_per_1k': 0.0004,     # $0.40 per 1M tokens = $0.0004 per 1K tokens
         },
         'gemini-1.5-flash': {
@@ -123,8 +146,8 @@ class UsageTracker:
         model_key = self._normalize_model_name(model)
         
         if model_key not in self.PRICING:
-            # 不明なモデルの場合は推奨モデルの料金を使用
-            model_key = 'gemini-2.5-flash'
+            # 不明なモデルの場合は現行既定の料金を使用
+            model_key = DEFAULT_GEMINI_MODEL
         
         pricing = self.PRICING[model_key]
         input_cost = (input_tokens / 1000) * pricing['input_per_1k']
@@ -136,12 +159,28 @@ class UsageTracker:
         """モデル名を正規化"""
         model_lower = model.lower()
         
-        # 2.5系を優先的に判定
+        # 3.x 系を優先的に判定
+        if '3.7' in model_lower and 'flash' in model_lower:
+            return 'gemini-3.7-flash'
+        if '3.6' in model_lower and 'flash' in model_lower:
+            return 'gemini-3.6-flash'
+        if '3.5' in model_lower and 'flash' in model_lower:
+            if 'lite' in model_lower:
+                return 'gemini-3.5-flash-lite'
+            return 'gemini-3.5-flash'
+        if '3.1' in model_lower and 'flash' in model_lower and 'lite' in model_lower:
+            return 'gemini-3.1-flash-lite'
+        if model_lower.startswith('gemini-3') and 'flash' in model_lower:
+            if 'lite' in model_lower:
+                return 'gemini-3.5-flash-lite'
+            return 'gemini-3-flash'
+
+        # 2.5系
         if '2.5' in model_lower and 'flash' in model_lower:
             if 'lite' in model_lower:
                 return 'gemini-2.5-flash-lite'
             else:
-                return 'gemini-2.5-flash'  # デフォルト（2025年11月推奨）
+                return 'gemini-2.5-flash'
         elif '2.0' in model_lower and 'flash' in model_lower:
             if 'lite' in model_lower:
                 return 'gemini-2.0-flash-lite'
@@ -154,10 +193,9 @@ class UsageTracker:
         elif '1.0' in model_lower and 'pro' in model_lower:
             return 'gemini-1.0-pro'
         elif 'flash' in model_lower:
-            # バージョン不明のFlash系は2.5-flashをデフォルトとする
-            return 'gemini-2.5-flash'
+            return DEFAULT_GEMINI_MODEL
         else:
-            return 'gemini-2.5-flash'  # デフォルト（2025年11月推奨）
+            return DEFAULT_GEMINI_MODEL
     
     def get_current_month_usage(self) -> Dict:
         """今月の使用量を取得"""

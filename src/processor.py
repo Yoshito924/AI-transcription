@@ -32,6 +32,8 @@ from .constants import (
     OLLAMA_DEFAULT_MODEL,
     DEFAULT_TRANSCRIPTION_ENGINE,
     DEFAULT_WHISPER_MODEL,
+    DEFAULT_WHISPER_API_MODEL,
+    DEFAULT_GEMINI_MODEL,
     DEFAULT_TITLE_GENERATION_ENGINE,
     DEFAULT_ADDITIONAL_PROCESSING_ENGINE
 )
@@ -328,9 +330,9 @@ class FileProcessor:
                 if engine == 'whisper':
                     model_for_eta = whisper_model
                 elif engine == 'whisper-api':
-                    model_for_eta = whisper_api_model or 'gpt-4o-mini-transcribe'
+                    model_for_eta = whisper_api_model or DEFAULT_WHISPER_API_MODEL
                 else:
-                    model_for_eta = preferred_model or 'gemini-2.5-flash'
+                    model_for_eta = preferred_model or DEFAULT_GEMINI_MODEL
                 estimate = time_tracker.estimate(engine, model_for_eta, self.last_audio_duration_sec)
                 eta_msg = time_tracker.format_estimate(estimate)
                 if eta_msg:
@@ -399,8 +401,12 @@ class FileProcessor:
                     if gemini_api_key:
                         update_status("要約タイトルを生成中（Gemini）...")
                         summary_title = self.generate_summary_title(final_text, gemini_api_key)
+                        if not summary_title:
+                            update_status("Geminiでタイトル生成できなかったため、Ollamaで再試行します...")
+                            summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
                     else:
-                        update_status("Gemini APIキーが未設定のためタイトル生成をスキップしました")
+                        update_status("Gemini APIキーが未設定のため、Ollamaでタイトル生成します...")
+                        summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
                 elif title_generation_engine == 'ollama':
                     update_status("要約タイトルを生成中（Ollama）...")
                     summary_title = self.generate_summary_title_ollama(final_text, model=ollama_model)
@@ -955,7 +961,7 @@ class FileProcessor:
             self.whisper_api_service = WhisperApiService(api_key=api_key, model=whisper_api_model)
 
         # モデル名を記録
-        active_model = getattr(self.whisper_api_service, 'model', None) or whisper_api_model or 'gpt-4o-mini-transcribe'
+        active_model = getattr(self.whisper_api_service, 'model', None) or whisper_api_model or DEFAULT_WHISPER_API_MODEL
         self.last_transcription_model_name = active_model
         update_status(f"使用モデル: {active_model}")
 
@@ -1447,7 +1453,7 @@ class FileProcessor:
         elif 'audio input modality is not enabled' in error_str or 'audio input is not supported' in error_str:
             error_category = "モデル非対応"
             error_detail = "選択されたモデルは音声入力に対応していません"
-            solution = "別のモデルを選択してください。Flash系モデル（gemini-2.5-flash等）の使用を推奨します。"
+            solution = f"別のモデルを選択してください。Flash系モデル（{DEFAULT_GEMINI_MODEL}等）の使用を推奨します。"
         elif (
             (isinstance(exception, ApiConnectionError) and exception.error_code == "INSUFFICIENT_CREDIT")
             or 'insufficient_quota' in error_str

@@ -8,9 +8,24 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.config import Config
-from src.constants import OLLAMA_DEFAULT_MODEL
+from src.constants import (
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_WHISPER_API_MODEL,
+    DEFAULT_WHISPER_MODEL,
+    OLLAMA_DEFAULT_MODEL,
+    PREFERRED_MODELS,
+    TITLE_GENERATION_MODELS,
+    WHISPER_MODEL_DISPLAY_NAMES,
+)
 from src.processor import FileProcessor
-from src.utils import get_engine_value, get_whisper_model_value, get_ollama_model_value
+from src.utils import (
+    get_engine_value,
+    get_ollama_model_value,
+    get_whisper_api_model_value,
+    get_whisper_model_value,
+    resolve_whisper_model_name,
+)
+from src.whisper_api_service import WhisperApiService
 from src.whisper_service import WhisperService
 
 
@@ -25,19 +40,37 @@ class WhisperDefaultTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
-    def test_config_default_whisper_model_is_large_v3(self):
+    def test_config_default_whisper_model_is_large_v3_turbo(self):
         tmpdir = tempfile.mkdtemp(dir=os.getcwd())
         try:
             config = Config(tmpdir)
-            self.assertEqual(config.get("whisper_model"), "large-v3")
+            self.assertEqual(config.get("whisper_model"), "large-v3-turbo")
+            self.assertEqual(config.get("whisper_api_model"), "gpt-transcribe")
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     def test_engine_helper_defaults_to_whisper(self):
         self.assertEqual(get_engine_value({}), "whisper")
 
-    def test_whisper_model_helper_defaults_to_large_v3(self):
-        self.assertEqual(get_whisper_model_value({}), "large-v3")
+    def test_whisper_model_helper_defaults_to_large_v3_turbo(self):
+        self.assertEqual(get_whisper_model_value({}), "large-v3-turbo")
+        self.assertEqual(get_whisper_api_model_value({}), "gpt-transcribe")
+
+    def test_whisper_model_helper_reads_display_name(self):
+        class Var:
+            def get(self):
+                return WHISPER_MODEL_DISPLAY_NAMES['large-v3']
+
+        self.assertEqual(
+            get_whisper_model_value({'whisper_model_var': Var()}),
+            'large-v3'
+        )
+
+    def test_resolve_whisper_model_aliases(self):
+        self.assertEqual(resolve_whisper_model_name("turbo"), "large-v3-turbo")
+        self.assertEqual(resolve_whisper_model_name("large"), "large-v3")
+        self.assertEqual(resolve_whisper_model_name("large-v3"), "large-v3")
+        self.assertEqual(resolve_whisper_model_name("unknown"), DEFAULT_WHISPER_MODEL)
 
     def test_config_default_ollama_model_is_gemma4_e4b(self):
         tmpdir = tempfile.mkdtemp(dir=os.getcwd())
@@ -50,14 +83,14 @@ class WhisperDefaultTests(unittest.TestCase):
     def test_ollama_model_helper_defaults_to_gemma4_e4b(self):
         self.assertEqual(get_ollama_model_value({}), OLLAMA_DEFAULT_MODEL)
 
-    def test_processing_entrypoints_default_to_large_v3(self):
+    def test_processing_entrypoints_default_to_turbo(self):
         self.assertEqual(
             inspect.signature(FileProcessor.process_file).parameters["engine"].default,
             "whisper"
         )
         self.assertEqual(
             inspect.signature(FileProcessor.process_file).parameters["whisper_model"].default,
-            "large-v3"
+            "large-v3-turbo"
         )
         self.assertEqual(
             inspect.signature(FileProcessor.process_file).parameters["title_generation_engine"].default,
@@ -69,13 +102,24 @@ class WhisperDefaultTests(unittest.TestCase):
         )
         self.assertEqual(
             inspect.signature(WhisperService.load_model).parameters["model_name"].default,
-            "large-v3"
+            "large-v3-turbo"
         )
         self.assertEqual(
             inspect.signature(WhisperService.transcribe).parameters["model_name"].default,
-            "large-v3"
+            "large-v3-turbo"
         )
         self.assertEqual(
             inspect.signature(FileProcessor.generate_summary_title_ollama).parameters["model"].default,
             OLLAMA_DEFAULT_MODEL
         )
+
+    def test_gemini_preferred_models_are_current(self):
+        self.assertEqual(PREFERRED_MODELS[0], DEFAULT_GEMINI_MODEL)
+        self.assertTrue(any(name.startswith("gemini-3.") for name in PREFERRED_MODELS))
+        self.assertFalse(any(name.startswith("gemini-2.0") for name in PREFERRED_MODELS))
+        self.assertFalse(any(name.startswith("gemini-2.0") for name in TITLE_GENERATION_MODELS))
+
+    def test_openai_default_is_gpt_transcribe(self):
+        self.assertEqual(WhisperApiService.DEFAULT_MODEL, DEFAULT_WHISPER_API_MODEL)
+        self.assertEqual(DEFAULT_WHISPER_API_MODEL, "gpt-transcribe")
+        self.assertIn("gpt-transcribe", WhisperApiService.SUPPORTED_MODELS)

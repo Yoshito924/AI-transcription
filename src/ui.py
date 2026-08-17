@@ -11,9 +11,11 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 
 from .ui_styles import ModernTheme, ModernWidgets, ICONS
+from .ui_recording import create_recording_section
 from .waveform_viewer import WaveformViewer
 from .whisper_api_service import WhisperApiService
-from .engines import ENGINES
+from .engines import ENGINES, get_engine_spec
+from .utils import resolve_whisper_model_name
 from .constants import (
     DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
@@ -26,8 +28,14 @@ from .constants import (
     OLLAMA_MODEL_SUGGESTIONS,
     DEFAULT_TRANSCRIPTION_ENGINE,
     DEFAULT_WHISPER_MODEL,
+    DEFAULT_GEMINI_MODEL,
     DEFAULT_TITLE_GENERATION_ENGINE,
-    DEFAULT_ADDITIONAL_PROCESSING_ENGINE
+    DEFAULT_ADDITIONAL_PROCESSING_ENGINE,
+    WHISPER_MODEL_DISPLAY_NAMES,
+    WHISPER_MODEL_DETAILS,
+    DEFAULT_PANE_FRACTIONS,
+    PANE_FRACTION_MIN,
+    PANE_FRACTION_MAX,
 )
 from .logger import logger
 
@@ -41,6 +49,171 @@ def _bind_dynamic_wraplength(label, padding=0):
         if w > 1:
             label.config(wraplength=max(100, w - padding * 2 - 10))
     label.bind('<Configure>', _update)
+
+
+def _pack_choice_grid(parent, items, variable, columns=2):
+    """ラジオボタンを2列グリッドで並べ、狭い幅でもはみ出しにくくする"""
+    bg = parent.cget('bg')
+    row = tk.Frame(parent, bg=bg)
+    row.pack(fill=tk.X, pady=(6, 8))
+    for index, (text, value) in enumerate(items):
+        r, c = divmod(index, columns)
+        ttk.Radiobutton(
+            row, text=text,
+            variable=variable, value=value,
+            style='Modern.TRadiobutton'
+        ).grid(row=r, column=c, sticky='w', padx=(0, 16), pady=(0, 4))
+        row.grid_columnconfigure(c, weight=1)
+    return row
+
+
+def _clamp_pane_fraction(value, default):
+    """保存された分割比率を 0.18〜0.82 に収める"""
+    try:
+        fraction = float(value)
+    except (TypeError, ValueError):
+        fraction = default
+    return max(PANE_FRACTION_MIN, min(PANE_FRACTION_MAX, fraction))
+
+
+def _create_split_paned(parent, theme, orient=tk.HORIZONTAL):
+    """ドラッグしやすい分割バー付き PanedWindow を作る"""
+    horizontal = orient == tk.HORIZONTAL
+    return tk.PanedWindow(
+        parent,
+        orient=orient,
+        bg=theme.colors['text_disabled'],
+        sashwidth=10 if horizontal else 8,
+        sashrelief='flat',
+        sashpad=0,
+        showhandle=False,
+        opaqueresize=True,
+        bd=0,
+    )
+
+
+def _paned_sash_fraction(paned, orient):
+    try:
+        paned.update_idletasks()
+        sash_x, sash_y = paned.sash_coord(0)
+    except tk.TclError:
+        return None
+    total = paned.winfo_width() if orient == tk.HORIZONTAL else paned.winfo_height()
+    if total <= 1:
+        return None
+    position = sash_x if orient == tk.HORIZONTAL else sash_y
+    return position / total
+
+
+def _place_paned_sash(paned, fraction, orient, min_total=10):
+    try:
+        paned.update_idletasks()
+        paned.sash_coord(0)
+    except tk.TclError:
+        return False
+    total = paned.winfo_width() if orient == tk.HORIZONTAL else paned.winfo_height()
+    if total <= min_total:
+        return False
+    position = int(total * fraction)
+    try:
+        if orient == tk.HORIZONTAL:
+            paned.sash_place(0, position, 0)
+        else:
+            paned.sash_place(0, 0, position)
+    except tk.TclError:
+        return False
+    return True
+
+
+def _forget_paned_panes(paned, *panes):
+    for pane in panes:
+        try:
+            paned.forget(pane)
+        except tk.TclError:
+            pass
+
+
+def _bind_pane_fraction(
+    app, paned, config_key, default, orient=tk.HORIZONTAL, restore_every_map=False
+):
+    """分割位置を復元し、ドラッグ後に保存する"""
+    restored = {'done': False}
+
+    def _persist(_event=None):
+        fraction = _paned_sash_fraction(paned, orient)
+        if fraction is None:
+            return
+        app.config.set(config_key, round(_clamp_pane_fraction(fraction, default), 4))
+
+    def _restore(_event=None):
+        if restored['done'] and not restore_every_map:
+            return
+        fraction = _clamp_pane_fraction(app.config.get(config_key, default), default)
+        min_total = 200 if orient == tk.HORIZONTAL else 120
+
+        def _try_place(retries=8):
+            if _place_paned_sash(paned, fraction, orient, min_total=min_total):
+                restored['done'] = True
+                return
+            if retries > 0:
+                paned.after(50, lambda: _try_place(retries - 1))
+
+        paned.after_idle(_try_place)
+
+    paned.bind('<Map>', _restore, add='+')
+    paned.bind('<ButtonRelease-1>', _persist, add='+')
+    return _persist
+
+
+def _setup_responsive_h_split(
+    app,
+    theme,
+    strip,
+    left,
+    right,
+    config_key,
+    pane_persisters,
+    threshold,
+    minsize_left=220,
+    minsize_right=200,
+):
+    """広いときはドラッグ可能な左右分割、狭いときは縦積みにする"""
+    default = DEFAULT_PANE_FRACTIONS[config_key]
+    paned = _create_split_paned(strip, theme)
+    persist = _bind_pane_fraction(
+        app, paned, config_key, default, restore_every_map=True
+    )
+    pane_persisters.append(persist)
+    state = {'is_horizontal': None}
+
+    def _relayout(_event=None):
+        width = strip.winfo_width()
+        if width <= 1:
+            return
+        want_horizontal = width >= threshold
+        if state['is_horizontal'] == want_horizontal:
+            return
+        if state['is_horizontal']:
+            persist()
+        state['is_horizontal'] = want_horizontal
+
+        left.pack_forget()
+        right.pack_forget()
+        _forget_paned_panes(paned, left, right)
+        paned.pack_forget()
+
+        if want_horizontal:
+            paned.pack(fill=tk.BOTH, expand=True)
+            paned.add(left, minsize=minsize_left, stretch='always')
+            paned.add(right, minsize=minsize_right, stretch='always')
+            fraction = _clamp_pane_fraction(app.config.get(config_key, default), default)
+            paned.after_idle(lambda: _place_paned_sash(paned, fraction, tk.HORIZONTAL))
+        else:
+            left.pack(fill=tk.X, pady=(0, 6))
+            right.pack(fill=tk.X, pady=(6, 0))
+
+    strip.bind('<Configure>', _relayout)
+    return persist
 
 
 def _create_scrollable_frame(parent, bg):
@@ -128,21 +301,21 @@ def setup_ui(app):
     main_container = tk.Frame(root, bg=theme.colors['background'])
     main_container.pack(fill=tk.BOTH, expand=True, padx=MAIN_PADDING_X, pady=MAIN_PADDING_Y)
 
+    pane_persisters = []
+
     # === 全体: 左右をドラッグで調整できる横PanedWindow ===
-    main_paned = tk.PanedWindow(
-        main_container, orient=tk.HORIZONTAL,
-        bg=theme.colors['background'],
-        sashwidth=8, sashrelief='flat',
-        showhandle=True, handlesize=10, handlepad=6,
-        opaqueresize=True
-    )
+    main_paned = _create_split_paned(main_container, theme, orient=tk.HORIZONTAL)
     main_paned.pack(fill=tk.BOTH, expand=True)
 
     work_pane = tk.Frame(main_paned, bg=theme.colors['background'])
     side_pane = tk.Frame(main_paned, bg=theme.colors['background'])
 
-    main_paned.add(work_pane, minsize=480)
-    main_paned.add(side_pane, minsize=280)
+    main_paned.add(work_pane, minsize=480, stretch='always')
+    main_paned.add(side_pane, minsize=280, stretch='never')
+    pane_persisters.append(_bind_pane_fraction(
+        app, main_paned, 'pane_main_fraction',
+        DEFAULT_PANE_FRACTIONS['pane_main_fraction']
+    ))
 
     # === 左側: 作業タブ（折りたたみ可能） ===
     accordion_state = {'expanded': True}
@@ -193,7 +366,9 @@ def setup_ui(app):
         file_tab, theme.colors['surface']
     )
     file_scroll_outer.pack(fill=tk.BOTH, expand=True)
-    file_section = create_file_section(file_scroll_inner, app, theme, widgets)
+    file_section = create_file_section(
+        file_scroll_inner, app, theme, widgets, pane_persisters
+    )
     file_section.pack(fill=tk.X)
 
     # タブ2: 録音（スクロール可能）
@@ -204,7 +379,9 @@ def setup_ui(app):
         recording_tab, theme.colors['surface']
     )
     recording_scroll_outer.pack(fill=tk.BOTH, expand=True)
-    recording_section = create_recording_section(recording_scroll_inner, app, theme, widgets)
+    recording_section = create_recording_section(
+        recording_scroll_inner, app, theme, widgets, pane_persisters
+    )
     recording_section.pack(fill=tk.X)
 
     # タブ3: API設定・使用量（スクロール可能 + レスポンシブ横並び/縦積み切替）
@@ -219,30 +396,11 @@ def setup_ui(app):
     settings_content.pack(fill=tk.X, padx=6, pady=6)
     api_section = create_api_section(settings_content, app, theme, widgets)
     usage_section = create_usage_section(settings_content, app, theme, widgets)
-
-    # 幅に応じて横並び/縦積みを切替
-    _settings_layout_state = {'is_horizontal': None}
-
-    def _relayout_settings(event=None):
-        w = settings_content.winfo_width()
-        threshold = 640
-        want_horizontal = w >= threshold
-
-        if _settings_layout_state['is_horizontal'] == want_horizontal:
-            return
-        _settings_layout_state['is_horizontal'] = want_horizontal
-
-        api_section.pack_forget()
-        usage_section.pack_forget()
-
-        if want_horizontal:
-            api_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-            usage_section.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(8, 0))
-        else:
-            api_section.pack(fill=tk.X, pady=(0, 8))
-            usage_section.pack(fill=tk.X, pady=(8, 0))
-
-    settings_content.bind('<Configure>', _relayout_settings)
+    _setup_responsive_h_split(
+        app, theme, settings_content, api_section, usage_section,
+        'pane_settings_fraction', pane_persisters, threshold=640,
+        minsize_left=280, minsize_right=240,
+    )
 
     def _save_current_tab(event=None):
         try:
@@ -252,6 +410,8 @@ def setup_ui(app):
         if 0 <= current_index < len(tab_keys):
             app.config.set("last_open_tab", tab_keys[current_index])
             app.config.save()
+            if tab_keys[current_index] == 'recording':
+                app.refresh_recent_recordings()
 
     saved_tab_key = app.config.get("last_open_tab", "file")
     if saved_tab_key in tab_keys:
@@ -289,43 +449,29 @@ def setup_ui(app):
     toggle_bar.bind('<Leave>', _toggle_leave)
 
     # === 右側: 処理履歴とログを上下に分割 ===
-    paned = tk.PanedWindow(
-        side_pane, orient=tk.VERTICAL,
-        bg=theme.colors['background'],
-        sashwidth=6, sashrelief='flat',
-        showhandle=True, handlesize=8, handlepad=4,
-        opaqueresize=True
-    )
+    paned = _create_split_paned(side_pane, theme, orient=tk.VERTICAL)
     paned.pack(fill=tk.BOTH, expand=True)
 
     history_section = create_history_section(paned, app, theme, widgets)
     paned.add(history_section, stretch='always', minsize=220)
 
     log_section = create_log_section(paned, app, theme, widgets)
-    paned.add(log_section, stretch='always', minsize=180)
-
-    # 右側PanedWindow の初期比率を設定
-    def _set_initial_side_sash(event=None):
-        paned.update_idletasks()
-        total_h = paned.winfo_height()
-        if total_h > 10:
-            paned.sash_place(0, 0, int(total_h * 0.58))
-            paned.unbind('<Map>')
-    paned.bind('<Map>', _set_initial_side_sash)
-
-    # 全体の左右比率を設定
-    def _set_initial_main_sash(event=None):
-        main_paned.update_idletasks()
-        total_w = main_paned.winfo_width()
-        if total_w > 10:
-            main_paned.sash_place(0, int(total_w * 0.70), 0)
-            main_paned.unbind('<Map>')
-    main_paned.bind('<Map>', _set_initial_main_sash)
+    paned.add(log_section, stretch='never', minsize=180)
+    pane_persisters.append(_bind_pane_fraction(
+        app, paned, 'pane_side_fraction',
+        DEFAULT_PANE_FRACTIONS['pane_side_fraction'],
+        orient=tk.VERTICAL
+    ))
 
     # UI要素を収集
     ui_elements = collect_ui_elements(
         api_section, file_section, recording_section, usage_section, history_section, log_section
     )
+    ui_elements['notebook'] = notebook
+    ui_elements['tab_keys'] = tab_keys
+    ui_elements['persist_pane_fractions'] = lambda: [
+        persist() for persist in pane_persisters
+    ]
 
     return ui_elements
 
@@ -348,7 +494,7 @@ def create_api_section(parent, app, theme, widgets):
 
     api_desc = tk.Label(
         card,
-        text="ローカル構成だけなら API キーは不要です。基本は Whisper で文字起こしし、要約やタイトルは Ollama でローカル処理します。Gemini や Whisper API を使うときだけ登録してください。",
+        text="ローカルだけで使うなら API キーは不要です。クラウドの Gemini や OpenAI を使うときだけ登録してください。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface'],
@@ -416,7 +562,7 @@ def create_api_section(parent, app, theme, widgets):
 
     tk.Label(
         openai_inner,
-        text="Whisper API（クラウド音声認識）でのみ使用",
+        text="OpenAI のクラウド文字起こしで使用",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
@@ -482,7 +628,7 @@ def create_api_section(parent, app, theme, widgets):
     return card
 
 
-def create_file_section(parent, app, theme, widgets):
+def create_file_section(parent, app, theme, widgets, pane_persisters=None):
     """ファイル入力セクション"""
     frame = widgets.create_card_frame(parent)
     pad = 12
@@ -490,16 +636,13 @@ def create_file_section(parent, app, theme, widgets):
     header_frame = tk.Frame(frame, bg=theme.colors['surface'])
     header_frame.pack(fill=tk.X, padx=pad, pady=(pad, 8))
 
-    widgets.create_section_header(header_frame, "作業フロー").pack(
+    widgets.create_section_header(header_frame, "文字起こし").pack(
         side=tk.LEFT, fill=tk.X, expand=True
     )
-    widgets.create_pill_label(
-        header_frame, "3ステップ", tone='success'
-    ).pack(side=tk.RIGHT)
 
     intro_label = tk.Label(
         frame,
-        text="既存ファイルの文字起こし用です。マイク録音は「録音」タブに分けています。",
+        text="音声や動画を追加して文字起こしします。その場で録る場合は「録音」タブへ。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface'],
@@ -508,63 +651,6 @@ def create_file_section(parent, app, theme, widgets):
     )
     intro_label.pack(fill=tk.X, padx=pad, pady=(0, 8))
     _bind_dynamic_wraplength(intro_label, pad)
-
-    step_strip = tk.Frame(frame, bg=theme.colors['surface'])
-    step_strip.pack(fill=tk.X, padx=pad, pady=(0, 8))
-    step_strip.grid_columnconfigure(0, weight=1)
-    step_strip.grid_columnconfigure(1, weight=1)
-    step_strip.grid_columnconfigure(2, weight=1)
-
-    def _create_step_card(parent_widget, title, body, accent):
-        card = tk.Frame(
-            parent_widget,
-            bg=theme.colors['surface_variant'],
-            highlightbackground=theme.colors['card_border'],
-            highlightthickness=1,
-            bd=0
-        )
-        stripe = tk.Frame(card, bg=accent, height=4)
-        stripe.pack(fill=tk.X)
-        body_frame = tk.Frame(card, bg=theme.colors['surface_variant'])
-        body_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
-        tk.Label(
-            body_frame,
-            text=title,
-            font=theme.fonts['caption_bold'],
-            fg=theme.colors['text_primary'],
-            bg=theme.colors['surface_variant']
-        ).pack(anchor='w')
-        text_label = tk.Label(
-            body_frame,
-            text=body,
-            font=theme.fonts['caption'],
-            fg=theme.colors['text_secondary'],
-            bg=theme.colors['surface_variant'],
-            justify='left',
-            anchor='w'
-        )
-        text_label.pack(fill=tk.X, pady=(6, 0))
-        _bind_dynamic_wraplength(text_label, 12)
-        return card
-
-    _create_step_card(
-        step_strip,
-        "1. ファイルを追加",
-        "音声や動画ファイルをドラッグ&ドロップ、または選択します。",
-        theme.colors['error']
-    ).grid(row=0, column=0, sticky='ew', padx=(0, 6))
-    _create_step_card(
-        step_strip,
-        "2. 処理条件を決める",
-        "エンジンと保存先だけ確認すれば実行できます。",
-        theme.colors['primary']
-    ).grid(row=0, column=1, sticky='ew', padx=6)
-    _create_step_card(
-        step_strip,
-        "3. 開始する",
-        "キューにたまったファイルをまとめて文字起こしします。",
-        theme.colors['warning']
-    ).grid(row=0, column=2, sticky='ew', padx=(6, 0))
 
     # （重複していたクイック操作ボタンは削除。ドロップ領域と最下部の実行ボタンに集約）
 
@@ -587,29 +673,11 @@ def create_file_section(parent, app, theme, widgets):
         bd=0
     )
 
-    # 幅に応じて横並び/縦積みを切替
-    _config_layout_state = {'is_horizontal': None}
-
-    def _relayout_config(event=None):
-        w = config_strip.winfo_width()
-        threshold = 540
-        want_horizontal = w >= threshold
-
-        if _config_layout_state['is_horizontal'] == want_horizontal:
-            return
-        _config_layout_state['is_horizontal'] = want_horizontal
-
-        left_panel.pack_forget()
-        right_panel.pack_forget()
-
-        if want_horizontal:
-            left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
-            right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
-        else:
-            left_panel.pack(fill=tk.X, pady=(0, 6))
-            right_panel.pack(fill=tk.X, pady=(6, 0))
-
-    config_strip.bind('<Configure>', _relayout_config)
+    _setup_responsive_h_split(
+        app, theme, config_strip, left_panel, right_panel,
+        'pane_file_config_fraction', pane_persisters or [],
+        threshold=540, minsize_left=220, minsize_right=200,
+    )
 
     left_inner = tk.Frame(left_panel, bg=theme.colors['surface_variant'])
     left_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
@@ -622,73 +690,62 @@ def create_file_section(parent, app, theme, widgets):
         bg=theme.colors['surface_variant']
     ).pack(anchor='w')
 
+    saved_engine = app.config.get("transcription_engine", DEFAULT_TRANSCRIPTION_ENGINE)
+    if saved_engine not in ("gemini", "whisper", "whisper-api"):
+        saved_engine = DEFAULT_TRANSCRIPTION_ENGINE
+    engine_var = tk.StringVar(value=saved_engine)
+
+    _pack_choice_grid(
+        left_inner,
+        [
+            (ENGINES['whisper'].choice_label, "whisper"),
+            (ENGINES['gemini'].choice_label, "gemini"),
+            (ENGINES['whisper-api'].choice_label, "whisper-api"),
+        ],
+        engine_var
+    )
+
     engine_desc = tk.Label(
         left_inner,
-        text="基本は Whisper のローカル文字起こしです。API キー不要で、そのまま使えます。Gemini / Whisper API はクラウド文字起こしが必要なときだけ選びます。",
+        text=get_engine_spec(saved_engine).help_text,
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant'],
         justify='left',
         anchor='w'
     )
-    engine_desc.pack(anchor='w', fill=tk.X, pady=(2, 4))
+    engine_desc.pack(anchor='w', fill=tk.X, pady=(0, 4))
     _bind_dynamic_wraplength(engine_desc, 24)
-
-    saved_engine = app.config.get("transcription_engine", DEFAULT_TRANSCRIPTION_ENGINE)
-    if saved_engine not in ("gemini", "whisper", "whisper-api"):
-        saved_engine = DEFAULT_TRANSCRIPTION_ENGINE
-    engine_var = tk.StringVar(value=saved_engine)
-
-    engine_row = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
-    engine_row.pack(fill=tk.X, pady=(6, 8))
-
-    for text, value in [
-        ("Whisper（ローカル）", "whisper"),
-        ("Gemini（クラウド）", "gemini"),
-        ("Whisper API（クラウド）", "whisper-api"),
-    ]:
-        ttk.Radiobutton(
-            engine_row, text=text,
-            variable=engine_var, value=value,
-            style='Modern.TRadiobutton'
-        ).pack(side=tk.LEFT, padx=(0, 12))
 
     # === Whisper (ローカル) 専用設定 ===
     whisper_local_panel = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
 
     tk.Label(
         whisper_local_panel,
-        text="Whisper モデル",
+        text="ローカルモデル",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
     ).pack(anchor='w', pady=(10, 0))
 
-    model_display_names = {
-        'large-v3': 'large-v3（最高精度）',
-    }
+    model_display_names = dict(WHISPER_MODEL_DISPLAY_NAMES)
     display_to_model = {v: k for k, v in model_display_names.items()}
+    model_details = dict(WHISPER_MODEL_DETAILS)
 
-    saved_whisper_model = DEFAULT_WHISPER_MODEL
-
-    # 選択肢が large-v3 のみのため、ドロップダウンは廃止して固定表示にする
+    saved_whisper_model = resolve_whisper_model_name(
+        app.config.get("whisper_model", DEFAULT_WHISPER_MODEL)
+    )
     whisper_model_var = tk.StringVar(
-        value=model_display_names.get(saved_whisper_model, model_display_names['large-v3'])
+        value=model_display_names.get(saved_whisper_model, model_display_names[DEFAULT_WHISPER_MODEL])
     )
-    whisper_model_combo = None  # 後方互換: 旧コードからの参照用に残す
-
-    model_details = {
-        'large-v3': '1.5GB | 最高精度',
-    }
-
-    whisper_model_value = tk.Label(
+    whisper_model_combo = ttk.Combobox(
         whisper_local_panel,
-        text=model_display_names.get(saved_whisper_model, ''),
-        font=theme.fonts['body_bold'],
-        fg=theme.colors['text_primary'],
-        bg=theme.colors['surface_variant']
+        textvariable=whisper_model_var,
+        values=list(model_display_names.values()),
+        state='readonly',
+        style='Modern.TCombobox'
     )
-    whisper_model_value.pack(anchor='w', pady=(6, 0))
+    whisper_model_combo.pack(fill=tk.X, pady=(6, 0))
 
     whisper_model_info = tk.Label(
         whisper_local_panel,
@@ -704,7 +761,7 @@ def create_file_section(parent, app, theme, widgets):
 
     whisper_api_model_label = tk.Label(
         whisper_api_panel,
-        text="Whisper API モデル",
+        text="OpenAI モデル",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
@@ -732,9 +789,7 @@ def create_file_section(parent, app, theme, widgets):
     )
     whisper_api_model_combo.pack(fill=tk.X, pady=(6, 0))
 
-    whisper_api_pricing_text = {
-        k: f"${v}/分" for k, v in WhisperApiService.MODEL_PRICING.items()
-    }
+    whisper_api_pricing_text = dict(WhisperApiService.MODEL_HINTS)
     whisper_api_model_info = tk.Label(
         whisper_api_panel,
         text=whisper_api_pricing_text.get(saved_whisper_api_model, ''),
@@ -747,14 +802,26 @@ def create_file_section(parent, app, theme, widgets):
     # === Gemini 専用設定（ブロック時の動作） ===
     gemini_recovery_panel = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
 
+    gemini_intro = tk.Label(
+        gemini_recovery_panel,
+        text=f"モデルは {DEFAULT_GEMINI_MODEL.replace('gemini-', '').replace('-flash', ' Flash')} を優先して自動選択します。",
+        font=theme.fonts['caption'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface_variant'],
+        justify='left',
+        anchor='w'
+    )
+    gemini_intro.pack(anchor='w', fill=tk.X, pady=(10, 0))
+    _bind_dynamic_wraplength(gemini_intro, 24)
+
     gemini_recovery_label = tk.Label(
         gemini_recovery_panel,
-        text="Gemini ブロック時の動作",
+        text="弾かれたときの動作",
         font=theme.fonts['caption_bold'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant']
     )
-    gemini_recovery_label.pack(anchor='w', pady=(10, 0))
+    gemini_recovery_label.pack(anchor='w', pady=(8, 0))
 
     gemini_recovery_display_names = {
         'segment-whisper': '分割再試行 + ブロック区間をWhisperで補完（推奨）',
@@ -805,7 +872,7 @@ def create_file_section(parent, app, theme, widgets):
 
     additional_engine_desc = tk.Label(
         left_inner,
-        text="要約や議事録も基本は Ollama のローカル LLM を使います。Gemini API はクラウド処理が必要なときだけ選びます。",
+        text="文字起こし後の要約・議事録です。通常は Ollama、クラウドに出すときだけ Gemini です。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant'],
@@ -820,18 +887,14 @@ def create_file_section(parent, app, theme, widgets):
         saved_additional_engine = DEFAULT_ADDITIONAL_PROCESSING_ENGINE
     additional_engine_var = tk.StringVar(value=saved_additional_engine)
 
-    additional_engine_row = tk.Frame(left_inner, bg=theme.colors['surface_variant'])
-    additional_engine_row.pack(fill=tk.X, pady=(2, 8))
-
-    for text, value in [
-        ("Ollama（ローカルLLM）", "ollama"),
-        ("Gemini API（クラウド）", "gemini"),
-    ]:
-        ttk.Radiobutton(
-            additional_engine_row, text=text,
-            variable=additional_engine_var, value=value,
-            style='Modern.TRadiobutton'
-        ).pack(side=tk.LEFT, padx=(0, 12))
+    _pack_choice_grid(
+        left_inner,
+        [
+            ("Ollama", "ollama"),
+            ("Gemini", "gemini"),
+        ],
+        additional_engine_var
+    )
 
     # タイトル生成エンジン選択
     title_engine_label = tk.Label(
@@ -845,7 +908,7 @@ def create_file_section(parent, app, theme, widgets):
 
     title_engine_desc = tk.Label(
         left_inner,
-        text="タイトル生成もローカル優先です。通常は Ollama、必要なら Gemini へ切り替えます。",
+        text="ファイル名用の短いタイトルです。通常は Ollama のまま使えます。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface_variant'],
@@ -1123,10 +1186,14 @@ def create_file_section(parent, app, theme, widgets):
     summary_grid.grid_columnconfigure(1, weight=1)
     summary_grid.grid_columnconfigure(2, weight=1)
 
-    engine_tile = widgets.create_metric_tile(summary_grid, "エンジン", "Whisper", tone='primary')
+    engine_tile = widgets.create_metric_tile(summary_grid, "エンジン", ENGINES[saved_engine].label, tone='primary')
     engine_tile.grid(row=0, column=0, sticky='ew', padx=(0, 6))
 
-    model_tile = widgets.create_metric_tile(summary_grid, "モデル", "large-v3", tone='info')
+    model_tile = widgets.create_metric_tile(
+        summary_grid, "モデル",
+        WHISPER_MODEL_DISPLAY_NAMES.get(saved_whisper_model, WHISPER_MODEL_DISPLAY_NAMES[DEFAULT_WHISPER_MODEL]),
+        tone='info'
+    )
     model_tile.grid(row=0, column=1, sticky='ew', padx=6)
 
     save_tile = widgets.create_metric_tile(summary_grid, "保存先", "output", tone='warning')
@@ -1416,46 +1483,42 @@ def create_file_section(parent, app, theme, widgets):
         _update_silence_trim_controls()
         app.on_silence_trim_settings_changed(immediate=True)
 
+    def _summary_model_text():
+        engine_value = engine_var.get()
+        if engine_value == 'gemini':
+            return DEFAULT_GEMINI_MODEL.replace('gemini-', '').replace('-flash', ' Flash')
+        if engine_value == 'whisper-api':
+            return whisper_api_model_var.get() or WhisperApiService.MODEL_DESCRIPTIONS[WhisperApiService.DEFAULT_MODEL]
+        return whisper_model_var.get()
+
     def on_engine_change():
         engine_value = engine_var.get()
-        is_gemini = engine_value == "gemini"
-        is_whisper = engine_value == "whisper"
-        is_whisper_api = engine_value == "whisper-api"
+        spec = get_engine_spec(engine_value)
 
         # 関係ないエンジンの設定パネルは非表示にして画面を軽くする
         # 文字起こしエンジン関連の補助パネルは、要約・議事録 LLM セクションの直前に配置する
         for panel in (whisper_local_panel, whisper_api_panel, gemini_recovery_panel):
             panel.pack_forget()
-        if is_whisper:
+        if spec.key == "whisper":
             whisper_local_panel.pack(fill=tk.X, before=additional_engine_label)
-        elif is_whisper_api:
+        elif spec.key == "whisper-api":
             whisper_api_panel.pack(fill=tk.X, before=additional_engine_label)
-        elif is_gemini:
+        elif spec.key == "gemini":
             gemini_recovery_panel.pack(fill=tk.X, before=additional_engine_label)
 
-        # エンジン表示名は EngineSpec の label を参照（未知のキーは Whisper 扱い）
-        engine_label = ENGINES[engine_value].label if engine_value in ENGINES else 'Whisper'
-        engine_tile.value_label.config(text=engine_label)
-
-        if engine_value == 'gemini':
-            model_tile.value_label.config(text="自動選択")
-        elif engine_value == 'whisper-api':
-            api_display = whisper_api_model_var.get()
-            api_model = whisper_api_display_to_model.get(api_display, WhisperApiService.DEFAULT_MODEL)
-            model_tile.value_label.config(text=api_model)
-        else:
-            display_name = whisper_model_var.get()
-            model_tile.value_label.config(text=display_to_model.get(display_name, 'large-v3'))
+        engine_desc.config(text=spec.help_text)
+        engine_tile.value_label.config(text=spec.label)
+        model_tile.value_label.config(text=_summary_model_text())
 
         app.config.set("transcription_engine", engine_value)
         app.config.save()
 
     def on_model_change(event=None):
         display_name = whisper_model_var.get()
-        model_name = display_to_model.get(display_name, 'large-v3')
+        model_name = display_to_model.get(display_name, DEFAULT_WHISPER_MODEL)
         whisper_model_info.config(text=model_details.get(model_name, ''))
         if engine_var.get() == 'whisper':
-            model_tile.value_label.config(text=model_name)
+            model_tile.value_label.config(text=display_name)
         app.config.set("whisper_model", model_name)
         app.config.save()
 
@@ -1464,7 +1527,7 @@ def create_file_section(parent, app, theme, widgets):
         model_name = whisper_api_display_to_model.get(display_name, WhisperApiService.DEFAULT_MODEL)
         whisper_api_model_info.config(text=whisper_api_pricing_text.get(model_name, ''))
         if engine_var.get() == 'whisper-api':
-            model_tile.value_label.config(text=model_name)
+            model_tile.value_label.config(text=display_name)
         app.config.set("whisper_api_model", model_name)
         app.config.save()
 
@@ -1515,8 +1578,7 @@ def create_file_section(parent, app, theme, widgets):
 
     engine_var.trace('w', lambda *args: on_engine_change())
     additional_engine_var.trace('w', on_additional_engine_change)
-    if whisper_model_combo is not None:
-        whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
+    whisper_model_combo.bind('<<ComboboxSelected>>', on_model_change)
     whisper_api_model_combo.bind('<<ComboboxSelected>>', on_whisper_api_model_change)
     gemini_recovery_combo.bind('<<ComboboxSelected>>', on_gemini_recovery_change)
     title_engine_combo.bind('<<ComboboxSelected>>', on_title_engine_change)
@@ -1574,689 +1636,6 @@ def create_file_section(parent, app, theme, widgets):
 
     return frame
 
-
-def create_recording_section(parent, app, theme, widgets):
-    """録音専用タブを作成する"""
-    frame = tk.Frame(parent, bg=theme.colors['surface'])
-    pad = 12
-
-    header_frame = tk.Frame(frame, bg=theme.colors['surface'])
-    header_frame.pack(fill=tk.X, padx=pad, pady=(pad, 8))
-
-    widgets.create_section_header(header_frame, "録音").pack(
-        side=tk.LEFT, fill=tk.X, expand=True
-    )
-    widgets.create_pill_label(
-        header_frame, "マイク専用", tone='warning'
-    ).pack(side=tk.RIGHT)
-
-    intro_label = tk.Label(
-        frame,
-        text="電話や会話をその場で録音し、保存後そのままキューへ回せます。",
-        font=theme.fonts['caption'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface'],
-        justify='left',
-        anchor='w'
-    )
-    intro_label.pack(fill=tk.X, padx=pad, pady=(0, 8))
-    _bind_dynamic_wraplength(intro_label, pad)
-
-    recording_widgets = _create_recording_card(frame, app, theme, widgets, pad)
-
-    frame.recording_status_label = recording_widgets['recording_status_label']
-    frame.recording_badge_label = recording_widgets['recording_badge_label']
-    frame.recording_device_label = recording_widgets['recording_device_label']
-    frame.recording_timer_label = recording_widgets['recording_timer_label']
-    frame.recording_folder_label = recording_widgets['recording_folder_label']
-    frame.record_button = recording_widgets['record_button']
-    frame.stop_record_button = recording_widgets['stop_record_button']
-    frame.queue_recordings_button = recording_widgets['queue_recordings_button']
-    frame.choose_recording_folder_button = recording_widgets['choose_recording_folder_button']
-    frame.open_recording_folder_button = recording_widgets['open_recording_folder_button']
-    frame.recording_device_combo = recording_widgets['recording_device_combo']
-    frame.recording_channel_combo = recording_widgets['recording_channel_combo']
-    frame.refresh_recording_inputs_button = recording_widgets['refresh_recording_inputs_button']
-    frame.recording_gain_scale = recording_widgets['recording_gain_scale']
-    frame.recording_visual_canvas = recording_widgets['recording_visual_canvas']
-
-    return frame
-
-
-def _create_recording_card(parent, app, theme, widgets, pad):
-    """録音UIカードを作成する"""
-    card = tk.Frame(
-        parent,
-        bg=theme.colors['hero_bg'],
-        highlightbackground=theme.colors['hero_border'],
-        highlightthickness=1,
-        bd=0
-    )
-    card.pack(fill=tk.X, padx=pad, pady=(0, 8))
-
-    inner = tk.Frame(card, bg=theme.colors['hero_bg'])
-    inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
-
-    header = tk.Frame(inner, bg=theme.colors['hero_bg'])
-    header.pack(fill=tk.X)
-
-    tk.Label(
-        header,
-        text="その場で録音",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['secondary_light'],
-        bg=theme.colors['hero_bg']
-    ).pack(side=tk.LEFT)
-
-    recording_badge_label = tk.Label(
-        header,
-        text="STANDBY",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['info'],
-        bg=theme.colors['info_soft'],
-        padx=10,
-        pady=4
-    )
-    recording_badge_label.pack(side=tk.RIGHT)
-
-    desc = tk.Label(
-        inner,
-        text="突然の電話や会話をそのまま録音する入口です。止めるとすぐキューへ回せます。",
-        font=theme.fonts['caption'],
-        fg='#D7E0E4',
-        bg=theme.colors['hero_bg'],
-        justify='left',
-        anchor='w'
-    )
-    desc.pack(anchor='w', fill=tk.X, pady=(6, 10))
-    _bind_dynamic_wraplength(desc, 28)
-
-    action_shell = tk.Frame(
-        inner,
-        bg=theme.colors['hero_surface'],
-        highlightbackground=theme.colors['hero_border'],
-        highlightthickness=1,
-        bd=0
-    )
-    action_shell.pack(fill=tk.X, pady=(0, 10))
-
-    action_inner = tk.Frame(action_shell, bg=theme.colors['hero_surface'])
-    action_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
-
-    action_header = tk.Frame(action_inner, bg=theme.colors['hero_surface'])
-    action_header.pack(fill=tk.X)
-
-    tk.Label(
-        action_header,
-        text="クイック操作",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['secondary_light'],
-        bg=theme.colors['hero_surface']
-    ).pack(side=tk.LEFT)
-
-    tk.Label(
-        action_header,
-        text="まずここから",
-        font=theme.fonts['caption'],
-        fg='#C9D8DE',
-        bg=theme.colors['hero_surface']
-    ).pack(side=tk.RIGHT)
-
-    controls = tk.Frame(action_inner, bg=theme.colors['hero_surface'])
-    controls.pack(fill=tk.X, pady=(8, 0))
-    controls.grid_columnconfigure(0, weight=1)
-    controls.grid_columnconfigure(1, weight=1)
-
-    record_button = widgets.create_icon_button(
-        controls, "録音開始", ICONS['microphone'], 'Primary',
-        command=app.start_recording
-    )
-    record_button.idle_text = f"{ICONS['microphone']} 録音開始"
-    record_button.active_text = f"{ICONS['microphone']} 録音中..."
-
-    stop_record_button = widgets.create_icon_button(
-        controls, "停止して保存", ICONS['stop'], 'Secondary',
-        command=app.stop_recording
-    )
-    stop_record_button.idle_text = f"{ICONS['stop']} 停止して保存"
-    stop_record_button.active_text = f"{ICONS['stop']} 保存して停止"
-
-    record_button.grid(row=0, column=0, sticky='ew', padx=(0, 6))
-    stop_record_button.grid(row=0, column=1, sticky='ew', padx=(6, 0))
-
-    folder_actions = tk.Frame(action_inner, bg=theme.colors['hero_surface'])
-    folder_actions.pack(fill=tk.X, pady=(8, 0))
-    folder_actions.grid_columnconfigure(0, weight=1)
-    folder_actions.grid_columnconfigure(1, weight=1)
-    folder_actions.grid_columnconfigure(2, weight=1)
-
-    queue_recordings_button = widgets.create_icon_button(
-        folder_actions, "キュー追加", ICONS['plus'], 'Secondary',
-        command=app.add_recordings_to_queue
-    )
-    choose_recording_folder_button = widgets.create_icon_button(
-        folder_actions, "保存先変更", ICONS['folder'], 'Secondary',
-        command=app.choose_recording_folder
-    )
-    open_recording_folder_button = widgets.create_icon_button(
-        folder_actions, "録音フォルダを開く", ICONS['open'], 'Secondary',
-        command=app.open_recording_folder
-    )
-
-    folder_action_layout_state = {'wide': None}
-
-    def _relayout_folder_actions(event=None):
-        width = folder_actions.winfo_width()
-        want_wide = width >= 540
-        if folder_action_layout_state['wide'] == want_wide:
-            return
-        folder_action_layout_state['wide'] = want_wide
-
-        for button in (queue_recordings_button, choose_recording_folder_button, open_recording_folder_button):
-            button.grid_forget()
-
-        if want_wide:
-            queue_recordings_button.grid(row=0, column=0, sticky='ew', padx=(0, 6))
-            choose_recording_folder_button.grid(row=0, column=1, sticky='ew', padx=6)
-            open_recording_folder_button.grid(row=0, column=2, sticky='ew', padx=(6, 0))
-        else:
-            queue_recordings_button.grid(row=0, column=0, columnspan=3, sticky='ew')
-            choose_recording_folder_button.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(6, 0))
-            open_recording_folder_button.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(6, 0))
-
-    folder_actions.bind('<Configure>', _relayout_folder_actions)
-    folder_actions.after_idle(_relayout_folder_actions)
-
-    main_strip = tk.Frame(inner, bg=theme.colors['hero_bg'])
-    main_strip.pack(fill=tk.X)
-
-    left_panel = tk.Frame(
-        main_strip,
-        bg=theme.colors['hero_surface'],
-        highlightbackground=theme.colors['hero_border'],
-        highlightthickness=1,
-        bd=0
-    )
-
-    right_panel = tk.Frame(
-        main_strip,
-        bg=theme.colors['hero_surface'],
-        highlightbackground=theme.colors['hero_border'],
-        highlightthickness=1,
-        bd=0
-    )
-
-    layout_state = {'horizontal': None}
-
-    def _relayout_recording(event=None):
-        width = main_strip.winfo_width()
-        want_horizontal = width >= 720
-        if layout_state['horizontal'] == want_horizontal:
-            return
-        layout_state['horizontal'] = want_horizontal
-
-        left_panel.pack_forget()
-        right_panel.pack_forget()
-
-        if want_horizontal:
-            left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
-            right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
-        else:
-            left_panel.pack(fill=tk.X, pady=(0, 6))
-            right_panel.pack(fill=tk.X)
-
-    main_strip.bind('<Configure>', _relayout_recording)
-
-    left_inner = tk.Frame(left_panel, bg=theme.colors['hero_surface'])
-    left_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
-
-    tk.Label(
-        left_inner,
-        text="録音タイマー",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['secondary_light'],
-        bg=theme.colors['hero_surface']
-    ).pack(anchor='w')
-
-    recording_timer_label = tk.Label(
-        left_inner,
-        textvariable=app.recording_elapsed_var,
-        font=(theme.fonts['app_title'][0], 22),
-        fg=theme.colors['text_on_dark'],
-        bg=theme.colors['hero_surface']
-    )
-    recording_timer_label.pack(anchor='w', pady=(6, 4))
-
-    recording_status_label = tk.Label(
-        left_inner,
-        textvariable=app.recording_status_var,
-        font=theme.fonts['heading'],
-        fg=theme.colors['text_on_dark'],
-        bg=theme.colors['hero_surface']
-    )
-    recording_status_label.pack(anchor='w')
-
-    recording_hint_label = tk.Label(
-        left_inner,
-        textvariable=app.recording_hint_var,
-        font=theme.fonts['caption'],
-        fg='#D7E0E4',
-        bg=theme.colors['hero_surface'],
-        justify='left',
-        anchor='w'
-    )
-    recording_hint_label.pack(anchor='w', fill=tk.X, pady=(8, 0))
-    _bind_dynamic_wraplength(recording_hint_label, 14)
-
-    metrics_row = tk.Frame(left_inner, bg=theme.colors['hero_surface'])
-    metrics_row.pack(fill=tk.X, pady=(10, 0))
-    metrics_row.grid_columnconfigure(0, weight=1)
-    metrics_row.grid_columnconfigure(1, weight=1)
-    metrics_row.grid_columnconfigure(2, weight=1)
-
-    def _create_dark_metric(parent_widget, title, value_var):
-        tile = tk.Frame(
-            parent_widget,
-            bg='#2A5463',
-            highlightbackground=theme.colors['hero_border'],
-            highlightthickness=1,
-            bd=0
-        )
-        tk.Label(
-            tile,
-            text=title,
-            font=theme.fonts['caption_bold'],
-            fg='#C9D8DE',
-            bg='#2A5463'
-        ).pack(anchor='w', padx=8, pady=(7, 0))
-        value = tk.Label(
-            tile,
-            textvariable=value_var,
-            font=theme.fonts['body_bold'],
-            fg=theme.colors['text_on_dark'],
-            bg='#2A5463',
-            justify='left',
-            anchor='w'
-        )
-        value.pack(anchor='w', fill=tk.X, padx=8, pady=(3, 7))
-        return tile, value
-
-    input_tile, input_value = _create_dark_metric(metrics_row, "INPUT", app.recording_level_var)
-    input_tile.grid(row=0, column=0, sticky='ew', padx=(0, 6))
-
-    peak_tile, peak_value = _create_dark_metric(metrics_row, "PEAK", app.recording_peak_var)
-    peak_tile.grid(row=0, column=1, sticky='ew', padx=6)
-
-    format_tile, format_value = _create_dark_metric(metrics_row, "FORMAT", app.recording_format_var)
-    format_tile.grid(row=0, column=2, sticky='ew', padx=(6, 0))
-    _bind_dynamic_wraplength(format_value, 10)
-
-    right_inner = tk.Frame(right_panel, bg=theme.colors['hero_surface'])
-    right_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
-
-    visual_header = tk.Frame(right_inner, bg=theme.colors['hero_surface'])
-    visual_header.pack(fill=tk.X)
-
-    tk.Label(
-        visual_header,
-        text="入力レベル",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['secondary_light'],
-        bg=theme.colors['hero_surface']
-    ).pack(side=tk.LEFT)
-
-    tk.Label(
-        visual_header,
-        text="LEVEL / PEAK",
-        font=theme.fonts['caption'],
-        fg='#C9D8DE',
-        bg=theme.colors['hero_surface']
-    ).pack(side=tk.RIGHT)
-
-    visual_shell = tk.Frame(
-        right_inner,
-        bg=theme.colors['log_bg'],
-        highlightbackground=theme.colors['hero_border'],
-        highlightthickness=1,
-        bd=0
-    )
-    visual_shell.pack(fill=tk.BOTH, expand=True, pady=(8, 8))
-
-    recording_visual_canvas = tk.Canvas(
-        visual_shell,
-        bg=theme.colors['log_bg'],
-        highlightthickness=0,
-        height=124
-    )
-    recording_visual_canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-
-    def _draw_recording_visual(level=0.0, peak=0.0, is_active=False, phase=0.0,
-                               spectrum_bins=None, waveform_points=None, is_live=False):
-        canvas = recording_visual_canvas
-        canvas.delete('all')
-
-        width = max(canvas.winfo_width(), 260)
-        height = max(canvas.winfo_height(), 124)
-        left_pad = 18
-        right_pad = 18
-        meter_y0 = 34
-        meter_height = 24
-        meter_y1 = meter_y0 + meter_height
-        usable_width = max(80, width - left_pad - right_pad)
-
-        meter_bg = '#29333A'
-        grid_color = '#3C4E56'
-        text_soft = '#C9D8DE'
-        level_pct = int(max(0, min(100, round(level * 100))))
-        peak_pct = int(max(0, min(100, round(peak * 100))))
-        if not is_live:
-            status_text = "待機中: マイク監視"
-        elif level_pct < 8:
-            status_text = "かなり小さい: レベルを上げる"
-        elif level_pct < 30:
-            status_text = "小さめ: 少し上げる"
-        elif level_pct < 70:
-            status_text = "適正: このままでOK"
-        elif level_pct < 88:
-            status_text = "高め: 少し下げる"
-        else:
-            status_text = "大きすぎる: すぐ下げる"
-
-        canvas.create_text(
-            left_pad, 10,
-            text="INPUT LEVEL",
-            anchor='nw',
-            font=theme.fonts['caption_bold'],
-            fill=text_soft
-        )
-        canvas.create_text(
-            width - right_pad, 10,
-            text=f"PEAK {peak_pct:02d}%",
-            anchor='ne',
-            font=theme.fonts['caption_bold'],
-            fill=text_soft
-        )
-
-        green_end = left_pad + (usable_width * 0.68)
-        yellow_end = left_pad + (usable_width * 0.88)
-
-        canvas.create_rectangle(
-            left_pad, meter_y0, width - right_pad, meter_y1,
-            fill=meter_bg,
-            outline='#47606A',
-            width=1
-        )
-        canvas.create_rectangle(left_pad, meter_y0, green_end, meter_y1, fill='#284133', outline='')
-        canvas.create_rectangle(green_end, meter_y0, yellow_end, meter_y1, fill='#4A3C22', outline='')
-        canvas.create_rectangle(yellow_end, meter_y0, width - right_pad, meter_y1, fill='#4D2D29', outline='')
-
-        fill_x = left_pad + (usable_width * level)
-        if is_live:
-            if fill_x > left_pad:
-                if fill_x > yellow_end:
-                    canvas.create_rectangle(left_pad, meter_y0 + 3, green_end, meter_y1 - 3, fill='#67B47A', outline='')
-                    canvas.create_rectangle(green_end, meter_y0 + 3, yellow_end, meter_y1 - 3, fill='#E8A55B', outline='')
-                    canvas.create_rectangle(yellow_end, meter_y0 + 3, fill_x, meter_y1 - 3, fill='#D97761', outline='')
-                elif fill_x > green_end:
-                    canvas.create_rectangle(left_pad, meter_y0 + 3, green_end, meter_y1 - 3, fill='#67B47A', outline='')
-                    canvas.create_rectangle(green_end, meter_y0 + 3, fill_x, meter_y1 - 3, fill='#E8A55B', outline='')
-                else:
-                    canvas.create_rectangle(left_pad, meter_y0 + 3, fill_x, meter_y1 - 3, fill='#67B47A', outline='')
-        else:
-            pulse_width = usable_width * 0.18
-            pulse_center = left_pad + ((((phase * 38) % 100) / 100.0) * usable_width)
-            pulse_left = max(left_pad, pulse_center - (pulse_width / 2))
-            pulse_right = min(width - right_pad, pulse_center + (pulse_width / 2))
-            canvas.create_rectangle(
-                pulse_left, meter_y0 + 4, pulse_right, meter_y1 - 4,
-                fill='#5B7D88', outline=''
-            )
-
-        for tick in (0.0, 0.25, 0.5, 0.75, 0.9, 1.0):
-            x = left_pad + (usable_width * tick)
-            canvas.create_line(x, meter_y0, x, meter_y1, fill=grid_color)
-
-        peak_x = left_pad + (usable_width * peak)
-        canvas.create_line(
-            peak_x, meter_y0 - 4, peak_x, meter_y1 + 4,
-            fill='#F4D48C',
-            width=2
-        )
-
-        tick_values = [(0.0, "0"), (0.5, "50"), (0.9, "90"), (1.0, "100")]
-        for ratio, label in tick_values:
-            x = left_pad + (usable_width * ratio)
-            canvas.create_text(
-                x, meter_y1 + 6,
-                text=label,
-                anchor='n',
-                font=theme.fonts['caption'],
-                fill='#91A8B0'
-            )
-
-        if level_pct >= 88:
-            value_color = '#D97761'
-        elif level_pct >= 68:
-            value_color = '#E8A55B'
-        else:
-            value_color = '#8ED3A0' if is_live else '#9FD3E0'
-        canvas.create_text(
-            width - right_pad, meter_y0 + (meter_height / 2),
-            text=f"{level_pct:02d}%",
-            anchor='e',
-            font=theme.fonts['heading'],
-            fill=value_color
-        )
-
-        canvas.create_text(
-            left_pad, meter_y1 + 22,
-            text=status_text,
-            anchor='nw',
-            font=theme.fonts['body_bold'],
-            fill=value_color
-        )
-
-        footer_text = "Recording" if is_active else ("Mic Monitor" if is_live else "Standby")
-        canvas.create_text(
-            left_pad, height - 8,
-            text=footer_text,
-            anchor='sw',
-            font=theme.fonts['caption'],
-            fill=text_soft
-        )
-
-    recording_visual_canvas.draw_visual = _draw_recording_visual
-    recording_visual_canvas.bind(
-        '<Configure>',
-        lambda event: recording_visual_canvas.draw_visual(0.0, 0.0, False, 0.0, [], [], False)
-    )
-
-    recording_device_label = tk.Label(
-        right_inner,
-        textvariable=app.recording_device_var,
-        font=theme.fonts['caption'],
-        fg='#D7E0E4',
-        bg=theme.colors['hero_surface'],
-        justify='left',
-        anchor='w'
-    )
-    recording_device_label.pack(anchor='w', fill=tk.X)
-    _bind_dynamic_wraplength(recording_device_label, 12)
-
-    folder_shell = tk.Frame(
-        inner,
-        bg=theme.colors['surface'],
-        highlightbackground=theme.colors['card_border'],
-        highlightthickness=1,
-        bd=0
-    )
-    folder_shell.pack(fill=tk.X, pady=(10, 0))
-
-    folder_inner = tk.Frame(folder_shell, bg=theme.colors['surface'])
-    folder_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-    folder_top = tk.Frame(folder_inner, bg=theme.colors['surface'])
-    folder_top.pack(fill=tk.X)
-
-    tk.Label(
-        folder_top,
-        text="録音保存先",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface']
-    ).pack(side=tk.LEFT)
-
-    ttk.Checkbutton(
-        folder_top,
-        text="停止後に自動でキューへ追加",
-        variable=app.auto_queue_recordings_var,
-        command=app.toggle_auto_queue_recordings,
-        style='Modern.TCheckbutton'
-    ).pack(side=tk.RIGHT)
-
-    source_row = tk.Frame(folder_inner, bg=theme.colors['surface'])
-    source_row.pack(fill=tk.X, pady=(6, 8))
-    source_row.grid_columnconfigure(0, weight=3)
-    source_row.grid_columnconfigure(1, weight=2)
-
-    device_column = tk.Frame(source_row, bg=theme.colors['surface'])
-    device_column.grid(row=0, column=0, sticky='ew', padx=(0, 6))
-
-    tk.Label(
-        device_column,
-        text="入力デバイス",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface']
-    ).pack(anchor='w')
-
-    recording_device_combo = ttk.Combobox(
-        device_column,
-        textvariable=app.recording_input_device_var,
-        values=[],
-        state='readonly',
-        style='Modern.TCombobox'
-    )
-    recording_device_combo.pack(fill=tk.X, pady=(4, 0))
-    recording_device_combo.bind('<<ComboboxSelected>>', app.on_recording_device_selected)
-
-    channel_column = tk.Frame(source_row, bg=theme.colors['surface'])
-    channel_column.grid(row=0, column=1, sticky='ew')
-    channel_column.grid_columnconfigure(0, weight=1)
-
-    channel_header = tk.Frame(channel_column, bg=theme.colors['surface'])
-    channel_header.pack(fill=tk.X)
-
-    tk.Label(
-        channel_header,
-        text="入力チャンネル",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface']
-    ).pack(side=tk.LEFT)
-
-    refresh_recording_inputs_button = widgets.create_icon_button(
-        channel_header, "更新", ICONS['refresh'], 'Secondary',
-        command=app.refresh_recording_inputs
-    )
-    refresh_recording_inputs_button.pack(side=tk.RIGHT)
-
-    recording_channel_combo = ttk.Combobox(
-        channel_column,
-        textvariable=app.recording_input_channels_var,
-        values=[],
-        state='readonly',
-        style='Modern.TCombobox'
-    )
-    recording_channel_combo.pack(fill=tk.X, pady=(4, 0))
-    recording_channel_combo.bind('<<ComboboxSelected>>', app.on_recording_channel_selected)
-
-    source_note = tk.Label(
-        folder_inner,
-        text="オーディオIFの 1-2 / 3-4 などはデバイス名と入力チャンネルの両方で切り替えます。",
-        font=theme.fonts['caption'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface'],
-        justify='left',
-        anchor='w'
-    )
-    source_note.pack(fill=tk.X, pady=(0, 8))
-    _bind_dynamic_wraplength(source_note, 4)
-
-    recording_folder_label = tk.Label(
-        folder_inner,
-        textvariable=app.recording_dir_var,
-        font=theme.fonts['caption'],
-        fg=theme.colors['text_primary'],
-        bg=theme.colors['surface'],
-        justify='left',
-        anchor='w'
-    )
-    recording_folder_label.pack(anchor='w', fill=tk.X, pady=(6, 10))
-    _bind_dynamic_wraplength(recording_folder_label, 20)
-
-    gain_row = tk.Frame(folder_inner, bg=theme.colors['surface'])
-    gain_row.pack(fill=tk.X, pady=(0, 8))
-
-    gain_header = tk.Frame(gain_row, bg=theme.colors['surface'])
-    gain_header.pack(fill=tk.X)
-
-    tk.Label(
-        gain_header,
-        text="録音レベル",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface']
-    ).pack(side=tk.LEFT)
-
-    tk.Label(
-        gain_header,
-        textvariable=app.recording_gain_display_var,
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['primary'],
-        bg=theme.colors['surface']
-    ).pack(side=tk.RIGHT)
-
-    gain_scale = ttk.Scale(
-        gain_row,
-        from_=25,
-        to=250,
-        orient=tk.HORIZONTAL,
-        variable=app.recording_gain_percent_var,
-        command=app.on_recording_gain_change
-    )
-    gain_scale.pack(fill=tk.X, pady=(6, 2))
-    gain_scale.bind('<ButtonRelease-1>', app.persist_recording_gain)
-
-    gain_note = tk.Label(
-        gain_row,
-        text="保存音量に掛かるソフトゲインです。100%が原音、上げすぎると割れます。",
-        font=theme.fonts['caption'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface'],
-        justify='left',
-        anchor='w'
-    )
-    gain_note.pack(fill=tk.X)
-    _bind_dynamic_wraplength(gain_note, 4)
-
-    return {
-        'recording_status_label': recording_status_label,
-        'recording_badge_label': recording_badge_label,
-        'recording_device_label': recording_device_label,
-        'recording_timer_label': recording_timer_label,
-        'recording_folder_label': recording_folder_label,
-        'record_button': record_button,
-        'stop_record_button': stop_record_button,
-        'queue_recordings_button': queue_recordings_button,
-        'choose_recording_folder_button': choose_recording_folder_button,
-        'open_recording_folder_button': open_recording_folder_button,
-        'recording_device_combo': recording_device_combo,
-        'recording_channel_combo': recording_channel_combo,
-        'refresh_recording_inputs_button': refresh_recording_inputs_button,
-        'recording_gain_scale': gain_scale,
-        'recording_visual_canvas': recording_visual_canvas,
-    }
 
 
 def create_history_section(parent, app, theme, widgets):
@@ -2556,6 +1935,8 @@ def collect_ui_elements(api_section, file_section, recording_section, usage_sect
         'refresh_recording_inputs_button': recording_section.refresh_recording_inputs_button,
         'recording_gain_scale': getattr(recording_section, 'recording_gain_scale', None),
         'recording_visual_canvas': recording_section.recording_visual_canvas,
+        'recent_recordings_listbox': getattr(recording_section, 'recent_recordings_listbox', None),
+        'add_selected_recordings_button': getattr(recording_section, 'add_selected_recordings_button', None),
         'queue_frame': file_section.queue_frame,
         'queue_tree': file_section.queue_tree,
         'queue_count_label': file_section.queue_count_label,

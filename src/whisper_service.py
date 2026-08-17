@@ -26,11 +26,17 @@ class WhisperService:
     
     # Whisperモデル設定
     MODEL_INFO = {
+        'large-v3-turbo': {
+            'size': '809M',
+            'description': '推奨（高速・高精度）',
+            'params': '809M',
+            'recommended': True
+        },
         'large-v3': {
             'size': '1550M',
             'description': '最高精度（99言語対応）',
             'params': '1550M',
-            'recommended': True
+            'recommended': False
         },
     }
     
@@ -179,8 +185,8 @@ class WhisperService:
                     model_name = fw_model_name
                 except Exception as e:
                     logger.warning(f"{fw_model_name}のロードに失敗: {str(e)}")
-                    # フォールバック: large-v3 → large-v2 → large
-                    for fallback in ['large-v3', 'large-v2', 'large']:
+                    # フォールバック: turbo → large-v3 → large-v2 → large
+                    for fallback in ['large-v3-turbo', 'large-v3', 'large-v2', 'large']:
                         if fallback == fw_model_name:
                             continue
                         try:
@@ -425,7 +431,9 @@ class WhisperService:
         gpu_factor = {
             'large': 0.15,
             'large-v3': 0.15,
-        }.get(model_name, 0.15)
+            'large-v3-turbo': 0.05,
+            'turbo': 0.05,
+        }.get(model_name, 0.08)
 
         if self.device == 'cpu':
             # CPUの場合は5-10倍遅い

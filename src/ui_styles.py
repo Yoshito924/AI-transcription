@@ -47,6 +47,10 @@ class ModernTheme:
             'warning_soft': '#F8EFDF',
             'error': '#BD5B55',
             'error_soft': '#F8E5E3',
+            'record': '#C4453A',
+            'record_hover': '#D45A54',
+            'record_stop': '#1F5468',
+            'record_stop_hover': '#2E6F86',
             'info': '#4E7DA5',
             'info_soft': '#E5EDF5',
 
@@ -336,17 +340,17 @@ class ModernTheme:
                        background=self.colors['surface_variant'],
                        foreground=self.colors['text_secondary'],
                        font=self.fonts['body_bold'],
-                       padding=[14, 8],
+                       padding=[18, 10],
                        borderwidth=0,
                        relief='flat')
 
         style.map('Modern.TNotebook.Tab',
                  background=[('selected', self.colors['surface']),
                            ('active', self.colors['button_hover'])],
-                 foreground=[('selected', self.colors['text_primary']),
+                 foreground=[('selected', self.colors['primary']),
                            ('active', self.colors['text_primary'])],
-                 padding=[('selected', [14, 8]),
-                         ('!selected', [14, 8])])
+                 padding=[('selected', [18, 10]),
+                         ('!selected', [18, 10])])
 
     def _configure_toggle_styles(self, style):
         """ラジオボタンとチェックボックスの設定"""
@@ -788,6 +792,70 @@ class ModernWidgets:
         label.bind('<Leave>', on_leave)
 
         return frame, label
+
+    def create_record_toggle_button(self, parent, command=None):
+        """録音の開始/停止を兼ねる大きなトグルボタン"""
+        idle_bg = self.theme.colors['record']
+        idle_hover = self.theme.colors['record_hover']
+        stop_bg = self.theme.colors['record_stop']
+        stop_hover = self.theme.colors['record_stop_hover']
+
+        btn = tk.Button(
+            parent,
+            text="●  録音する",
+            font=self.theme.fonts['button_large'],
+            bg=idle_bg,
+            fg=self.theme.colors['text_on_primary'],
+            activebackground=idle_hover,
+            activeforeground=self.theme.colors['text_on_primary'],
+            disabledforeground=self.theme.colors['text_on_primary'],
+            relief='flat',
+            bd=0,
+            padx=28,
+            pady=14,
+            cursor='hand2',
+            command=command,
+        )
+        btn.idle_text = "●  録音する"
+        btn.active_text = "■  停止して保存"
+        btn.idle_bg = idle_bg
+        btn.idle_hover = idle_hover
+        btn.stop_bg = stop_bg
+        btn.stop_hover = stop_hover
+        btn._recording_style = False
+
+        def _current_bg():
+            return btn.stop_bg if btn._recording_style else btn.idle_bg
+
+        def _current_hover():
+            return btn.stop_hover if btn._recording_style else btn.idle_hover
+
+        def on_enter(_event):
+            if str(btn['state']) != 'disabled':
+                btn.configure(bg=_current_hover())
+
+        def on_leave(_event):
+            btn.configure(bg=_current_bg())
+
+        def apply_style(recording):
+            btn._recording_style = bool(recording)
+            if recording:
+                btn.configure(
+                    text=btn.active_text,
+                    bg=btn.stop_bg,
+                    activebackground=btn.stop_hover,
+                )
+            else:
+                btn.configure(
+                    text=btn.idle_text,
+                    bg=btn.idle_bg,
+                    activebackground=btn.idle_hover,
+                )
+
+        btn.bind('<Enter>', on_enter)
+        btn.bind('<Leave>', on_leave)
+        btn.apply_style = apply_style
+        return btn
 
     def create_action_button(self, parent, text, command=None):
         """大きなアクションボタン（tk.Button + ホバー効果）"""

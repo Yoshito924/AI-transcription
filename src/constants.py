@@ -81,22 +81,33 @@ MAIN_PADDING_Y = 14
 ACCENT_STRIPE_WIDTH = 4
 HISTORY_ROW_HEIGHT = 26
 QUEUE_LISTBOX_HEIGHT = 3
+PANE_FRACTION_MIN = 0.18
+PANE_FRACTION_MAX = 0.82
+DEFAULT_PANE_FRACTIONS = {
+    'pane_main_fraction': 0.70,
+    'pane_side_fraction': 0.58,
+    'pane_file_config_fraction': 0.55,
+    'pane_settings_fraction': 0.50,
+    'pane_recording_fraction': 0.48,
+}
 
-# API関連（優先順位: 安定版 → 最新プレビュー → 高速 → コスト重視 → 従来型）
-# 2025年11月時点の推奨: gemini-2.5-flashが安定版として推奨
+# API関連（優先順位: 最新安定 Flash → 音声ドキュメント例 → 軽量 → 2.5フォールバック）
+# 2026年8月時点: Gemini 3.7 Flash が最新安定。音声公式例は gemini-3.6-flash。
+# gemini-2.0-flash / flash-lite はシャットダウン済みのため候補から外す。
 PREFERRED_MODELS = [
-    "gemini-2.5-flash",                  # 2.5 Flash安定版（推奨）
-    "gemini-2.5-flash-preview-09-2025",  # 2025年9月最新プレビュー版
-    "gemini-2.5-flash-preview-08-2025",  # 2025年8月プレビュー版
-    "gemini-2.5-flash-lite",             # Flash Lite 2.5
-    "gemini-2.0-flash-lite",             # 最軽量・最速
-    "gemini-2.0-flash",                  # Flash 2.0
+    "gemini-3.7-flash",       # 最新安定 Flash
+    "gemini-3.6-flash",       # 公式音声ドキュメントの例
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",       # 2.5世代の安定フォールバック
+    "gemini-2.5-flash-lite",
 ]
 # タイトル生成用の軽量モデル（優先順位順）
 TITLE_GENERATION_MODELS = [
-    "gemini-2.0-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
     "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
     "gemini-2.5-flash",
 ]
 # タイトル生成に渡す本文の先頭抽出長（文字数）
@@ -111,9 +122,23 @@ OLLAMA_DEFAULT_MODEL = "gemma4:e4b"
 # エンジン・モデルの既定値（ローカルLLM優先方針）
 # config.py の defaults と、各モジュールのデフォルト引数のフォールバックで共有する
 DEFAULT_TRANSCRIPTION_ENGINE = "whisper"          # "gemini" / "whisper" / "whisper-api"
-DEFAULT_WHISPER_MODEL = "large-v3"                # Whisper の既定モデル
+DEFAULT_WHISPER_MODEL = "large-v3-turbo"          # Whisper の既定モデル（高速・高精度）
+DEFAULT_WHISPER_API_MODEL = "gpt-transcribe"      # OpenAI ファイル文字起こしの公式推奨
+DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"         # Gemini 文字起こしの既定候補
 DEFAULT_TITLE_GENERATION_ENGINE = "ollama"        # "ollama" / "auto" / "gemini" / "disabled"
 DEFAULT_ADDITIONAL_PROCESSING_ENGINE = "ollama"   # "gemini" / "ollama"
+WHISPER_MODEL_DISPLAY_NAMES = {
+    "large-v3-turbo": "高速（推奨）",
+    "large-v3": "最高精度",
+}
+WHISPER_MODEL_DETAILS = {
+    "large-v3-turbo": "約0.8GB · 速く、日本語でも高精度。まずはこれ。",
+    "large-v3": "約1.5GB · より慎重に起こしたいとき。",
+}
+WHISPER_MODEL_ALIASES = {
+    "turbo": "large-v3-turbo",
+    "large": "large-v3",
+}
 OLLAMA_MODEL_SUGGESTIONS = [
     "gemma4:e4b",
     "gemma4:26b",
@@ -253,6 +278,46 @@ GEMINI_PRICING = {
         "recommended_use": "リアルタイム処理専用"
     },
     # Gemini 3.x系（より具体的なキーを先に配置）
+    "gemini-3.7-flash": {
+        "input_text": 0.50,
+        "input_audio": 1.00,
+        "input_text_batch": 0.25,
+        "input_audio_batch": 0.50,
+        "output": 3.00,
+        "output_batch": 1.50,
+        "pricing_type": "token_based",
+        "recommended_use": "最新安定Flash（3.x世代）"
+    },
+    "gemini-3.6-flash": {
+        "input_text": 0.50,
+        "input_audio": 1.00,
+        "input_text_batch": 0.25,
+        "input_audio_batch": 0.50,
+        "output": 3.00,
+        "output_batch": 1.50,
+        "pricing_type": "token_based",
+        "recommended_use": "音声理解の公式例（3.x世代）"
+    },
+    "gemini-3.5-flash-lite": {
+        "input_text": 0.25,
+        "input_audio": 0.50,
+        "input_text_batch": 0.125,
+        "input_audio_batch": 0.25,
+        "output": 1.50,
+        "output_batch": 0.75,
+        "pricing_type": "token_based",
+        "recommended_use": "軽量・高速（3.5世代）"
+    },
+    "gemini-3.5-flash": {
+        "input_text": 0.50,
+        "input_audio": 1.00,
+        "input_text_batch": 0.25,
+        "input_audio_batch": 0.50,
+        "output": 3.00,
+        "output_batch": 1.50,
+        "pricing_type": "token_based",
+        "recommended_use": "バランス型（3.5世代）"
+    },
     "gemini-3.1-flash-lite": {
         "input_text": 0.25,
         "input_audio": 0.50,

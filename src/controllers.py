@@ -20,7 +20,8 @@ from .constants import (
     OUTPUT_TOKEN_RATIO,
     SUPPORTED_AUDIO_FORMATS,
     OPENAI_BILLING_OVERVIEW_URL,
-    DEFAULT_ADDITIONAL_PROCESSING_ENGINE
+    DEFAULT_ADDITIONAL_PROCESSING_ENGINE,
+    DEFAULT_GEMINI_MODEL,
 )
 from .exceptions import (
     TranscriptionError,
@@ -583,7 +584,7 @@ class TranscriptionController:
             elif engine_value == 'whisper-api':
                 model_name = self.processor.last_transcription_model_name or 'whisper-1'
             else:
-                model_name = self.processor.last_transcription_model_name or 'gemini-2.5-flash'
+                model_name = self.processor.last_transcription_model_name or DEFAULT_GEMINI_MODEL
 
             filename = os.path.basename(self.current_file) if self.current_file else ""
             self.time_tracker.record(
@@ -642,7 +643,7 @@ class TranscriptionController:
             try:
                 file_size_mb = get_file_size_mb(self.current_file) if self.current_file else 0.0
                 filename = os.path.basename(self.current_file) if self.current_file else "unknown"
-                actual_model = self.processor.last_transcription_model_name or "gemini-2.5-flash"
+                actual_model = self.processor.last_transcription_model_name or DEFAULT_GEMINI_MODEL
 
                 # 音声時間とファイルサイズから概算トークン数を推定
                 estimated_input_tokens = int(file_size_mb * TOKEN_ESTIMATION_FACTOR)

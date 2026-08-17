@@ -70,6 +70,38 @@ class WhisperApiServiceTests(unittest.TestCase):
         self.assertIn("Billing", ctx.exception.user_message)
         self.assertIn(OPENAI_BILLING_OVERVIEW_URL, ctx.exception.solution)
 
+    def _make_service(self, capture, model):
+        service = WhisperApiService.__new__(WhisperApiService)
+        service.api_key = "test"
+        service.model = model
+        service.client = SimpleNamespace(
+            audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(
+                    create=lambda **kwargs: capture.append(kwargs) or FakeTranscript()
+                )
+            )
+        )
+        return service
+
+    def test_gpt_transcribe_sends_languages_instead_of_language(self):
+        captured = []
+        service = self._make_service(captured, 'gpt-transcribe')
+
+        service.transcribe("tests\\fixtures\\dummy.mp3", language='ja')
+
+        self.assertEqual(captured[0]['model'], 'gpt-transcribe')
+        self.assertEqual(captured[0]['languages'], ['ja'])
+        self.assertNotIn('language', captured[0])
+
+    def test_legacy_models_still_send_language(self):
+        captured = []
+        service = self._make_service(captured, 'gpt-4o-mini-transcribe')
+
+        service.transcribe("tests\\fixtures\\dummy.mp3", language='ja')
+
+        self.assertEqual(captured[0]['language'], 'ja')
+        self.assertNotIn('languages', captured[0])
+
 
 if __name__ == '__main__':
     unittest.main()

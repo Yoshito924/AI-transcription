@@ -22,7 +22,11 @@ from .constants import (
     SILENCE_TRIM_KEEP_SILENCE_SEC,
     OLLAMA_DEFAULT_MODEL,
     DEFAULT_TRANSCRIPTION_ENGINE,
-    DEFAULT_WHISPER_MODEL
+    DEFAULT_WHISPER_MODEL,
+    DEFAULT_WHISPER_API_MODEL,
+    DEFAULT_GEMINI_MODEL,
+    WHISPER_MODEL_DISPLAY_NAMES,
+    WHISPER_MODEL_ALIASES,
 )
 
 
@@ -200,6 +204,16 @@ def get_engine_value(ui_elements, default=DEFAULT_TRANSCRIPTION_ENGINE):
     return default
 
 
+def resolve_whisper_model_name(model_name, default=DEFAULT_WHISPER_MODEL):
+    """保存値やエイリアスを、選択可能な Whisper モデル名へ正規化する"""
+    if not model_name:
+        return default
+    resolved = WHISPER_MODEL_ALIASES.get(model_name, model_name)
+    if resolved not in WHISPER_MODEL_DISPLAY_NAMES:
+        return default
+    return resolved
+
+
 def get_whisper_model_value(ui_elements, default=DEFAULT_WHISPER_MODEL):
     """UI要素からWhisperモデル値を取得する
     
@@ -208,26 +222,25 @@ def get_whisper_model_value(ui_elements, default=DEFAULT_WHISPER_MODEL):
         default: デフォルト値
         
     Returns:
-        str: Whisperモデル値（内部名: turbo, large-v3, medium, small, base, tiny）
+        str: Whisperモデル値（内部名: large-v3-turbo, large-v3）
     """
-    # UI表示名から内部名へのマッピング
-    display_to_model = {
-        'large-v3（最高精度）': 'large-v3',
-    }
+    display_to_model = {v: k for k, v in WHISPER_MODEL_DISPLAY_NAMES.items()}
     
     whisper_model_var = ui_elements.get('whisper_model_var', None)
     if whisper_model_var:
         display_name = whisper_model_var.get()
-        # 表示名から内部名に変換（見つからない場合はそのまま返す）
-        return display_to_model.get(display_name, display_name)
+        return resolve_whisper_model_name(
+            display_to_model.get(display_name, display_name),
+            default=default
+        )
     return default
 
 
-def get_whisper_api_model_value(ui_elements, default='gpt-4o-mini-transcribe'):
+def get_whisper_api_model_value(ui_elements, default=DEFAULT_WHISPER_API_MODEL):
     """UI要素からWhisper APIモデル値を取得する
 
     Returns:
-        str: モデル値（'gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'whisper-1'）
+        str: モデル値（'gpt-transcribe', 'gpt-4o-mini-transcribe' など）
     """
     whisper_api_model_var = ui_elements.get('whisper_api_model_var', None)
     display_to_model = ui_elements.get('whisper_api_display_to_model', None)
@@ -316,9 +329,9 @@ def calculate_gemini_cost(model_name, input_tokens, output_tokens, is_audio_inpu
             pricing_key = key
             break
 
-    # 未知のモデルの場合はgemini-2.0-flashの料金を適用
+    # 未知のモデルの場合は現行既定の料金を適用
     if not pricing_key:
-        pricing_key = "gemini-2.0-flash"
+        pricing_key = DEFAULT_GEMINI_MODEL
 
     pricing = GEMINI_PRICING[pricing_key]
     input_cost = 0

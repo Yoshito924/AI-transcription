@@ -17,10 +17,12 @@ from typing import Optional
 class EngineSpec:
     """文字起こしエンジン1種類の仕様"""
     key: str                      # 'gemini' / 'whisper' / 'whisper-api'
-    label: str                    # UI表示名
+    label: str                    # タイルなど短い表示名
     api_key_var: Optional[str]    # ui_elements 内のAPIキー StringVar 名（'api_key_var' / 'openai_api_key_var' / None）
     api_key_error: Optional[str]  # キー未設定時のエラーメッセージ
     is_local: bool                # ローカル実行か
+    choice_label: str = ''        # ラジオボタン用の短い選択肢名
+    help_text: str = ''           # 選択中の説明文
 
 
 # 全エンジンの仕様。キーは get_engine_value() が返すエンジン値と一致させる。
@@ -28,22 +30,28 @@ ENGINES: dict = {
     'gemini': EngineSpec(
         key='gemini',
         label='Gemini',
+        choice_label='Gemini',
+        help_text='クラウドで文字起こしします。固有名詞や読みやすい文章に強いです。Gemini APIキーが必要です。',
         api_key_var='api_key_var',
-        api_key_error='GeminiモードではGemini APIキーを入力してください。',
+        api_key_error='Gemini では Gemini APIキーを入力してください。',
         is_local=False,
     ),
     'whisper': EngineSpec(
         key='whisper',
-        label='Whisper',
+        label='ローカル',
+        choice_label='ローカル',
+        help_text='このPCで文字起こしします。APIキー不要・無料です。通常は高速モデルのままで問題ありません。',
         api_key_var=None,
         api_key_error=None,
         is_local=True,
     ),
     'whisper-api': EngineSpec(
         key='whisper-api',
-        label='Whisper API',
+        label='OpenAI',
+        choice_label='OpenAI',
+        help_text='OpenAI のクラウドで文字起こしします。推奨は GPT Transcribe です。OpenAI APIキーが必要です。',
         api_key_var='openai_api_key_var',
-        api_key_error='Whisper APIモードではOpenAI APIキーを入力してください。',
+        api_key_error='OpenAI では OpenAI APIキーを入力してください。',
         is_local=False,
     ),
 }

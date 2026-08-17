@@ -5,16 +5,17 @@
 OpenAI 音声文字起こしAPIサービス
 
 対応モデル:
-- gpt-4o-transcribe: GPT-4oベースの高精度文字起こし（推奨）
-- gpt-4o-mini-transcribe: 低コスト版（whisper-1より高精度・半額）
-- whisper-1: Whisper large-v2ベース（レガシー）
+- gpt-transcribe: ファイル文字起こしの公式推奨（2026-07〜）
+- gpt-4o-mini-transcribe: 低コスト版
+- gpt-4o-transcribe: 前世代（新規推奨ではない）
+- whisper-1: タイムスタンプ / SRT / VTT 用レガシー
 """
 
 import os
 from typing import Optional, Dict, Any, Tuple, List
 
 from .exceptions import TranscriptionError, ApiConnectionError
-from .constants import OPENAI_BILLING_OVERVIEW_URL
+from .constants import DEFAULT_WHISPER_API_MODEL, OPENAI_BILLING_OVERVIEW_URL
 from .logger import logger
 from .utils import format_duration, get_file_size_mb
 
@@ -23,36 +24,47 @@ class WhisperApiService:
     """OpenAI 音声文字起こしAPIサービス
 
     OpenAI の音声文字起こしAPIは以下のモデルを提供しています:
-    - gpt-4o-transcribe: GPT-4oベース、最高精度（推奨）
-    - gpt-4o-mini-transcribe: GPT-4o miniベース、低コスト・高精度
-    - whisper-1: Whisper large-v2ベース（レガシー）
+    - gpt-transcribe: 公式推奨のファイル文字起こし
+    - gpt-4o-mini-transcribe: 低コスト
+    - gpt-4o-transcribe: 前世代
+    - whisper-1: タイムスタンプ・字幕向けレガシー
 
     すべて同じ client.audio.transcriptions.create エンドポイントを使用。
     """
 
     # OpenAI 文字起こしAPIでサポートされているモデル（推奨順）
-    # 参考: https://platform.openai.com/docs/models
+    # 参考: https://platform.openai.com/docs/guides/speech-to-text
     SUPPORTED_MODELS = [
-        'gpt-4o-transcribe',       # 最高精度（推奨）
-        'gpt-4o-mini-transcribe',  # 低コスト・高精度
-        'whisper-1',               # レガシー
+        'gpt-transcribe',          # 公式推奨
+        'gpt-4o-mini-transcribe',  # 低コスト
+        'gpt-4o-transcribe',       # 前世代
+        'whisper-1',               # レガシー（タイムスタンプ / 字幕）
     ]
+    MODELS_USING_LANGUAGES = frozenset({'gpt-transcribe'})
 
     # モデル別料金 (USD per minute)
     MODEL_PRICING = {
-        'gpt-4o-transcribe': 0.006,       # $0.006/分
+        'gpt-transcribe': 0.0045,         # $0.0045/分
         'gpt-4o-mini-transcribe': 0.003,  # $0.003/分
+        'gpt-4o-transcribe': 0.006,       # $0.006/分
         'whisper-1': 0.006,               # $0.006/分
     }
 
     # モデル説明（UI表示用）
     MODEL_DESCRIPTIONS = {
-        'gpt-4o-transcribe': 'GPT-4o (高精度・推奨)',
-        'gpt-4o-mini-transcribe': 'GPT-4o Mini (低コスト)',
-        'whisper-1': 'Whisper (レガシー)',
+        'gpt-transcribe': '推奨（高精度）',
+        'gpt-4o-mini-transcribe': '低コスト',
+        'gpt-4o-transcribe': '前世代',
+        'whisper-1': '字幕・タイムスタンプ向け',
+    }
+    MODEL_HINTS = {
+        'gpt-transcribe': '約 0.7円/分 · 通常はこれを選ぶ',
+        'gpt-4o-mini-transcribe': '約 0.5円/分 · 料金を抑えたいとき',
+        'gpt-4o-transcribe': '約 0.9円/分 · 以前の高精度モデル',
+        'whisper-1': '約 0.9円/分 · 字幕や単語位置が必要なとき',
     }
 
-    DEFAULT_MODEL = 'gpt-4o-mini-transcribe'
+    DEFAULT_MODEL = DEFAULT_WHISPER_API_MODEL
     DEFAULT_REQUEST_TIMEOUT_SEC = 1800  # 30分
 
     def __init__(self, api_key: Optional[str] = None,
@@ -132,6 +144,19 @@ class WhisperApiService:
         raw_segments = transcript_dict.get('segments', getattr(transcript, 'segments', [])) or []
         return [self._normalize_segment(segment, index) for index, segment in enumerate(raw_segments)]
 
+    def _uses_languages_param(self, model_name: Optional[str] = None) -> bool:
+        """gpt-transcribe 系は language ではなく languages を使う"""
+        name = model_name or getattr(self, 'model', self.DEFAULT_MODEL)
+        return name in self.MODELS_USING_LANGUAGES or name.startswith('gpt-transcribe')
+
+    def _language_request_kwargs(self, language: Optional[str], model_name: str) -> Dict[str, Any]:
+        """モデルに応じた言語ヒントを組み立てる。両方は送らない。"""
+        if not language:
+            return {}
+        if self._uses_languages_param(model_name):
+            return {'languages': [language]}
+        return {'language': language}
+
     def transcribe(self, audio_path: str, language: Optional[str] = 'ja',
                    response_format: str = 'text', **kwargs) -> Tuple[str, Dict[str, Any]]:
         """音声ファイルを文字起こし
@@ -158,13 +183,14 @@ class WhisperApiService:
         try:
             # ファイルを開いてAPIに送信
             with open(audio_path, 'rb') as audio_file:
-                transcript = self.client.audio.transcriptions.create(
-                    model=model_name,
-                    file=audio_file,
-                    language=language,
-                    response_format=response_format,
-                    **kwargs
-                )
+                create_kwargs = {
+                    'model': model_name,
+                    'file': audio_file,
+                    'response_format': response_format,
+                }
+                create_kwargs.update(self._language_request_kwargs(language, model_name))
+                create_kwargs.update(kwargs)
+                transcript = self.client.audio.transcriptions.create(**create_kwargs)
 
             text = self._extract_text(transcript)
 
@@ -272,8 +298,9 @@ class WhisperApiService:
             dict: 料金情報
 
         参考: https://openai.com/api/pricing/
-        - gpt-4o-transcribe: $0.006/分
+        - gpt-transcribe: $0.0045/分
         - gpt-4o-mini-transcribe: $0.003/分
+        - gpt-4o-transcribe: $0.006/分
         - whisper-1: $0.006/分
         """
         model = model or getattr(self, 'model', self.DEFAULT_MODEL)

@@ -4,6 +4,7 @@
 import os
 import json
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox
 import re
 
@@ -40,6 +41,7 @@ from .utils import (
     format_file_size
 )
 from .exceptions import AudioProcessingError, FileProcessingError
+from .engines import get_engine_spec
 from .logger import logger
 
 class TranscriptionApp:
@@ -92,10 +94,11 @@ class TranscriptionApp:
         self.recording_status_var = tk.StringVar(value="待機中")
         self.recording_elapsed_var = tk.StringVar(value="00:00:00")
         self.recording_device_var = tk.StringVar(value="マイク確認中...")
-        self.recording_hint_var = tk.StringVar(value="停止後にそのままキューへ追加できます")
+        self.recording_hint_var = tk.StringVar(value="Space でも開始できます")
         self.recording_format_var = tk.StringVar(value="WAV / 16bit PCM")
         self.recording_level_var = tk.StringVar(value="0%")
         self.recording_peak_var = tk.StringVar(value="0%")
+        self._recent_recording_paths = []
         self.audio_recorder = MicrophoneRecorder()
         self.preview_player = AudioPreviewPlayer()
         self._playback_poll_job = None
@@ -149,8 +152,10 @@ class TranscriptionApp:
         self.refresh_recording_input_options(persist=False)
         self.audio_recorder.start_monitoring()
         self._refresh_recording_ui()
+        self.refresh_recent_recordings()
         self._start_recording_visual_loop()
         self._start_playback_poll_loop()
+        self._bind_recording_shortcuts()
 
         # ウィンドウにフォーカスが戻ったとき履歴を自動更新
         self.root.bind('<FocusIn>', self._on_focus_in)
@@ -354,6 +359,22 @@ class TranscriptionApp:
         """録音レベルを既定値へ戻す"""
         self.set_recording_gain(DEFAULT_RECORDING_GAIN_PERCENT, persist=True)
 
+    def _set_widget_enabled(self, widget, enabled):
+        """ttk / tk のどちらでも有効・無効を切り替える"""
+        if widget is None:
+            return
+        try:
+            widget_class = widget.winfo_class()
+        except tk.TclError:
+            return
+        if widget_class == 'TButton':
+            widget.state(['!disabled'] if enabled else ['disabled'])
+            return
+        if widget_class == 'TCombobox':
+            widget.configure(state='readonly' if enabled else 'disabled')
+            return
+        widget.configure(state=tk.NORMAL if enabled else tk.DISABLED)
+
     def _set_recording_status(self, text, color=None):
         """録音ステータス表示を更新する"""
         self.recording_status_var.set(text)
@@ -363,13 +384,13 @@ class TranscriptionApp:
             label.config(fg=color)
         if badge:
             badge_map = {
-                "録音中": ("REC", "#F8E5E3", "#BD5B55"),
-                "保存完了": ("SAVED", "#E4F0E7", "#4F8B63"),
-                "録音不可": ("ERROR", "#F8E5E3", "#BD5B55"),
-                "待機中": ("STANDBY", "#E5EDF5", "#4E7DA5"),
+                "録音中": ("録音中", "#F8E5E3", "#BD5B55"),
+                "保存完了": ("保存完了", "#E4F0E7", "#4F8B63"),
+                "録音不可": ("録音不可", "#F8E5E3", "#BD5B55"),
+                "待機中": ("待機中", "#E5EDF5", "#4E7DA5"),
             }
             badge_text, badge_bg, badge_fg = badge_map.get(
-                text, ("READY", "#E5EDF5", "#4E7DA5")
+                text, (text or "待機中", "#E5EDF5", "#4E7DA5")
             )
             badge.config(text=badge_text, bg=badge_bg, fg=badge_fg)
 
@@ -405,45 +426,45 @@ class TranscriptionApp:
         channel_combo = self.ui_elements.get('recording_channel_combo')
         refresh_input_button = self.ui_elements.get('refresh_recording_inputs_button')
         status_label = self.ui_elements.get('recording_status_label')
+        timer_label = self.ui_elements.get('recording_timer_label')
         device_message = "既定マイク"
         available, availability_message = self.audio_recorder.get_availability()
         snapshot = self.audio_recorder.get_monitor_snapshot()
+        is_recording = self.audio_recorder.is_recording
 
-        if self.audio_recorder.is_recording:
+        if timer_label:
+            timer_label.config(fg="#C4453A" if is_recording else "#232526")
+
+        if is_recording:
             self._set_recording_status("録音中", "#BD5B55")
             device_message = (
                 f"{self.audio_recorder.current_device_name} | "
                 f"{self.audio_recorder.current_sample_rate}Hz | "
-                f"{self.audio_recorder.get_monitor_snapshot().get('input_channel_label', '入力 CH 1')} | "
+                f"{snapshot.get('input_channel_label', '入力 CH 1')} | "
                 f"保存 {self.audio_recorder.current_channels}ch"
             )
             current_file = os.path.basename(self.audio_recorder.current_file_path or "")
-            self.recording_hint_var.set(f"保存先: {current_file}")
+            self.recording_hint_var.set(f"録音中 · {current_file} · Space / Esc で停止")
             self.recording_format_var.set(
                 f"WAV / {self.audio_recorder.current_sample_rate}Hz / {self.audio_recorder.current_channels}ch"
             )
-            if record_button:
-                if hasattr(record_button, 'active_text'):
-                    record_button.config(text=record_button.active_text)
-                record_button.state(['disabled'])
-            if stop_button:
-                if hasattr(stop_button, 'active_text'):
-                    stop_button.config(text=stop_button.active_text)
-                stop_button.state(['!disabled'])
-            if choose_folder_button:
-                choose_folder_button.state(['disabled'])
-            if device_combo:
-                device_combo.configure(state='disabled')
-            if channel_combo:
-                channel_combo.configure(state='disabled')
-            if refresh_input_button:
-                refresh_input_button.state(['disabled'])
+            if record_button and hasattr(record_button, 'apply_style'):
+                record_button.apply_style(True)
+            self._set_widget_enabled(record_button, True)
+            self._set_widget_enabled(stop_button, True)
+            self._set_widget_enabled(choose_folder_button, False)
+            self._set_widget_enabled(device_combo, False)
+            self._set_widget_enabled(channel_combo, False)
+            self._set_widget_enabled(refresh_input_button, False)
         else:
             device_message = availability_message
             if not preserve_status:
                 if available:
                     self._set_recording_status("待機中", "#64605A")
-                    self.recording_hint_var.set("停止後にそのままキューへ追加できます")
+                    if self.auto_queue_recordings_var.get():
+                        self.recording_hint_var.set("停止すると保存し、自動でキューへ追加します")
+                    else:
+                        self.recording_hint_var.set("停止すると保存します。下の一覧からキューへ追加できます")
                 else:
                     self._set_recording_status("録音不可", "#C25450")
                     self.recording_hint_var.set(availability_message)
@@ -457,24 +478,16 @@ class TranscriptionApp:
                     else:
                         status_label.config(fg="#64605A")
 
-            if record_button:
-                if hasattr(record_button, 'idle_text'):
-                    record_button.config(text=record_button.idle_text)
-                record_button.state(['!disabled'] if available else ['disabled'])
-            if stop_button:
-                if hasattr(stop_button, 'idle_text'):
-                    stop_button.config(text=stop_button.idle_text)
-                stop_button.state(['disabled'])
-            if choose_folder_button:
-                choose_folder_button.state(['!disabled'])
-            if device_combo:
-                device_combo.configure(state='readonly' if self._recording_device_options else 'disabled')
-            if channel_combo:
-                channel_combo.configure(state='readonly' if self._recording_channel_options else 'disabled')
-            if refresh_input_button:
-                refresh_input_button.state(['!disabled'])
+            if record_button and hasattr(record_button, 'apply_style'):
+                record_button.apply_style(False)
+            self._set_widget_enabled(record_button, available)
+            self._set_widget_enabled(stop_button, False)
+            self._set_widget_enabled(choose_folder_button, True)
+            self._set_widget_enabled(device_combo, bool(self._recording_device_options))
+            self._set_widget_enabled(channel_combo, bool(self._recording_channel_options))
+            self._set_widget_enabled(refresh_input_button, True)
 
-            if not preserve_status and not self.audio_recorder.is_recording:
+            if not preserve_status:
                 self.recording_elapsed_var.set("00:00:00")
                 self.recording_format_var.set("WAV / 16bit PCM")
 
@@ -482,10 +495,10 @@ class TranscriptionApp:
         self._update_recording_visual_state(
             level=snapshot['level'],
             peak=snapshot['peak'],
-            is_active=self.audio_recorder.is_recording,
+            is_active=is_recording,
             spectrum=snapshot.get('spectrum', []),
             waveform=snapshot.get('waveform', []),
-            is_live=self.audio_recorder.is_recording or self.audio_recorder.is_monitoring
+            is_live=is_recording or self.audio_recorder.is_monitoring
         )
 
     def _start_recording_timer(self):
@@ -706,7 +719,10 @@ class TranscriptionApp:
         self._save_recording_settings()
         self._persist_queue_state(save=False)
 
-        # カラム幅を保存
+        # カラム幅と分割ペイン位置を保存
+        persist_panes = self.ui_elements.get('persist_pane_fractions')
+        if callable(persist_panes):
+            persist_panes()
         self._save_column_widths()
         self.config.save()
         if self._waveform_refresh_job is not None:
@@ -775,10 +791,10 @@ class TranscriptionApp:
             # Whisper APIモードの場合はOpenAI API接続を確認
             api_key = self.openai_api_key.get().strip()
             if not api_key:
-                messagebox.showerror("エラー", "Whisper APIモードではOpenAI APIキーを入力してください。")
+                messagebox.showerror("エラー", get_engine_spec('whisper-api').api_key_error)
                 return
             
-            self.controller.update_status("Whisper API接続を確認中...")
+            self.controller.update_status("OpenAI 接続を確認中...")
             self.root.update_idletasks()
             
             try:
@@ -787,15 +803,15 @@ class TranscriptionApp:
                 
                 # 簡単なテスト（実際にはファイルが必要なので、サービスが初期化できればOK）
                 if 'model_label' in self.ui_elements:
-                    self.ui_elements['model_label'].config(text="Whisper API")
+                    self.ui_elements['model_label'].config(text="OpenAI")
                 
-                messagebox.showinfo("成功", "Whisper APIへの接続準備が完了しました！")
-                self.controller.update_status("Whisper API接続準備完了")
+                messagebox.showinfo("成功", "OpenAI への接続準備が完了しました。")
+                self.controller.update_status("OpenAI 接続準備完了")
             except Exception as e:
-                messagebox.showerror("エラー", f"Whisper APIエラー: {str(e)}")
-                self.controller.update_status("Whisper APIエラー")
+                messagebox.showerror("エラー", f"OpenAI エラー: {str(e)}")
+                self.controller.update_status("OpenAI エラー")
                 if 'model_label' in self.ui_elements:
-                    self.ui_elements['model_label'].config(text="Whisper APIエラー")
+                    self.ui_elements['model_label'].config(text="OpenAI エラー")
         else:
             # Geminiモードの場合は従来通り
             api_key = self.api_key.get().strip()
@@ -841,11 +857,6 @@ class TranscriptionApp:
             else:
                 self.load_file(paths[0])
 
-    def toggle_auto_queue_recordings(self):
-        """録音停止後の自動キュー投入設定を保存"""
-        self.config.set("auto_queue_recordings", self.auto_queue_recordings_var.get())
-        self.config.save()
-
     def choose_recording_folder(self):
         """録音保存先フォルダを選択する"""
         if self.audio_recorder.is_recording:
@@ -864,7 +875,8 @@ class TranscriptionApp:
         self.recording_dir_var.set(self.recording_dir)
         self.config.set("recording_dir", self.recording_dir)
         self.config.save()
-        self.recording_hint_var.set("停止後にそのままキューへ追加できます")
+        self._refresh_recording_ui(preserve_status=True)
+        self.refresh_recent_recordings()
         self.controller.add_log(f"録音保存先を変更: {self.recording_dir}")
 
     def open_recording_folder(self):
@@ -895,6 +907,17 @@ class TranscriptionApp:
         files.sort(key=lambda path: os.path.getmtime(path))
         return files
 
+    def toggle_auto_queue_recordings(self):
+        """録音停止後の自動キュー投入設定を保存"""
+        self.config.set("auto_queue_recordings", self.auto_queue_recordings_var.get())
+        self.config.save()
+        if self.audio_recorder.is_recording or self.recording_status_var.get() != "待機中":
+            return
+        if self.auto_queue_recordings_var.get():
+            self.recording_hint_var.set("停止すると保存し、自動でキューへ追加します")
+        else:
+            self.recording_hint_var.set("停止すると保存します。下の一覧からキューへ追加できます")
+
     def add_recordings_to_queue(self):
         """録音フォルダ内のファイルをキューへ追加する"""
         recording_files = self._list_recording_files()
@@ -903,6 +926,99 @@ class TranscriptionApp:
             return
 
         self._add_files_to_queue(recording_files, prompt_on_duplicates=False)
+
+    def refresh_recent_recordings(self, select_first=False):
+        """最近の録音一覧を更新する"""
+        listbox = self.ui_elements.get('recent_recordings_listbox') if hasattr(self, 'ui_elements') else None
+        files = self._list_recording_files()
+        files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        self._recent_recording_paths = files[:12]
+        if listbox is None:
+            return
+
+        listbox.delete(0, tk.END)
+        if not self._recent_recording_paths:
+            listbox.insert(tk.END, "まだ録音がありません")
+            listbox.itemconfig(0, foreground='#A79F96')
+            return
+
+        for path in self._recent_recording_paths:
+            stamp = datetime.fromtimestamp(os.path.getmtime(path)).strftime('%m/%d %H:%M')
+            size_text = format_file_size(os.path.getsize(path))
+            listbox.insert(tk.END, f"{stamp}  {os.path.basename(path)}  ({size_text})")
+
+        if select_first:
+            listbox.selection_clear(0, tk.END)
+            listbox.selection_set(0)
+            listbox.see(0)
+
+    def add_selected_recordings_to_queue(self, event=None):
+        """最近の録音一覧で選んだファイルをキューへ追加する"""
+        listbox = self.ui_elements.get('recent_recordings_listbox') if hasattr(self, 'ui_elements') else None
+        if not self._recent_recording_paths:
+            messagebox.showinfo("情報", "キューに追加できる録音がまだありません。")
+            return
+
+        selected = list(listbox.curselection()) if listbox is not None else []
+        selected = [index for index in selected if 0 <= index < len(self._recent_recording_paths)]
+        if not selected:
+            if len(self._recent_recording_paths) == 1:
+                selected = [0]
+            else:
+                messagebox.showinfo("情報", "キューに追加する録音を選んでください。")
+                return
+
+        paths = [self._recent_recording_paths[index] for index in selected]
+        self._add_files_to_queue(paths, prompt_on_duplicates=False)
+
+    def toggle_recording(self, event=None):
+        """録音中なら停止、そうでなければ開始する"""
+        if self.audio_recorder.is_recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def _bind_recording_shortcuts(self):
+        """録音タブ向けのキーボード操作を登録する"""
+        self.root.bind('<space>', self._on_recording_space)
+        self.root.bind('<Escape>', self._on_recording_escape)
+
+    def _is_text_input_focused(self):
+        """入力欄にフォーカスがあるかを返す"""
+        focused = self.root.focus_get()
+        if focused is None:
+            return False
+        try:
+            widget_class = focused.winfo_class()
+        except tk.TclError:
+            return False
+        return widget_class in ('Entry', 'TEntry', 'Text', 'TCombobox', 'Listbox')
+
+    def _is_recording_tab_active(self):
+        """録音タブが前面かを返す"""
+        notebook = self.ui_elements.get('notebook') if hasattr(self, 'ui_elements') else None
+        tab_keys = self.ui_elements.get('tab_keys') or []
+        if notebook is None:
+            return False
+        try:
+            current = notebook.index(notebook.select())
+        except tk.TclError:
+            return False
+        return 0 <= current < len(tab_keys) and tab_keys[current] == 'recording'
+
+    def _on_recording_space(self, event=None):
+        """録音タブで Space を開始/停止に使う"""
+        if self._is_text_input_focused() or not self._is_recording_tab_active():
+            return
+        self.toggle_recording()
+        return 'break'
+
+    def _on_recording_escape(self, event=None):
+        """録音中なら Esc で停止する"""
+        if not self.audio_recorder.is_recording:
+            return
+        self.stop_recording(show_message=False)
+        return 'break'
 
     def start_recording(self):
         """既定マイクから録音を開始する"""
@@ -967,13 +1083,19 @@ class TranscriptionApp:
             f"{self._format_recording_channel_option(result.get('input_channels', [1]))} | "
             f"{result['sample_rate']}Hz / {result['channels']}ch"
         )
-        self.recording_hint_var.set(f"最後に保存: {os.path.basename(result['file_path'])}")
         self.recording_format_var.set(
             f"WAV / {result['sample_rate']}Hz / {result['channels']}ch"
         )
         self.audio_recorder.start_monitoring()
         self._refresh_recording_ui(preserve_status=True)
+        self.refresh_recent_recordings(select_first=True)
         self._start_recording_visual_loop()
+        queued_note = "キューへ追加しました" if (
+            self.auto_queue_recordings_var.get() if add_to_queue is None else add_to_queue
+        ) else "下の一覧からキューへ追加できます"
+        self.recording_hint_var.set(
+            f"保存しました: {os.path.basename(result['file_path'])} · {queued_note}"
+        )
         self.controller.add_log(
             f"録音保存: {os.path.basename(result['file_path'])} | "
             f"{duration_text} | {size_text}"

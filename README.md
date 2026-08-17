@@ -5,7 +5,7 @@
 ## 対応エンジン
 
 - **Whisper（ローカル）**: faster-whisper による無料・オフラインの文字起こし（既定）
-- **Whisper API（OpenAI）**: `gpt-4o-transcribe` / `whisper-1` 等によるクラウド文字起こし
+- **Whisper API（OpenAI）**: `gpt-transcribe` / `whisper-1` 等によるクラウド文字起こし
 - **Google Gemini API**: クラウドベースの高精度文字起こし
 
 タイトル生成・追加処理（議事録・要約）には **Ollama（ローカルLLM）** を優先的に使用し、Gemini へのフォールバックにも対応しています。
@@ -60,7 +60,7 @@ python main.py
 Windows では `run.bat` でも起動できます。
 
 2. 文字起こしエンジンを選択します
-   - **Whisper（ローカル）**: 既定。モデルは large-v3 固定（環境に応じて large / large-v2 へ自動フォールバック）
+   - **Whisper（ローカル）**: 既定。モデルは large-v3-turbo（精度優先なら large-v3 を選択可）
    - **Whisper API**: OpenAI APIキーを設定します
    - **Gemini**: Gemini APIキーを設定し、接続確認をします
 3. 音声/動画ファイルをドラッグ＆ドロップまたは選択します（複数ファイルはキュー処理）
@@ -93,7 +93,7 @@ AI-transcription/
 ## 注意事項
 
 ### ローカルWhisper使用時
-- 初回実行時にモデルのダウンロードが必要です（large-v3: 約3GB）
+- 初回実行時にモデルのダウンロードが必要です（large-v3-turbo: 約1.6GB、large-v3: 約3GB）
 - GPU（CUDA対応）があると処理速度が大幅に向上します
 - オフラインで動作し、完全無料です
 

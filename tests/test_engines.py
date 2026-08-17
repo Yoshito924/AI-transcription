@@ -19,6 +19,12 @@ class EngineSpecTests(unittest.TestCase):
     def test_get_engine_spec_unknown_falls_back_to_gemini(self):
         self.assertIs(get_engine_spec('unknown'), ENGINES['gemini'])
 
+    def test_choice_labels_are_short(self):
+        for spec in ENGINES.values():
+            self.assertTrue(spec.choice_label)
+            self.assertLessEqual(len(spec.choice_label), 8)
+            self.assertTrue(spec.help_text)
+
     def test_local_flags(self):
         self.assertTrue(ENGINES['whisper'].is_local)
         self.assertFalse(ENGINES['gemini'].is_local)

@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 This is a Japanese AI-powered transcription application that supports three transcription engines:
-- **Whisper (local)**: faster-whisper based, free, offline transcription (default; model fixed to large-v3)
-- **Whisper API (OpenAI)**: Cloud transcription via `gpt-4o-transcribe` / `whisper-1` etc.
+- **Whisper (local)**: faster-whisper based, free, offline transcription (default; large-v3-turbo, with large-v3 available)
+- **Whisper API (OpenAI)**: Cloud transcription via `gpt-transcribe` / `whisper-1` etc.
 - **Google Gemini API**: Cloud-based, high-accuracy transcription with advanced processing capabilities
 
 Title generation and additional processing (meeting minutes, summaries) prefer a local LLM via **Ollama**, with Gemini fallback.

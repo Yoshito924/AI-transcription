@@ -22,8 +22,10 @@ from .constants import (
     OLLAMA_DEFAULT_MODEL,
     DEFAULT_TRANSCRIPTION_ENGINE,
     DEFAULT_WHISPER_MODEL,
+    DEFAULT_WHISPER_API_MODEL,
     DEFAULT_TITLE_GENERATION_ENGINE,
     DEFAULT_ADDITIONAL_PROCESSING_ENGINE,
+    DEFAULT_PANE_FRACTIONS,
     CONFIG_DIR,
     CONFIG_FILE,
     RECORDINGS_DIR
@@ -65,6 +67,7 @@ class Config:
             "title_generation_engine": DEFAULT_TITLE_GENERATION_ENGINE,  # "ollama", "auto", "gemini", "disabled"
             "ollama_model": OLLAMA_DEFAULT_MODEL,
             "whisper_model": DEFAULT_WHISPER_MODEL,
+            "whisper_api_model": DEFAULT_WHISPER_API_MODEL,
             "trim_long_silence": DEFAULT_TRIM_LONG_SILENCE,
             "silence_trim_mode": DEFAULT_SILENCE_TRIM_MODE,
             "silence_trim_threshold_db": DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
@@ -77,8 +80,10 @@ class Config:
             "auto_queue_recordings": True,
             "recording_gain_percent": DEFAULT_RECORDING_GAIN_PERCENT,
             "recording_input_device": None,
-            "recording_input_channels": [1]
+            "recording_input_channels": [1],
+            "recording_settings_expanded": False,
         }
+        self.defaults.update(DEFAULT_PANE_FRACTIONS)
 
         # デフォルト値で埋める（秘密キーは config.json に持ち込まない）
         for key, value in self.defaults.items():
