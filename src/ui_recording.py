@@ -10,13 +10,18 @@ from .ui_styles import ICONS
 
 
 def _bind_dynamic_wraplength(label, padding=0):
-    """ラベルの wraplength を親ウィジェットの幅に追従させる"""
+    """ラベルの wraplength を自身の幅に追従させる（自己発火で縦に伸びない）"""
     def _update(event=None):
-        parent = label.winfo_parent()
-        parent_widget = label.nametowidget(parent)
-        w = parent_widget.winfo_width()
-        if w > 1:
-            label.config(wraplength=max(100, w - padding * 2 - 10))
+        w = label.winfo_width()
+        if w <= 1:
+            return
+        new_wrap = max(80, w - max(0, padding))
+        try:
+            current = int(float(label.cget('wraplength') or 0))
+        except (TypeError, ValueError):
+            current = 0
+        if abs(current - new_wrap) > 2:
+            label.config(wraplength=new_wrap)
     label.bind('<Configure>', _update)
 
 
@@ -66,34 +71,20 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     card.pack(fill=tk.X, padx=pad, pady=(0, 8))
 
     inner = tk.Frame(card, bg=colors['surface'])
-    inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)
+    inner.pack(fill=tk.X, padx=14, pady=14)
 
     stage = tk.Frame(inner, bg=colors['surface'])
     stage.pack(fill=tk.X)
 
-    status_row = tk.Frame(stage, bg=colors['surface'])
-    status_row.pack(fill=tk.X)
-
     recording_status_label = tk.Label(
-        status_row,
+        stage,
         textvariable=app.recording_status_var,
         font=theme.fonts['heading'],
         fg=colors['text_primary'],
-        bg=colors['surface']
-    )
-    recording_status_label.pack(side=tk.LEFT)
-
-    recording_device_label = tk.Label(
-        status_row,
-        textvariable=app.recording_device_var,
-        font=theme.fonts['caption'],
-        fg=colors['text_secondary'],
         bg=colors['surface'],
-        justify='right',
-        anchor='e'
+        anchor='w'
     )
-    recording_device_label.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(12, 0))
-    _bind_dynamic_wraplength(recording_device_label, 8)
+    recording_status_label.pack(anchor='w')
 
     recording_timer_label = tk.Label(
         stage,
@@ -102,7 +93,19 @@ def _create_recording_card(parent, app, theme, widgets, pad):
         fg=colors['text_primary'],
         bg=colors['surface']
     )
-    recording_timer_label.pack(anchor='w', pady=(4, 10))
+    recording_timer_label.pack(anchor='w', pady=(4, 4))
+
+    recording_device_label = tk.Label(
+        stage,
+        textvariable=app.recording_device_var,
+        font=theme.fonts['caption'],
+        fg=colors['text_secondary'],
+        bg=colors['surface'],
+        justify='left',
+        anchor='w'
+    )
+    recording_device_label.pack(anchor='w', fill=tk.X, pady=(0, 10))
+    _bind_dynamic_wraplength(recording_device_label, 0)
 
     visual_shell = tk.Frame(
         stage,
@@ -119,12 +122,17 @@ def _create_recording_card(parent, app, theme, widgets, pad):
         highlightthickness=0,
         height=148
     )
-    recording_visual_canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+    recording_visual_canvas.pack(fill=tk.X, padx=8, pady=8)
     recording_visual_canvas.draw_visual = _make_visual_drawer(recording_visual_canvas, theme)
-    recording_visual_canvas.bind(
-        '<Configure>',
-        lambda _event: recording_visual_canvas.draw_visual(0.0, 0.0, False, 0.0, [], [], False)
-    )
+
+    def _on_visual_configure(_event=None):
+        last = getattr(recording_visual_canvas, '_last_visual', None)
+        if last:
+            recording_visual_canvas.draw_visual(*last)
+        else:
+            recording_visual_canvas.draw_visual(0.0, 0.0, False, 0.0, [], [], False)
+
+    recording_visual_canvas.bind('<Configure>', _on_visual_configure)
 
     recording_hint_label = tk.Label(
         stage,
@@ -343,9 +351,30 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     recording_channel_combo.pack(fill=tk.X, pady=(4, 0))
     recording_channel_combo.bind('<<ComboboxSelected>>', app.on_recording_channel_selected)
 
+    rate_column = tk.Frame(settings_inner, bg=colors['surface'])
+    rate_column.pack(fill=tk.X, pady=(0, 8))
+
+    tk.Label(
+        rate_column,
+        text="サンプリング周波数",
+        font=theme.fonts['caption_bold'],
+        fg=colors['text_secondary'],
+        bg=colors['surface']
+    ).pack(anchor='w')
+
+    recording_sample_rate_combo = ttk.Combobox(
+        rate_column,
+        textvariable=app.recording_sample_rate_var,
+        values=[],
+        state='readonly',
+        style='Modern.TCombobox'
+    )
+    recording_sample_rate_combo.pack(fill=tk.X, pady=(4, 0))
+    recording_sample_rate_combo.bind('<<ComboboxSelected>>', app.on_recording_sample_rate_selected)
+
     source_note = tk.Label(
         settings_inner,
-        text="オーディオIFの 1-2 / 3-4 などは、デバイスとチャンネルの両方で切り替えます。",
+        text="デバイスは名前で覚えます。周波数は「自動」ならオーディオIFのクロックに合わせます。",
         font=theme.fonts['caption'],
         fg=colors['text_secondary'],
         bg=colors['surface'],
@@ -432,6 +461,7 @@ def _create_recording_card(parent, app, theme, widgets, pad):
         'open_recording_folder_button': open_recording_folder_button,
         'recording_device_combo': recording_device_combo,
         'recording_channel_combo': recording_channel_combo,
+        'recording_sample_rate_combo': recording_sample_rate_combo,
         'refresh_recording_inputs_button': refresh_recording_inputs_button,
         'recording_gain_scale': gain_scale,
         'recording_visual_canvas': recording_visual_canvas,
@@ -447,10 +477,15 @@ def _make_visual_drawer(canvas, theme):
     def _draw_recording_visual(level=0.0, peak=0.0, is_active=False, phase=0.0,
                                spectrum_bins=None, waveform_points=None, is_live=False):
         del waveform_points
+        canvas._last_visual = (
+            level, peak, is_active, phase, list(spectrum_bins or []), [], is_live
+        )
         canvas.delete('all')
 
-        width = max(canvas.winfo_width(), 240)
-        height = max(canvas.winfo_height(), 148)
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width < 2 or height < 2:
+            return
         left_pad = 12
         right_pad = 12
         usable_width = max(80, width - left_pad - right_pad)

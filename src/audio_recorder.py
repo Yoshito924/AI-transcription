@@ -19,7 +19,9 @@ import numpy as np
 from .constants import (
     DEFAULT_RECORDING_CHANNELS,
     DEFAULT_RECORDING_GAIN_PERCENT,
-    DEFAULT_RECORDING_SAMPLE_RATE
+    DEFAULT_RECORDING_SAMPLE_RATE,
+    RECORDING_SAMPLE_RATE_AUTO,
+    RECORDING_SAMPLE_RATES,
 )
 from .exceptions import AudioProcessingError
 from .logger import logger
@@ -28,6 +30,59 @@ try:
     import sounddevice as sd
 except ImportError:  # pragma: no cover - インストール有無で分岐
     sd = None
+
+
+def match_saved_input_device(devices, saved_id=None, saved_name=None, saved_hostapi=None):
+    """保存したデバイス識別子から、現在の入力デバイスを復元する"""
+    devices = list(devices or [])
+    named = [device for device in devices if saved_name and device.get('name') == saved_name]
+    if saved_hostapi:
+        host_named = [device for device in named if device.get('hostapi_name') == saved_hostapi]
+        if host_named:
+            named = host_named
+    if named:
+        if saved_id is not None:
+            for device in named:
+                if device.get('index') == saved_id:
+                    return device
+        return named[0]
+
+    if saved_id is not None:
+        for device in devices:
+            if device.get('index') == saved_id:
+                return device
+    return None
+
+
+def build_sample_rate_candidates(reported_rate=None, preferred_rate=None):
+    """録音に使うサンプリング周波数の候補を優先順で返す"""
+    candidates = []
+    if preferred_rate not in (None, '', RECORDING_SAMPLE_RATE_AUTO):
+        try:
+            candidates.append(int(preferred_rate))
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        reported = int(reported_rate or 0)
+    except (TypeError, ValueError):
+        reported = 0
+
+    trusted_native = {44100, 48000, 88200, 96000, 176400, 192000, 32000, 24000}
+    if reported in trusted_native:
+        candidates.append(reported)
+    elif reported == 16000:
+        candidates.extend([48000, 44100, 16000])
+    elif reported > 0:
+        candidates.append(reported)
+        candidates.extend([48000, 44100])
+    else:
+        candidates.extend([48000, 44100])
+
+    for rate in RECORDING_SAMPLE_RATES:
+        if rate not in candidates:
+            candidates.append(rate)
+    return candidates
 
 
 class MicrophoneRecorder:
@@ -44,6 +99,8 @@ class MicrophoneRecorder:
         self.input_gain_percent = DEFAULT_RECORDING_GAIN_PERCENT
         self.selected_device_id = None
         self.selected_input_channels = [1]
+        self.preferred_sample_rate = None
+        self._stream_extra_settings = None
         self.current_file_path = None
         self.current_device_name = None
         self.current_sample_rate = default_sample_rate
@@ -139,17 +196,31 @@ class MicrophoneRecorder:
 
         return input_devices
 
-    def set_input_preferences(self, device_id=None, input_channels=None):
-        """入力デバイスと使用チャンネルを設定する"""
+    def set_input_preferences(self, device_id=None, input_channels=None, sample_rate=None):
+        """入力デバイスと使用チャンネル、サンプリング周波数を設定する"""
         if device_id in (None, '', 'default'):
             self.selected_device_id = None
         else:
             self.selected_device_id = int(device_id)
         self.selected_input_channels = self._normalize_input_channels(input_channels)
+        if sample_rate is not None:
+            self.set_preferred_sample_rate(sample_rate)
         return {
             'device_id': self.selected_device_id,
             'input_channels': list(self.selected_input_channels),
+            'sample_rate': self.preferred_sample_rate,
         }
+
+    def set_preferred_sample_rate(self, sample_rate):
+        """希望するサンプリング周波数を設定する。auto ならデバイスに合わせる"""
+        if sample_rate in (None, '', RECORDING_SAMPLE_RATE_AUTO):
+            self.preferred_sample_rate = None
+            return None
+        try:
+            self.preferred_sample_rate = int(sample_rate)
+        except (TypeError, ValueError):
+            self.preferred_sample_rate = None
+        return self.preferred_sample_rate
 
     def set_input_gain(self, gain_percent):
         """録音用ソフトウェアゲインを設定する"""
@@ -199,20 +270,22 @@ class MicrophoneRecorder:
             self._wave_handle.setsampwidth(self.sample_width_bytes)
             self._wave_handle.setframerate(sample_rate)
 
+            self._stream = self._open_input_stream(
+                sample_rate=sample_rate,
+                device_ref=device_ref,
+                stream_channels=stream_channels,
+                callback=self._audio_callback,
+            )
+            sample_rate = self._sync_stream_sample_rate(self._stream, sample_rate)
+            self.current_sample_rate = sample_rate
+            self._wave_handle.setframerate(sample_rate)
+
             self._writer_thread = threading.Thread(
                 target=self._writer_loop,
                 name="microphone-recorder-writer",
                 daemon=True
             )
             self._writer_thread.start()
-
-            self._stream = sd.RawInputStream(
-                samplerate=sample_rate,
-                device=device_ref,
-                channels=stream_channels,
-                dtype='int16',
-                callback=self._audio_callback
-            )
             self._stream.start()
         except Exception as exc:
             logger.error(f"録音開始に失敗: {exc}", exc_info=True)
@@ -248,14 +321,16 @@ class MicrophoneRecorder:
             self.current_channels = output_channels
             self.current_stream_channels = stream_channels
             self.current_input_channels = list(selected_input_channels)
-            self._monitor_stream = sd.RawInputStream(
-                samplerate=sample_rate,
-                device=device_ref,
-                channels=stream_channels,
-                dtype='int16',
-                callback=self._monitor_callback
+            self._monitor_stream = self._open_input_stream(
+                sample_rate=sample_rate,
+                device_ref=device_ref,
+                stream_channels=stream_channels,
+                callback=self._monitor_callback,
             )
             self._monitor_stream.start()
+            self.current_sample_rate = self._sync_stream_sample_rate(
+                self._monitor_stream, sample_rate
+            )
             self.is_monitoring = True
             return True
         except Exception as exc:
@@ -405,7 +480,6 @@ class MicrophoneRecorder:
         if max_input_channels < 1:
             raise AudioProcessingError("利用可能なマイク入力が見つかりません。")
 
-        sample_rate = int(device_info.get('default_samplerate') or self.default_sample_rate)
         selected_input_channels = [
             channel for channel in self._normalize_input_channels(self.selected_input_channels)
             if 1 <= channel <= max_input_channels
@@ -415,24 +489,116 @@ class MicrophoneRecorder:
 
         stream_channels = max(selected_input_channels)
         output_channels = len(selected_input_channels)
+        hostapi_name = self._hostapi_name(device_info)
+        reported_rate = int(device_info.get('default_samplerate') or 0)
+        sample_rate, extra_settings = self._resolve_sample_rate(
+            device_ref=device_ref,
+            stream_channels=stream_channels,
+            reported_rate=reported_rate,
+            hostapi_name=hostapi_name,
+        )
+        self._stream_extra_settings = extra_settings
 
+        return (
+            device_info,
+            sample_rate,
+            stream_channels,
+            output_channels,
+            selected_input_channels,
+            device_ref
+        )
+
+    def _hostapi_name(self, device_info):
+        """デバイス情報からホストAPI名を返す"""
         try:
-            sd.check_input_settings(
-                device=device_ref,
-                samplerate=sample_rate,
-                channels=stream_channels,
-                dtype='int16'
+            hostapis = sd.query_hostapis()
+            hostapi_index = int(device_info.get('hostapi') or 0)
+            if 0 <= hostapi_index < len(hostapis):
+                return hostapis[hostapi_index].get('name', '') or ''
+        except Exception:
+            pass
+        return ''
+
+    def _wasapi_extra_settings(self, hostapi_name, auto_convert):
+        """WASAPI デバイス向けの追加設定を返す。非対応なら None"""
+        if 'wasapi' not in (hostapi_name or '').lower():
+            return None
+        try:
+            return sd.WasapiSettings(exclusive=False, auto_convert=auto_convert)
+        except Exception:
+            return None
+
+    def _check_input_settings(self, device_ref, sample_rate, stream_channels, extra_settings=None):
+        """指定の入力設定が使えるかを確認する"""
+        kwargs = {
+            'device': device_ref,
+            'samplerate': sample_rate,
+            'channels': stream_channels,
+            'dtype': 'int16',
+        }
+        if extra_settings is not None:
+            kwargs['extra_settings'] = extra_settings
+        sd.check_input_settings(**kwargs)
+
+    def _resolve_sample_rate(self, device_ref, stream_channels, reported_rate, hostapi_name):
+        """オーディオIFの実クロックに近いサンプリング周波数を選ぶ"""
+        candidates = build_sample_rate_candidates(
+            reported_rate=reported_rate,
+            preferred_rate=self.preferred_sample_rate,
+        )
+        native_extra = self._wasapi_extra_settings(hostapi_name, auto_convert=False)
+        convert_extra = self._wasapi_extra_settings(hostapi_name, auto_convert=True)
+
+        probe_passes = []
+        if native_extra is not None:
+            probe_passes.append(native_extra)
+        if convert_extra is not None:
+            probe_passes.append(convert_extra)
+        probe_passes.append(None)
+
+        last_error = None
+        for extra in probe_passes:
+            for rate in candidates:
+                try:
+                    self._check_input_settings(device_ref, rate, stream_channels, extra)
+                    return rate, extra
+                except Exception as exc:
+                    last_error = exc
+                    continue
+
+        if last_error is not None:
+            raise AudioProcessingError(
+                f"入力デバイス設定を初期化できませんでした: {last_error}"
+            ) from last_error
+        return candidates[0], None
+
+    def _open_input_stream(self, sample_rate, device_ref, stream_channels, callback):
+        """録音/モニター用の入力ストリームを開く"""
+        kwargs = {
+            'samplerate': sample_rate,
+            'device': device_ref,
+            'channels': stream_channels,
+            'dtype': 'int16',
+            'callback': callback,
+        }
+        if self._stream_extra_settings is not None:
+            kwargs['extra_settings'] = self._stream_extra_settings
+        return sd.RawInputStream(**kwargs)
+
+    def _sync_stream_sample_rate(self, stream, requested_rate):
+        """開いたストリームの実サンプリング周波数を採用する"""
+        try:
+            actual = int(round(float(getattr(stream, 'samplerate', requested_rate) or requested_rate)))
+        except (TypeError, ValueError):
+            actual = int(requested_rate)
+        if actual and actual != int(requested_rate):
+            logger.info(
+                "サンプリング周波数をデバイス実値に合わせました: requested=%s actual=%s",
+                requested_rate,
+                actual,
             )
-            return (
-                device_info,
-                sample_rate,
-                stream_channels,
-                output_channels,
-                selected_input_channels,
-                device_ref
-            )
-        except Exception as exc:
-            raise AudioProcessingError(f"入力デバイス設定を初期化できませんでした: {exc}") from exc
+            return actual
+        return int(requested_rate)
 
     def _audio_callback(self, indata, frames, time_info, status):
         """sounddevice のコールバック。音声バッファを書き込みキューへ渡す"""

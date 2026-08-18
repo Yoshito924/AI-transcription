@@ -738,7 +738,8 @@ class ModernWidgets:
 
             formats_bbox = canvas.bbox(formats_id)
             required_height = (formats_bbox[3] + 16 + panel_pad) if formats_bbox else min_height
-            if required_height > h:
+            required_height = min(required_height, 240)
+            if required_height > h + 1:
                 canvas.configure(height=required_height)
                 return
 

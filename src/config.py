@@ -19,6 +19,7 @@ from .constants import (
     DEFAULT_SILENCE_TRIM_THRESHOLD_DB,
     DEFAULT_SILENCE_TRIM_MIN_SILENCE_SEC,
     DEFAULT_RECORDING_GAIN_PERCENT,
+    RECORDING_SAMPLE_RATE_AUTO,
     OLLAMA_DEFAULT_MODEL,
     DEFAULT_TRANSCRIPTION_ENGINE,
     DEFAULT_WHISPER_MODEL,
@@ -80,7 +81,10 @@ class Config:
             "auto_queue_recordings": True,
             "recording_gain_percent": DEFAULT_RECORDING_GAIN_PERCENT,
             "recording_input_device": None,
+            "recording_input_device_name": None,
+            "recording_input_hostapi": None,
             "recording_input_channels": [1],
+            "recording_sample_rate": RECORDING_SAMPLE_RATE_AUTO,
             "recording_settings_expanded": False,
         }
         self.defaults.update(DEFAULT_PANE_FRACTIONS)

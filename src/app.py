@@ -11,7 +11,7 @@ import re
 from .ui import setup_ui
 from .config import Config
 from .processor import FileProcessor
-from .audio_recorder import MicrophoneRecorder
+from .audio_recorder import MicrophoneRecorder, match_saved_input_device
 from .audio_player import AudioPreviewPlayer
 from .controllers import TranscriptionController
 from .terminal_cleanup import schedule_launch_terminal_close
@@ -22,6 +22,8 @@ from .constants import (
     DATA_DIR,
     DEFAULT_RECORDING_GAIN_PERCENT,
     FILE_NAME_DISPLAY_MAX_LENGTH,
+    RECORDING_SAMPLE_RATE_AUTO,
+    RECORDING_SAMPLE_RATES,
     RECORDINGS_DIR,
     SUPPORTED_AUDIO_FORMATS,
     SUPPORTED_MEDIA_FILE_TYPES
@@ -67,10 +69,9 @@ class TranscriptionApp:
         self.api_key = tk.StringVar(value=self.config.get("api_key", ""))  # Gemini API用
         self.openai_api_key = tk.StringVar(value=self.config.get("openai_api_key", ""))  # OpenAI API用
         self.preferred_model = None  # 手動選択されたモデル
-        self.recording_dir = self._resolve_recording_dir(
+        self.recording_dir, self._recording_dir_persist = self._restore_recording_dir(
             self.config.get("recording_dir", RECORDINGS_DIR)
         )
-        os.makedirs(self.recording_dir, exist_ok=True)
         self.recording_dir_var = tk.StringVar(value=self.recording_dir)
         self.auto_queue_recordings_var = tk.BooleanVar(
             value=self.config.get("auto_queue_recordings", True)
@@ -82,11 +83,15 @@ class TranscriptionApp:
             )
         except (TypeError, ValueError):
             self.recording_input_device_id = None
+        self.recording_input_device_name = self.config.get("recording_input_device_name", None) or None
+        self.recording_input_hostapi = self.config.get("recording_input_hostapi", None) or None
         self.recording_input_device_var = tk.StringVar(value="")
         self._recording_device_options = {}
         self._recording_input_devices = []
         self.recording_input_channels_var = tk.StringVar(value="")
         self._recording_channel_options = {}
+        self._recording_sample_rate_options = {}
+        self.recording_sample_rate_var = tk.StringVar(value="")
         self.recording_gain_percent_var = tk.DoubleVar(
             value=float(self.config.get("recording_gain_percent", DEFAULT_RECORDING_GAIN_PERCENT))
         )
@@ -108,7 +113,8 @@ class TranscriptionApp:
             device_id=self.recording_input_device_id,
             input_channels=self._normalize_recording_input_channels(
                 self.config.get("recording_input_channels", [1])
-            )
+            ),
+            sample_rate=self.config.get("recording_sample_rate", RECORDING_SAMPLE_RATE_AUTO),
         )
         self.set_recording_gain(self.recording_gain_percent_var.get(), persist=False)
         self._recording_timer_job = None
@@ -169,6 +175,33 @@ class TranscriptionApp:
         if os.path.isabs(configured_path):
             return configured_path
         return os.path.abspath(os.path.join(self.app_dir, configured_path))
+
+    def _restore_recording_dir(self, configured_path):
+        """保存済みの録音フォルダを復元する。作れない場合だけ今セッションの退避先を使う"""
+        resolved = self._resolve_recording_dir(configured_path)
+        try:
+            os.makedirs(resolved, exist_ok=True)
+            return resolved, True
+        except OSError as exc:
+            logger.warning(f"録音保存先を復元できませんでした: {resolved} ({exc})")
+            fallback = os.path.abspath(os.path.join(self.app_dir, RECORDINGS_DIR))
+            os.makedirs(fallback, exist_ok=True)
+            return fallback, False
+
+    def _format_sample_rate_option(self, value):
+        """サンプリング周波数の表示名を返す"""
+        if value in (None, '', RECORDING_SAMPLE_RATE_AUTO):
+            return "自動（デバイスに合わせる）"
+        return f"{int(value) / 1000:g} kHz"
+
+    def _parse_saved_sample_rate(self, value):
+        """保存値からサンプリング周波数設定を返す"""
+        if value in (None, '', RECORDING_SAMPLE_RATE_AUTO, '自動（デバイスに合わせる）'):
+            return RECORDING_SAMPLE_RATE_AUTO
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return RECORDING_SAMPLE_RATE_AUTO
 
     def _format_recording_clock(self, total_seconds):
         """録音経過時間を HH:MM:SS で返す"""
@@ -257,14 +290,22 @@ class TranscriptionApp:
             label = self._build_recording_device_label(device)
             self._recording_device_options[label] = device
             device_values.append(label)
-            if self.recording_input_device_id is not None and device['index'] == self.recording_input_device_id:
-                selected_device_label = label
-                selected_device = device
 
-        if self.recording_input_device_id is None:
-            selected_device = next((device for device in devices if device.get('is_default')), None)
-        elif selected_device is None:
+        wants_saved_device = bool(self.recording_input_device_name) or self.recording_input_device_id is not None
+        if wants_saved_device:
+            selected_device = match_saved_input_device(
+                devices,
+                saved_id=self.recording_input_device_id,
+                saved_name=self.recording_input_device_name,
+                saved_hostapi=self.recording_input_hostapi,
+            )
+
+        if selected_device is not None:
+            selected_device_label = self._build_recording_device_label(selected_device)
+            self._remember_recording_device(selected_device)
+        else:
             self.recording_input_device_id = None
+            selected_device = next((device for device in devices if device.get('is_default')), None)
 
         self.recording_input_device_var.set(selected_device_label)
 
@@ -289,14 +330,55 @@ class TranscriptionApp:
             channel_combo.configure(values=channel_values, state='readonly' if channel_values else 'disabled')
 
         selected_channels = self._recording_channel_options.get(selected_channel_label, [1])
+        sample_rate = self._parse_saved_sample_rate(
+            self.config.get("recording_sample_rate", RECORDING_SAMPLE_RATE_AUTO)
+        )
+        self._refresh_sample_rate_options(sample_rate)
         self.audio_recorder.set_input_preferences(
-            device_id=self.recording_input_device_id,
-            input_channels=selected_channels
+            device_id=None if selected_device_label == "既定マイクを使う" else self.recording_input_device_id,
+            input_channels=selected_channels,
+            sample_rate=sample_rate,
         )
         if persist:
-            self.config.set("recording_input_device", self.recording_input_device_id)
-            self.config.set("recording_input_channels", list(selected_channels))
-            self.config.save()
+            self._persist_recording_input_settings(channels=selected_channels, sample_rate=sample_rate)
+
+    def _remember_recording_device(self, device):
+        """現在の入力デバイス識別子を記憶する"""
+        if not device:
+            self.recording_input_device_id = None
+            return
+        self.recording_input_device_id = device.get('index')
+        self.recording_input_device_name = device.get('name')
+        self.recording_input_hostapi = device.get('hostapi_name')
+
+    def _persist_recording_input_settings(self, channels=None, sample_rate=None):
+        """録音入力設定を設定ファイルへ書き出す"""
+        self.config.set("recording_input_device", self.recording_input_device_id)
+        self.config.set("recording_input_device_name", self.recording_input_device_name)
+        self.config.set("recording_input_hostapi", self.recording_input_hostapi)
+        if channels is not None:
+            self.config.set("recording_input_channels", list(channels))
+        if sample_rate is not None:
+            self.config.set("recording_sample_rate", sample_rate)
+
+    def _refresh_sample_rate_options(self, selected_rate=None):
+        """サンプリング周波数の選択肢を更新する"""
+        if selected_rate is None:
+            selected_rate = self._parse_saved_sample_rate(
+                self.config.get("recording_sample_rate", RECORDING_SAMPLE_RATE_AUTO)
+            )
+        options = [(RECORDING_SAMPLE_RATE_AUTO, self._format_sample_rate_option(RECORDING_SAMPLE_RATE_AUTO))]
+        for rate in RECORDING_SAMPLE_RATES:
+            options.append((rate, self._format_sample_rate_option(rate)))
+        self._recording_sample_rate_options = {label: value for value, label in options}
+        values = [label for _, label in options]
+        selected_label = self._format_sample_rate_option(selected_rate)
+        if selected_label not in self._recording_sample_rate_options:
+            selected_label = values[0]
+        self.recording_sample_rate_var.set(selected_label)
+        combo = self.ui_elements.get('recording_sample_rate_combo') if hasattr(self, 'ui_elements') else None
+        if combo:
+            combo.configure(values=values, state='readonly')
 
     def on_recording_device_selected(self, event=None):
         """録音用入力デバイス選択時の処理"""
@@ -305,7 +387,12 @@ class TranscriptionApp:
 
         selected_label = self.recording_input_device_var.get()
         selected_device = self._recording_device_options.get(selected_label)
-        self.recording_input_device_id = None if selected_device is None else selected_device['index']
+        if selected_device is None:
+            self.recording_input_device_id = None
+            self.recording_input_device_name = None
+            self.recording_input_hostapi = None
+        else:
+            self._remember_recording_device(selected_device)
         self.refresh_recording_input_options(persist=True)
         self._restart_recording_monitor()
         self.controller.add_log(
@@ -320,15 +407,31 @@ class TranscriptionApp:
 
         selected_label = self.recording_input_channels_var.get()
         selected_channels = self._recording_channel_options.get(selected_label, [1])
+        sample_rate = self._recording_sample_rate_options.get(
+            self.recording_sample_rate_var.get(), RECORDING_SAMPLE_RATE_AUTO
+        )
         self.audio_recorder.set_input_preferences(
             device_id=self.recording_input_device_id,
-            input_channels=selected_channels
+            input_channels=selected_channels,
+            sample_rate=sample_rate,
         )
-        self.config.set("recording_input_device", self.recording_input_device_id)
-        self.config.set("recording_input_channels", list(selected_channels))
-        self.config.save()
+        self._persist_recording_input_settings(channels=selected_channels, sample_rate=sample_rate)
         self._restart_recording_monitor()
         self.controller.add_log(f"録音入力チャンネルを変更: {selected_label}")
+
+    def on_recording_sample_rate_selected(self, event=None):
+        """サンプリング周波数の選択時の処理"""
+        if self.audio_recorder.is_recording:
+            return
+
+        selected_label = self.recording_sample_rate_var.get()
+        sample_rate = self._recording_sample_rate_options.get(
+            selected_label, RECORDING_SAMPLE_RATE_AUTO
+        )
+        self.audio_recorder.set_preferred_sample_rate(sample_rate)
+        self.config.set("recording_sample_rate", sample_rate)
+        self._restart_recording_monitor()
+        self.controller.add_log(f"サンプリング周波数を変更: {selected_label}")
 
     def refresh_recording_inputs(self):
         """録音入力一覧を再取得して待機モニターへ反映する"""
@@ -424,6 +527,7 @@ class TranscriptionApp:
         choose_folder_button = self.ui_elements.get('choose_recording_folder_button')
         device_combo = self.ui_elements.get('recording_device_combo')
         channel_combo = self.ui_elements.get('recording_channel_combo')
+        sample_rate_combo = self.ui_elements.get('recording_sample_rate_combo')
         refresh_input_button = self.ui_elements.get('refresh_recording_inputs_button')
         status_label = self.ui_elements.get('recording_status_label')
         timer_label = self.ui_elements.get('recording_timer_label')
@@ -455,6 +559,7 @@ class TranscriptionApp:
             self._set_widget_enabled(choose_folder_button, False)
             self._set_widget_enabled(device_combo, False)
             self._set_widget_enabled(channel_combo, False)
+            self._set_widget_enabled(sample_rate_combo, False)
             self._set_widget_enabled(refresh_input_button, False)
         else:
             device_message = availability_message
@@ -485,6 +590,7 @@ class TranscriptionApp:
             self._set_widget_enabled(choose_folder_button, True)
             self._set_widget_enabled(device_combo, bool(self._recording_device_options))
             self._set_widget_enabled(channel_combo, bool(self._recording_channel_options))
+            self._set_widget_enabled(sample_rate_combo, bool(self._recording_sample_rate_options))
             self._set_widget_enabled(refresh_input_button, True)
 
             if not preserve_status:
@@ -872,6 +978,7 @@ class TranscriptionApp:
 
         self.recording_dir = os.path.abspath(selected_dir)
         os.makedirs(self.recording_dir, exist_ok=True)
+        self._recording_dir_persist = True
         self.recording_dir_var.set(self.recording_dir)
         self.config.set("recording_dir", self.recording_dir)
         self.config.save()
@@ -1652,13 +1759,17 @@ class TranscriptionApp:
 
     def _save_recording_settings(self):
         """録音設定を保存"""
-        self.config.set("recording_dir", self.recording_dir)
+        if self._recording_dir_persist:
+            self.config.set("recording_dir", self.recording_dir)
         self.config.set("auto_queue_recordings", self.auto_queue_recordings_var.get())
         self.config.set("recording_gain_percent", int(round(self.recording_gain_percent_var.get())))
-        self.config.set("recording_input_device", self.recording_input_device_id)
-        self.config.set(
-            "recording_input_channels",
-            list(self._recording_channel_options.get(self.recording_input_channels_var.get(), [1]))
+        sample_rate = self._recording_sample_rate_options.get(
+            self.recording_sample_rate_var.get(),
+            self._parse_saved_sample_rate(self.config.get("recording_sample_rate", RECORDING_SAMPLE_RATE_AUTO))
+        )
+        self._persist_recording_input_settings(
+            channels=list(self._recording_channel_options.get(self.recording_input_channels_var.get(), [1])),
+            sample_rate=sample_rate,
         )
 
     def _save_column_widths(self):
