@@ -53,7 +53,7 @@ class FileProcessorTests(unittest.TestCase):
 
     def test_whisper_service_is_lazy_initialized(self):
         temp_dir = self.make_output_dir()
-        with patch('src.processor.WhisperService', side_effect=AudioProcessingError("missing")) as whisper_cls:
+        with patch('src.whisper_service.WhisperService', side_effect=AudioProcessingError("missing")) as whisper_cls:
             processor = FileProcessor(temp_dir, enable_cache=False)
 
             self.assertIsNone(processor.whisper_service)

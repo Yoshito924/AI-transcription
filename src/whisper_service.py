@@ -12,13 +12,25 @@ from .logger import logger
 from .utils import format_duration
 
 # ローカル文字起こしバックエンド（faster-whisper のみサポート）
-try:
-    from faster_whisper import WhisperModel
-    FASTER_WHISPER_AVAILABLE = True
-    logger.info("Faster Whisper backend loaded")
-except ImportError:
-    FASTER_WHISPER_AVAILABLE = False
-    logger.error("faster-whisper が見つかりません。`pip install faster-whisper` でインストールしてください")
+FASTER_WHISPER_AVAILABLE = None
+WhisperModel = None
+
+
+def _ensure_faster_whisper():
+    """faster-whisper は起動時ではなく、使う直前に読み込む"""
+    global FASTER_WHISPER_AVAILABLE, WhisperModel
+    if FASTER_WHISPER_AVAILABLE is not None:
+        return FASTER_WHISPER_AVAILABLE
+    try:
+        from faster_whisper import WhisperModel as loaded_model
+        WhisperModel = loaded_model
+        FASTER_WHISPER_AVAILABLE = True
+        logger.info("Faster Whisper backend loaded")
+    except ImportError:
+        WhisperModel = None
+        FASTER_WHISPER_AVAILABLE = False
+        logger.error("faster-whisper が見つかりません。`pip install faster-whisper` でインストールしてください")
+    return FASTER_WHISPER_AVAILABLE
 
 
 class WhisperService:
@@ -41,7 +53,7 @@ class WhisperService:
     }
     
     def __init__(self):
-        if not FASTER_WHISPER_AVAILABLE:
+        if not _ensure_faster_whisper():
             raise AudioProcessingError("faster-whisper が見つかりません。`pip install faster-whisper` でインストールしてください。")
 
         self.model = None

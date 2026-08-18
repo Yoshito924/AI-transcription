@@ -8,13 +8,9 @@ from datetime import datetime
 from tkinter import filedialog, messagebox
 import re
 
-from .ui import setup_ui
+from .ui import setup_ui, complete_deferred_ui
 from .config import Config
-from .processor import FileProcessor
 from .audio_recorder import MicrophoneRecorder, match_saved_input_device
-from .audio_player import AudioPreviewPlayer
-from .controllers import TranscriptionController
-from .terminal_cleanup import schedule_launch_terminal_close
 from .usage_tracker import UsageTracker
 from .processing_time_tracker import ProcessingTimeTracker
 from .constants import (
@@ -105,7 +101,10 @@ class TranscriptionApp:
         self.recording_peak_var = tk.StringVar(value="0%")
         self._recent_recording_paths = []
         self.audio_recorder = MicrophoneRecorder()
-        self.preview_player = AudioPreviewPlayer()
+        self.preview_player = None
+        self.processor = None
+        self.controller = None
+        self._startup_complete = False
         self._playback_poll_job = None
         self._waveform_refresh_job = None
         self._last_preview_error = None
@@ -120,9 +119,6 @@ class TranscriptionApp:
         self._recording_timer_job = None
         self._recording_visual_job = None
         self._recording_visual_phase = 0.0
-        
-        # プロセッサの初期化
-        self.processor = FileProcessor(self.output_dir)
 
         # 処理履歴メタデータ（元ファイルパスの記録）
         self.data_dir = os.path.join(self.app_dir, DATA_DIR)
@@ -130,44 +126,67 @@ class TranscriptionApp:
         self.history_meta_path = os.path.join(self.data_dir, 'processing_history.json')
         self.history_metadata = self._load_history_metadata()
 
-        # UIの構築
+        # 録音UIを先に出して、文字起こし/設定は起動後に組み立てる
         self.ui_elements = setup_ui(self)
-        
-        # コントローラーの初期化
-        self.ui_elements['api_key_var'] = self.api_key
-        self.ui_elements['openai_api_key_var'] = self.openai_api_key
-        self.ui_elements['root'] = self.root
-        self.controller = TranscriptionController(
-            self.processor, self.config, self.usage_tracker, self.ui_elements,
-            time_tracker=self.time_tracker
-        )
-        self.controller.set_update_history_callback(self._on_history_update)
-        self.controller.update_usage_callback = self.update_usage_display
-        self.controller.history_metadata = self.history_metadata
-        self.controller.update_queue_callback = self._update_queue_display
-        self._restore_queue_state()
 
-        
-        # ウィンドウサイズと位置の設定を適用（UI構築後）
         self.config.apply_window_geometry(self.root)
-        
-        # 初期設定
-        self._restore_column_widths()
-        self.update_history()
-        self.update_usage_display()
         self.refresh_recording_input_options(persist=False)
         self.audio_recorder.start_monitoring()
         self._refresh_recording_ui()
         self.refresh_recent_recordings()
         self._start_recording_visual_loop()
-        self._start_playback_poll_loop()
         self._bind_recording_shortcuts()
-
-        # ウィンドウにフォーカスが戻ったとき履歴を自動更新
-        self.root.bind('<FocusIn>', self._on_focus_in)
-
-        # 終了時にジオメトリを保存
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            pass
+        self.root.after(0, self._complete_startup)
+
+    def _complete_startup(self):
+        """録音以外の画面と重いサービスを、ウィンドウ表示後に読み込む"""
+        if self._startup_complete:
+            return
+        try:
+            from .processor import FileProcessor
+            from .audio_player import AudioPreviewPlayer
+            from .controllers import TranscriptionController
+            from .utils import check_ffmpeg
+
+            complete_deferred_ui(self, self.ui_elements)
+
+            self.processor = FileProcessor(self.output_dir)
+            self.preview_player = AudioPreviewPlayer()
+            self.ui_elements['api_key_var'] = self.api_key
+            self.ui_elements['openai_api_key_var'] = self.openai_api_key
+            self.ui_elements['root'] = self.root
+            self.controller = TranscriptionController(
+                self.processor, self.config, self.usage_tracker, self.ui_elements,
+                time_tracker=self.time_tracker
+            )
+            self.controller.set_update_history_callback(self._on_history_update)
+            self.controller.update_usage_callback = self.update_usage_display
+            self.controller.history_metadata = self.history_metadata
+            self.controller.update_queue_callback = self._update_queue_display
+            self._restore_queue_state()
+            self._restore_column_widths()
+            self.update_history()
+            self.update_usage_display()
+            self._start_playback_poll_loop()
+            self.root.bind('<FocusIn>', self._on_focus_in)
+            self._startup_complete = True
+            if not check_ffmpeg():
+                logger.warning("FFmpegが見つかりません。音声変換機能が使えない可能性があります。")
+        except Exception:
+            logger.exception("起動後の読み込みに失敗しました")
+
+    def _add_log(self, message):
+        """ログ欄があれば書き、起動中ならファイルログだけ残す"""
+        controller = getattr(self, 'controller', None)
+        if controller is not None:
+            controller.add_log(message)
+        else:
+            logger.info(message)
 
     def _resolve_recording_dir(self, configured_path):
         """録音保存先を絶対パスへ解決する"""
@@ -395,7 +414,7 @@ class TranscriptionApp:
             self._remember_recording_device(selected_device)
         self.refresh_recording_input_options(persist=True)
         self._restart_recording_monitor()
-        self.controller.add_log(
+        logger.info(
             "録音入力デバイスを変更: "
             + ("既定マイク" if selected_device is None else selected_device['name'])
         )
@@ -417,7 +436,7 @@ class TranscriptionApp:
         )
         self._persist_recording_input_settings(channels=selected_channels, sample_rate=sample_rate)
         self._restart_recording_monitor()
-        self.controller.add_log(f"録音入力チャンネルを変更: {selected_label}")
+        self._add_log(f"録音入力チャンネルを変更: {selected_label}")
 
     def on_recording_sample_rate_selected(self, event=None):
         """サンプリング周波数の選択時の処理"""
@@ -431,7 +450,7 @@ class TranscriptionApp:
         self.audio_recorder.set_preferred_sample_rate(sample_rate)
         self.config.set("recording_sample_rate", sample_rate)
         self._restart_recording_monitor()
-        self.controller.add_log(f"サンプリング周波数を変更: {selected_label}")
+        self._add_log(f"サンプリング周波数を変更: {selected_label}")
 
     def refresh_recording_inputs(self):
         """録音入力一覧を再取得して待機モニターへ反映する"""
@@ -681,7 +700,7 @@ class TranscriptionApp:
         """再生状態をビューアへ反映する"""
         self._playback_poll_job = None
         viewer = self.ui_elements.get('waveform_viewer') if hasattr(self, 'ui_elements') else None
-        if viewer:
+        if viewer and self.preview_player is not None:
             state = self.preview_player.get_state()
             viewer.set_playback_state(
                 state.get('position', 0.0),
@@ -691,7 +710,7 @@ class TranscriptionApp:
             error_text = state.get('error')
             if error_text and error_text != self._last_preview_error:
                 self._last_preview_error = error_text
-                self.controller.add_log(f"注意: 波形プレビュー再生に失敗: {error_text}")
+                self._add_log(f"注意: 波形プレビュー再生に失敗: {error_text}")
             elif not error_text:
                 self._last_preview_error = None
 
@@ -728,10 +747,12 @@ class TranscriptionApp:
                 viewer.set_playback_state(next_state.get('position', start_sec), is_playing=True)
         except AudioProcessingError as exc:
             messagebox.showerror("再生エラー", str(exc))
-            self.controller.add_log(f"注意: 波形プレビュー再生を開始できませんでした: {exc}")
+            self._add_log(f"注意: 波形プレビュー再生を開始できませんでした: {exc}")
 
     def stop_waveform_playback(self, reset_position=True, silent=False):
         """波形プレビュー再生を停止する"""
+        if self.preview_player is None:
+            return
         state = self.preview_player.stop(reset_position=reset_position, keep_file=True)
         viewer = self.ui_elements.get('waveform_viewer') if hasattr(self, 'ui_elements') else None
         if viewer:
@@ -767,7 +788,7 @@ class TranscriptionApp:
                 viewer.set_playback_state(position_sec, is_playing=next_state.get('is_playing', False))
         except AudioProcessingError as exc:
             messagebox.showerror("再生エラー", str(exc))
-            self.controller.add_log(f"注意: シークに失敗しました: {exc}")
+            self._add_log(f"注意: シークに失敗しました: {exc}")
 
     def on_silence_trim_settings_changed(self, immediate=False):
         """無音カット設定変更時に波形プレビューを再解析する"""
@@ -818,10 +839,9 @@ class TranscriptionApp:
         self.config.set("openai_api_key", self.openai_api_key.get())
         
         # エンジン選択とWhisperモデル選択を保存
-        self._save_engine_settings()
-
-        # 保存先設定を保存
-        self._save_destination_settings()
+        if self._startup_complete:
+            self._save_engine_settings()
+            self._save_destination_settings()
         self._save_recording_settings()
         self._persist_queue_state(save=False)
 
@@ -835,7 +855,8 @@ class TranscriptionApp:
             self.root.after_cancel(self._waveform_refresh_job)
             self._waveform_refresh_job = None
         self.stop_waveform_playback(reset_position=False, silent=True)
-        self.preview_player.shutdown()
+        if self.preview_player is not None:
+            self.preview_player.shutdown()
         self._stop_playback_poll_loop()
         self._stop_recording_timer()
         self._stop_recording_visual_loop()
@@ -845,6 +866,7 @@ class TranscriptionApp:
         # アプリケーションを終了
         self.root.destroy()
         try:
+            from .terminal_cleanup import schedule_launch_terminal_close
             schedule_launch_terminal_close()
         except Exception:
             pass
@@ -984,7 +1006,7 @@ class TranscriptionApp:
         self.config.save()
         self._refresh_recording_ui(preserve_status=True)
         self.refresh_recent_recordings()
-        self.controller.add_log(f"録音保存先を変更: {self.recording_dir}")
+        self._add_log(f"録音保存先を変更: {self.recording_dir}")
 
     def open_recording_folder(self):
         """録音保存先フォルダを開く"""
@@ -1154,7 +1176,7 @@ class TranscriptionApp:
         self._stop_recording_visual_loop()
         self._refresh_recording_ui()
         self._start_recording_timer()
-        self.controller.add_log(
+        self._add_log(
             f"録音開始: {os.path.basename(info['file_path'])} | "
             f"{info['device_name']} | "
             f"{self._format_recording_channel_option(info.get('input_channels', [1]))} | "
@@ -1203,7 +1225,7 @@ class TranscriptionApp:
         self.recording_hint_var.set(
             f"保存しました: {os.path.basename(result['file_path'])} · {queued_note}"
         )
-        self.controller.add_log(
+        self._add_log(
             f"録音保存: {os.path.basename(result['file_path'])} | "
             f"{duration_text} | {size_text}"
         )
@@ -1375,9 +1397,9 @@ class TranscriptionApp:
 
         self.controller.file_queue = restored_queue
         if restored_queue:
-            self.controller.add_log(f"前回のキューを{len(restored_queue)}件復元")
+            self._add_log(f"前回のキューを{len(restored_queue)}件復元")
         if skipped_entries:
-            self.controller.add_log(f"前回キューの不正な項目を{skipped_entries}件スキップ")
+            self._add_log(f"前回キューの不正な項目を{skipped_entries}件スキップ")
         self._update_queue_display()
 
     def _format_queue_location(self, file_path, max_length=54):
@@ -1429,6 +1451,9 @@ class TranscriptionApp:
 
     def _add_files_to_queue(self, file_paths, prompt_on_duplicates=True):
         """ファイルリストをキューに追加（重複検出付き）"""
+        if self.controller is None:
+            logger.info("起動中のためキュー追加を保留します")
+            return 0
         added, duplicated_paths, invalid = self.controller.add_files_to_queue(file_paths)
 
         if duplicated_paths:
@@ -1446,13 +1471,13 @@ class TranscriptionApp:
                         added += 1
                     self._update_queue_display()
             else:
-                self.controller.add_log(f"重複ファイルを{len(duplicated_paths)}件スキップ")
+                self._add_log(f"重複ファイルを{len(duplicated_paths)}件スキップ")
 
         if invalid > 0:
-            self.controller.add_log(f"対応していないファイル形式: {invalid}件スキップ")
+            self._add_log(f"対応していないファイル形式: {invalid}件スキップ")
 
         if added > 0:
-            self.controller.add_log(f"キューに{added}件追加（合計: {len(self.controller.file_queue)}件）")
+            self._add_log(f"キューに{added}件追加（合計: {len(self.controller.file_queue)}件）")
 
     def _update_queue_display(self):
         """キュー一覧を更新"""
@@ -1513,6 +1538,9 @@ class TranscriptionApp:
 
     def start_process(self, process_type):
         """処理を開始（コントローラーに委譲）"""
+        if not self._startup_complete or self.controller is None:
+            messagebox.showinfo("準備中", "文字起こし画面を読み込み中です。少し待ってから実行してください。")
+            return
         if process_type == "transcription":
             self.stop_waveform_playback(reset_position=False, silent=True)
             self.controller.start_queue_processing()
@@ -1520,7 +1548,11 @@ class TranscriptionApp:
     
     def update_history(self):
         """履歴リストを更新（交互行色付き）"""
-        tree = self.ui_elements['history_tree']
+        if not self._startup_complete or not self.processor:
+            return
+        tree = self.ui_elements.get('history_tree')
+        if not tree:
+            return
 
         # リストをクリア
         for item in tree.get_children():
@@ -1546,8 +1578,9 @@ class TranscriptionApp:
         # ルートウィンドウのイベントのみ処理（子ウィジェットの連鎖を無視）
         if event and event.widget is not self.root:
             return
-        self.update_history()
-        self._cleanup_queue()
+        if self._startup_complete:
+            self.update_history()
+            self._cleanup_queue()
         self.audio_recorder.start_monitoring()
         self._refresh_recording_ui(preserve_status=True)
 
@@ -1614,7 +1647,7 @@ class TranscriptionApp:
         if deleted > 0:
             self._save_history_metadata()
             self.update_history()
-            self.controller.add_log(f"{deleted}件のファイルを削除しました")
+            self._add_log(f"{deleted}件のファイルを削除しました")
 
     def open_output_folder(self):
         """出力フォルダを開く"""
@@ -1711,6 +1744,8 @@ class TranscriptionApp:
 
     def update_usage_display(self):
         """使用量表示を更新"""
+        if not self.ui_elements.get('usage_sessions'):
+            return
         try:
             usage_data = self.usage_tracker.get_current_month_usage()
             

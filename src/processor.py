@@ -10,9 +10,6 @@ import tempfile
 import time
 import threading
 
-from google import genai
-from google.genai import types
-
 from .constants import (
     DEFAULT_TRIM_LONG_SILENCE,
     MAX_AUDIO_SIZE_MB,
@@ -45,8 +42,6 @@ from .exceptions import (
 )
 from .audio_processor import AudioProcessor
 from .api_utils import ApiUtils, create_genai_client, build_generation_config
-from .whisper_service import WhisperService
-from .whisper_api_service import WhisperApiService
 from .text_merger import EnhancedTextMerger
 from .audio_cache import AudioCacheManager
 from .utils import (
@@ -56,6 +51,12 @@ from .utils import (
     sanitize_filename
 )
 from .logger import logger
+
+
+def _genai_types():
+    from google.genai import types
+    return types
+
 
 class FileProcessor:
     """音声/動画ファイルの処理を行うクラス"""
@@ -96,6 +97,7 @@ class FileProcessor:
             return self.whisper_service
 
         try:
+            from .whisper_service import WhisperService
             self.whisper_service = WhisperService()
             self.whisper_init_error = None
             return self.whisper_service
@@ -958,6 +960,7 @@ class FileProcessor:
             or (whisper_api_model and current_model != whisper_api_model)
         )
         if needs_reinit:
+            from .whisper_api_service import WhisperApiService
             self.whisper_api_service = WhisperApiService(api_key=api_key, model=whisper_api_model)
 
         # モデル名を記録
@@ -1091,6 +1094,7 @@ class FileProcessor:
 
     def _upload_gemini_audio_file(self, client, audio_path, update_status):
         """Gemini Files API に音声をアップロードして利用可能状態まで待つ"""
+        types = _genai_types()
         update_status("Gemini Files API に音声をアップロード中...")
 
         uploaded_file = client.files.upload(
@@ -1126,6 +1130,7 @@ class FileProcessor:
 
     def _perform_single_transcription(self, audio_path, api_key, update_status, preferred_model=None):
         """単一ファイルの文字起こし"""
+        types = _genai_types()
         client = create_genai_client(api_key)
         model_name = self.api_utils.get_best_available_model(api_key, preferred_model)
 
@@ -1324,6 +1329,7 @@ class FileProcessor:
                                      client=None, generation_config=None):
         """改善された単一セグメントの文字起こし"""
         try:
+            types = _genai_types()
             # セグメントの音声の長さを取得（料金計算用）
             segment_duration_sec = self.audio_processor.get_audio_duration(segment_file)
 

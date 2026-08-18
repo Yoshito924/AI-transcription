@@ -3,9 +3,6 @@
 
 import time
 
-from google import genai
-from google.genai import types
-
 from .constants import PREFERRED_MODELS, AI_GENERATION_CONFIG, SAFETY_SETTINGS_TRANSCRIPTION
 from .exceptions import ApiConnectionError
 from .logger import logger
@@ -20,6 +17,7 @@ def create_genai_client(api_key):
     新SDK（google-genai）はクライアントインスタンス単位でAPIキーを管理する
     ため、旧SDKの genai.configure() のようなグローバル状態やロックは不要。
     """
+    from google import genai
     return genai.Client(api_key=api_key)
 
 
@@ -30,6 +28,8 @@ def build_generation_config(relax_safety=True, **overrides):
         relax_safety: Trueなら文字起こし用に安全性フィルターを緩和する
         overrides: AI_GENERATION_CONFIG を上書きする生成パラメータ
     """
+    from google.genai import types
+
     params = dict(AI_GENERATION_CONFIG)
     params.update(overrides)
 

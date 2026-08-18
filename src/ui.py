@@ -11,8 +11,6 @@ from tkinter import ttk, scrolledtext
 
 from .ui_styles import ModernTheme, ModernWidgets, ICONS
 from .ui_recording import create_recording_section
-from .ui_settings import create_processing_settings_section
-from .waveform_viewer import WaveformViewer
 from .engines import get_engine_spec
 from .constants import (
     DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
@@ -233,14 +231,28 @@ def _create_scrollable_frame(parent, bg):
     return outer, inner
 
 
+def _install_loading_placeholder(parent, theme, message):
+    """遅延ロード中のプレースホルダを置く"""
+    holder = tk.Frame(parent, bg=theme.colors['surface'])
+    holder.pack(fill=tk.BOTH, expand=True)
+    tk.Label(
+        holder,
+        text=message,
+        font=theme.fonts['body'],
+        fg=theme.colors['text_secondary'],
+        bg=theme.colors['surface']
+    ).pack(expand=True, pady=24)
+    return holder
+
+
 def setup_ui(app):
-    """UIの構築"""
+    """UIの構築（録音タブを先に出し、他は起動後に埋める）"""
     root = app.root
 
     # テーマとウィジェットの初期化
     theme = ModernTheme()
     widgets = ModernWidgets(theme)
-    style = theme.apply_theme(root)
+    theme.apply_theme(root)
 
     # ウィンドウの基本設定
     root.title("AI 文字起こし - 音声を瞬時にテキスト化")
@@ -324,31 +336,15 @@ def setup_ui(app):
     def open_settings_tab(_event=None):
         notebook.select(tab_keys.index('settings'))
 
-    # 設定を先に作り、文字起こしタブの要約タイルから参照する
-    settings_scroll_outer, settings_scroll_inner = _create_scrollable_frame(
-        settings_tab, theme.colors['surface']
+    file_placeholder = _install_loading_placeholder(
+        file_tab, theme, "文字起こし画面を準備しています..."
     )
-    settings_scroll_outer.pack(fill=tk.BOTH, expand=True)
-    settings_content = tk.Frame(settings_scroll_inner, bg=theme.colors['surface'])
-    settings_content.pack(fill=tk.X, padx=6, pady=6)
-    processing_settings = create_processing_settings_section(
-        settings_content, app, theme, widgets
+    settings_placeholder = _install_loading_placeholder(
+        settings_tab, theme, "設定を読み込んでいます..."
     )
-    processing_settings.pack(fill=tk.X)
-    api_section = create_api_section(settings_content, app, theme, widgets)
-    api_section.pack(fill=tk.X, pady=(0, 8))
-    usage_section = create_usage_section(settings_content, app, theme, widgets)
-    usage_section.pack(fill=tk.X)
-
-    file_scroll_outer, file_scroll_inner = _create_scrollable_frame(
-        file_tab, theme.colors['surface']
+    side_placeholder = _install_loading_placeholder(
+        side_pane, theme, "履歴を準備しています..."
     )
-    file_scroll_outer.pack(fill=tk.BOTH, expand=True)
-    file_section = create_file_section(
-        file_scroll_inner, app, theme, widgets,
-        processing_settings, open_settings_tab
-    )
-    file_section.pack(fill=tk.X)
 
     recording_scroll_outer, recording_scroll_inner = _create_scrollable_frame(
         recording_tab, theme.colors['surface']
@@ -370,10 +366,8 @@ def setup_ui(app):
             if tab_keys[current_index] == 'recording':
                 app.refresh_recent_recordings()
 
-    saved_tab_key = app.config.get("last_open_tab", "file")
-    if saved_tab_key in tab_keys:
-        notebook.select(tab_keys.index(saved_tab_key))
-
+    # 起動直後は録音を前面に。他タブは後から埋めて last_open_tab へ戻す
+    notebook.select(tab_keys.index('recording'))
     notebook.bind('<<NotebookTabChanged>>', _save_current_tab)
 
     # アコーディオンのトグル処理
@@ -405,13 +399,98 @@ def setup_ui(app):
     toggle_bar.bind('<Enter>', _toggle_enter)
     toggle_bar.bind('<Leave>', _toggle_leave)
 
-    # === 右側: 処理履歴とログを上下に分割 ===
-    paned = _create_split_paned(side_pane, theme, orient=tk.VERTICAL)
-    paned.pack(fill=tk.BOTH, expand=True)
+    ui_elements = {
+        'notebook': notebook,
+        'tab_keys': tab_keys,
+        'persist_pane_fractions': lambda: [
+            persist() for persist in pane_persisters
+        ],
+        'recording_status_label': recording_section.recording_status_label,
+        'recording_badge_label': recording_section.recording_badge_label,
+        'recording_device_label': recording_section.recording_device_label,
+        'recording_timer_label': recording_section.recording_timer_label,
+        'recording_folder_label': recording_section.recording_folder_label,
+        'record_button': recording_section.record_button,
+        'stop_record_button': recording_section.stop_record_button,
+        'queue_recordings_button': recording_section.queue_recordings_button,
+        'choose_recording_folder_button': recording_section.choose_recording_folder_button,
+        'open_recording_folder_button': recording_section.open_recording_folder_button,
+        'recording_device_combo': recording_section.recording_device_combo,
+        'recording_channel_combo': recording_section.recording_channel_combo,
+        'recording_sample_rate_combo': getattr(recording_section, 'recording_sample_rate_combo', None),
+        'refresh_recording_inputs_button': recording_section.refresh_recording_inputs_button,
+        'recording_gain_scale': getattr(recording_section, 'recording_gain_scale', None),
+        'recording_visual_canvas': recording_section.recording_visual_canvas,
+        'recent_recordings_listbox': getattr(recording_section, 'recent_recordings_listbox', None),
+        'add_selected_recordings_button': getattr(recording_section, 'add_selected_recordings_button', None),
+        '_deferred': {
+            'theme': theme,
+            'widgets': widgets,
+            'file_tab': file_tab,
+            'settings_tab': settings_tab,
+            'side_pane': side_pane,
+            'file_placeholder': file_placeholder,
+            'settings_placeholder': settings_placeholder,
+            'side_placeholder': side_placeholder,
+            'recording_section': recording_section,
+            'pane_persisters': pane_persisters,
+            'notebook': notebook,
+            'tab_keys': tab_keys,
+            'open_settings_tab': open_settings_tab,
+            'saved_tab_key': app.config.get("last_open_tab", "file"),
+        },
+    }
+    return ui_elements
 
+
+def complete_deferred_ui(app, ui_elements):
+    """文字起こし・設定・履歴など、録音以外の画面を起動後に組み立てる"""
+    ctx = ui_elements.pop('_deferred', None)
+    if ctx is None:
+        return ui_elements
+
+    from .ui_settings import create_processing_settings_section
+
+    theme = ctx['theme']
+    widgets = ctx['widgets']
+    pane_persisters = ctx['pane_persisters']
+    notebook = ctx['notebook']
+    tab_keys = ctx['tab_keys']
+    open_settings_tab = ctx['open_settings_tab']
+
+    ctx['file_placeholder'].destroy()
+    ctx['settings_placeholder'].destroy()
+    ctx['side_placeholder'].destroy()
+
+    settings_scroll_outer, settings_scroll_inner = _create_scrollable_frame(
+        ctx['settings_tab'], theme.colors['surface']
+    )
+    settings_scroll_outer.pack(fill=tk.BOTH, expand=True)
+    settings_content = tk.Frame(settings_scroll_inner, bg=theme.colors['surface'])
+    settings_content.pack(fill=tk.X, padx=6, pady=6)
+    processing_settings = create_processing_settings_section(
+        settings_content, app, theme, widgets
+    )
+    processing_settings.pack(fill=tk.X)
+    api_section = create_api_section(settings_content, app, theme, widgets)
+    api_section.pack(fill=tk.X, pady=(0, 8))
+    usage_section = create_usage_section(settings_content, app, theme, widgets)
+    usage_section.pack(fill=tk.X)
+
+    file_scroll_outer, file_scroll_inner = _create_scrollable_frame(
+        ctx['file_tab'], theme.colors['surface']
+    )
+    file_scroll_outer.pack(fill=tk.BOTH, expand=True)
+    file_section = create_file_section(
+        file_scroll_inner, app, theme, widgets,
+        processing_settings, open_settings_tab
+    )
+    file_section.pack(fill=tk.X)
+
+    paned = _create_split_paned(ctx['side_pane'], theme, orient=tk.VERTICAL)
+    paned.pack(fill=tk.BOTH, expand=True)
     history_section = create_history_section(paned, app, theme, widgets)
     paned.add(history_section, stretch='always', minsize=220)
-
     log_section = create_log_section(paned, app, theme, widgets)
     paned.add(log_section, stretch='never', minsize=180)
     pane_persisters.append(_bind_pane_fraction(
@@ -420,17 +499,20 @@ def setup_ui(app):
         orient=tk.VERTICAL
     ))
 
-    # UI要素を収集
-    ui_elements = collect_ui_elements(
-        api_section, file_section, recording_section, usage_section,
+    filled = collect_ui_elements(
+        api_section, file_section, ctx['recording_section'], usage_section,
         history_section, log_section, processing_settings
     )
+    ui_elements.update(filled)
     ui_elements['notebook'] = notebook
     ui_elements['tab_keys'] = tab_keys
     ui_elements['persist_pane_fractions'] = lambda: [
         persist() for persist in pane_persisters
     ]
 
+    saved_tab_key = ctx.get('saved_tab_key', 'file')
+    if saved_tab_key in tab_keys:
+        notebook.select(tab_keys.index(saved_tab_key))
     return ui_elements
 
 
@@ -588,6 +670,7 @@ def create_api_section(parent, app, theme, widgets):
 
 def create_file_section(parent, app, theme, widgets, processing_settings, on_open_settings=None):
     """ファイル入力セクション（作業用。設定は設定タブ）"""
+    from .waveform_viewer import WaveformViewer
     frame = widgets.create_card_frame(parent)
     pad = 12
 
