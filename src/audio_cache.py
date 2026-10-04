@@ -93,13 +93,23 @@ class AudioCacheManager:
         self._metadata_dirty = True
 
     def _calculate_file_hash(self, file_path: str, cache_profile: Optional[Dict] = None) -> str:
-        """ファイルのハッシュ値を計算（ファイル情報+前処理設定）"""
-        stat = os.stat(file_path)
-        profile_text = ""
-        if cache_profile:
-            profile_text = json.dumps(cache_profile, ensure_ascii=False, sort_keys=True)
-        hash_input = f"{os.path.basename(file_path)}_{stat.st_size}_{stat.st_mtime}_{profile_text}"
-        return hashlib.sha256(hash_input.encode()).hexdigest()[:16]
+        """正規化パス・更新情報・内容・前処理設定からキャッシュキーを計算する。"""
+        normalized_path = os.path.normcase(os.path.realpath(file_path))
+        content_hash = hashlib.sha256()
+        with open(normalized_path, 'rb') as source:
+            stat = os.fstat(source.fileno())
+            for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                content_hash.update(chunk)
+        identity = {
+            'version': 2,
+            'path': normalized_path,
+            'size': stat.st_size,
+            'mtime_ns': stat.st_mtime_ns,
+            'content_sha256': content_hash.hexdigest(),
+            'profile': cache_profile or {},
+        }
+        hash_input = json.dumps(identity, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
 
     def get_cache_entry(self, original_file: str, cache_profile: Optional[Dict] = None) -> Optional[Dict]:
         """キャッシュエントリを取得
