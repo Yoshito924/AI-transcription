@@ -865,11 +865,6 @@ class TranscriptionApp:
 
         # アプリケーションを終了
         self.root.destroy()
-        try:
-            from .terminal_cleanup import schedule_launch_terminal_close
-            schedule_launch_terminal_close()
-        except Exception:
-            pass
     
     def toggle_api_key_visibility(self):
         """APIキーの表示/非表示を切り替える"""
