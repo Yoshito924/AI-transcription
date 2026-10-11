@@ -94,10 +94,11 @@ DEFAULT_PANE_FRACTIONS = {
 }
 
 # API関連（優先順位: 最新安定 Flash → 音声ドキュメント例 → 軽量 → 2.5フォールバック）
-# 2026年8月時点: Gemini 3.7 Flash が最新安定。音声公式例は gemini-3.6-flash。
+# 2026年10月時点: Gemini 3.8 Flash が最新安定（3.7 Flash は非推奨・3.8へ自動転送）。
+# 音声公式例は gemini-3.6-flash。
 # gemini-2.0-flash / flash-lite はシャットダウン済みのため候補から外す。
 PREFERRED_MODELS = [
-    "gemini-3.7-flash",       # 最新安定 Flash
+    "gemini-3.8-flash",       # 最新安定 Flash
     "gemini-3.6-flash",       # 公式音声ドキュメントの例
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
@@ -126,7 +127,7 @@ OLLAMA_DEFAULT_MODEL = "gemma4:e4b"
 DEFAULT_TRANSCRIPTION_ENGINE = "whisper"          # "gemini" / "whisper" / "whisper-api"
 DEFAULT_WHISPER_MODEL = "large-v3-turbo"          # Whisper の既定モデル（高速・高精度）
 DEFAULT_WHISPER_API_MODEL = "gpt-transcribe"      # OpenAI ファイル文字起こしの公式推奨
-DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"         # Gemini 文字起こしの既定候補
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"         # Gemini 文字起こしの既定候補
 DEFAULT_TITLE_GENERATION_ENGINE = "ollama"        # "ollama" / "auto" / "gemini" / "disabled"
 DEFAULT_ADDITIONAL_PROCESSING_ENGINE = "ollama"   # "gemini" / "ollama"
 WHISPER_MODEL_DISPLAY_NAMES = {
@@ -280,6 +281,19 @@ GEMINI_PRICING = {
         "recommended_use": "リアルタイム処理専用"
     },
     # Gemini 3.x系（より具体的なキーを先に配置）
+    # 3.8 Flash は入力単価が一律（音声も同額）。2026年末までの料金。
+    # 2027-01-01 以降は input 1.50 / output 7.50（batch は半額）に改定予定。
+    "gemini-3.8-flash": {
+        "input_text": 0.75,
+        "input_audio": 0.75,
+        "input_text_batch": 0.375,
+        "input_audio_batch": 0.375,
+        "output": 3.75,
+        "output_batch": 1.875,
+        "pricing_type": "token_based",
+        "recommended_use": "最新安定Flash（3.x世代）"
+    },
+    # 非推奨（3.8へ自動転送）。過去の利用履歴の料金参照用に残す
     "gemini-3.7-flash": {
         "input_text": 0.50,
         "input_audio": 1.00,
@@ -288,7 +302,7 @@ GEMINI_PRICING = {
         "output": 3.00,
         "output_batch": 1.50,
         "pricing_type": "token_based",
-        "recommended_use": "最新安定Flash（3.x世代）"
+        "recommended_use": "非推奨（履歴参照用）"
     },
     "gemini-3.6-flash": {
         "input_text": 0.50,

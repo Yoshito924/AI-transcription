@@ -17,11 +17,15 @@ from .logger import logger
 class UsageTracker:
     """使用量と料金の追跡クラス"""
     
-    # Gemini API料金（2026年8月時点）
+    # Gemini API料金（2026年10月時点）
     # 注意: 音声入力（文字起こし用途）の料金を使用。テキスト入力より高い場合あり。
     # 参考: https://ai.google.dev/gemini-api/docs/pricing?hl=ja
     PRICING = {
-        'gemini-3.7-flash': {
+        'gemini-3.8-flash': {
+            'input_per_1k': 0.00075,     # $0.75 per 1M tokens（2026年末まで。2027年〜$1.50）
+            'output_per_1k': 0.00375,    # $3.75 per 1M tokens（2027年〜$7.50）
+        },
+        'gemini-3.7-flash': {           # 非推奨。過去履歴の料金計算用
             'input_per_1k': 0.001,       # $1.00 per 1M tokens（音声入力概算）
             'output_per_1k': 0.003,      # $3.00 per 1M tokens
         },
@@ -160,6 +164,8 @@ class UsageTracker:
         model_lower = model.lower()
         
         # 3.x 系を優先的に判定
+        if '3.8' in model_lower and 'flash' in model_lower:
+            return 'gemini-3.8-flash'
         if '3.7' in model_lower and 'flash' in model_lower:
             return 'gemini-3.7-flash'
         if '3.6' in model_lower and 'flash' in model_lower:
