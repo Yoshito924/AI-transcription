@@ -3,6 +3,7 @@
 
 import os
 import json
+import tempfile
 
 try:
     import keyring
@@ -40,6 +41,9 @@ class Config:
     APIキーなどの秘密情報は config.json に平文保存せず、OSのキーストア
     （Windows: 資格情報マネージャー）に keyring 経由で保存する。
     keyring が使えない環境では従来どおり config.json に保存する。
+
+    keyring をimportできても保存先が使えるとは限らない。移行に失敗したキーは
+    再試行できるよう、成功するまで元の config.json に残す（_pending_secrets）。
     """
 
     # keyring に保存する秘密キー（config.json には書き出さない）
@@ -50,6 +54,8 @@ class Config:
         config_dir = os.path.join(app_dir, CONFIG_DIR)
         self.config_file = os.path.join(config_dir, CONFIG_FILE)
         self.config = self.load()
+        # キーストアへ未移行で、config.json に元の値を残しているキー
+        self._pending_secrets = set()
         self._migrate_secrets_to_keyring()
 
         # デフォルト設定
@@ -99,30 +105,47 @@ class Config:
         return KEYRING_AVAILABLE and key in self.SECRET_KEYS
 
     def _migrate_secrets_to_keyring(self):
-        """config.json に平文保存された秘密情報を keyring へ移行して除去する"""
+        """config.json に平文保存された秘密情報を keyring へ移行する
+
+        保存を読み戻して確認できたキーだけ除去し、失敗したキーは元のまま残す。
+        """
         if not KEYRING_AVAILABLE:
             return
 
-        migrated = False
-        for key in self.SECRET_KEYS:
-            if key in self.config:
-                value = self.config.pop(key)
-                if value:
-                    try:
-                        keyring.set_password(self.KEYRING_SERVICE, key, value)
-                        logger.info(f"{key} を config.json からOSキーストアへ移行しました")
-                    except Exception as e:
-                        # 移行に失敗した場合は平文のまま残す（消失防止）
-                        logger.warning(f"{key} のキーストア移行に失敗: {e}")
-                        self.config[key] = value
-                        continue
-                migrated = True
+        removed = False
+        for key in sorted(self.SECRET_KEYS):
+            if key not in self.config:
+                continue
+            value = self.config[key]
+            if value and not self._store_secret(key, value):
+                self._pending_secrets.add(key)
+                continue
+            if value:
+                logger.info(f"{key} を config.json からOSキーストアへ移行しました")
+            del self.config[key]
+            removed = True
 
-        if migrated:
+        if removed:
             try:
                 self.save()
             except OSError:
                 pass
+
+    def _store_secret(self, key, value):
+        """キーストアへ保存し、読み戻して一致した場合だけ True を返す"""
+        try:
+            keyring.set_password(self.KEYRING_SERVICE, key, value)
+            if keyring.get_password(self.KEYRING_SERVICE, key) == value:
+                return True
+            logger.warning(f"{key} のキーストア保存を確認できませんでした")
+        except Exception as e:
+            logger.warning(f"キーストアへの {key} 保存に失敗: {type(e).__name__}")
+        return False
+
+    @property
+    def pending_secret_keys(self):
+        """キーストアへ移行できず config.json に残っているキー"""
+        return sorted(self._pending_secrets)
 
     def load(self):
         """設定ファイルを読み込む"""
@@ -141,13 +164,30 @@ class Config:
 
         data = self.config
         if KEYRING_AVAILABLE:
-            data = {k: v for k, v in self.config.items() if k not in self.SECRET_KEYS}
+            data = {
+                k: v for k, v in self.config.items()
+                if k not in self.SECRET_KEYS or k in self._pending_secrets
+            }
 
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 書き込み途中の失敗で元ファイルを壊さないよう、一時ファイル経由で置き換える
+        fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(self.config_file), suffix='.tmp'
+        )
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.config_file)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def get(self, key, default=None):
         """設定値を取得する（秘密キーは keyring から取得）"""
+        if key in self._pending_secrets:
+            return self.config.get(key, default)
         if self._use_keyring_for(key):
             try:
                 value = keyring.get_password(self.KEYRING_SERVICE, key)
@@ -162,29 +202,59 @@ class Config:
 
         秘密キーは keyring に保存する。それ以外は、値が実際に変化した場合
         だけファイルへ書き出す（write-through）。
+
+        Returns:
+            bool: 値を永続化できたか。False なら再起動後に値が失われる。
         """
         if self._use_keyring_for(key):
-            try:
-                if value:
-                    keyring.set_password(self.KEYRING_SERVICE, key, value)
-                else:
-                    # 空文字はキーストアから削除して「未設定」に戻す
-                    try:
-                        keyring.delete_password(self.KEYRING_SERVICE, key)
-                    except keyring.errors.PasswordDeleteError:
-                        pass
-            except Exception as e:
-                logger.warning(f"キーストアへの {key} 保存に失敗: {e}")
-            return
+            return self._set_secret(key, value)
 
         if self.config.get(key, object()) == value and key in self.config:
             # 値が変わっていなければ書き込みを省略する
-            return
+            return True
         self.config[key] = value
         try:
             self.save()
         except OSError:
             # 保存に失敗してもメモリ上の設定は更新済みなので致命的ではない
+            return False
+        return True
+
+    def _set_secret(self, key, value):
+        """秘密キーをキーストアへ保存する（新たな平文保存はしない）"""
+        pending = key in self._pending_secrets
+        if pending and value == self.config.get(key):
+            # 値は変わっていない。移行を再試行し、失敗しても元ファイルに残っている
+            if self._store_secret(key, value):
+                self._drop_pending_secret(key)
+            return True
+
+        if value:
+            if not self._store_secret(key, value):
+                return False
+        else:
+            # 空文字はキーストアから削除して「未設定」に戻す
+            try:
+                keyring.delete_password(self.KEYRING_SERVICE, key)
+            except keyring.errors.PasswordDeleteError:
+                pass
+            except Exception as e:
+                logger.warning(f"キーストアからの {key} 削除に失敗: {type(e).__name__}")
+                if pending:
+                    self._drop_pending_secret(key)
+                return False
+
+        if pending:
+            self._drop_pending_secret(key)
+        return True
+
+    def _drop_pending_secret(self, key):
+        """config.json に残していた元の値を除去する"""
+        self._pending_secrets.discard(key)
+        self.config.pop(key, None)
+        try:
+            self.save()
+        except OSError:
             pass
 
     def save_window_geometry(self, root):

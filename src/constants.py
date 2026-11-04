@@ -93,25 +93,29 @@ DEFAULT_PANE_FRACTIONS = {
     'pane_recording_fraction': 0.48,
 }
 
-# API関連（優先順位: 最新安定 Flash → 音声ドキュメント例 → 軽量 → 2.5フォールバック）
+# API関連（優先順位: 最新安定 Flash → 音声ドキュメント例 → 軽量 → 2.5 Flash-Lite）
 # 2026年10月時点: Gemini 3.8 Flash が最新安定（3.7 Flash は非推奨・3.8へ自動転送）。
 # 音声公式例は gemini-3.6-flash。
 # gemini-2.0-flash / flash-lite はシャットダウン済みのため候補から外す。
+# gemini-2.5-flash は非推奨（2026-12-01 から 3.5 Flash-Lite へ自動転送）のため候補から外す。
 PREFERRED_MODELS = [
     "gemini-3.8-flash",       # 最新安定 Flash
     "gemini-3.6-flash",       # 公式音声ドキュメントの例
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",       # 2.5世代の安定フォールバック
-    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-lite",  # 2.5世代のフォールバック（2.5 Flash とは別モデル）
 ]
+# 非推奨モデル → 明示的に指定する移行先。名前は完全一致で判定する。
+# 料金表の旧モデル定義は過去履歴の計算用に残す。
+DEPRECATED_GEMINI_MODELS = {
+    "gemini-2.5-flash": "gemini-3.5-flash-lite",
+}
 # タイトル生成用の軽量モデル（優先順位順）
 TITLE_GENERATION_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
     "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
 ]
 # タイトル生成に渡す本文の先頭抽出長（文字数）
 TITLE_GENERATION_EXCERPT_LENGTH = 2000
@@ -160,12 +164,15 @@ OUTPUT_TOKEN_RATIO = 0.1  # 出力トークン数 ≈ 入力トークン数の10
 
 # AI生成パラメータ（安定した出力のため）
 AI_GENERATION_CONFIG = {
+    # 以下のサンプリング系と candidate_count は Gemini 2.x 以前にだけ送る（下記参照）
     'temperature': 0.1,        # 低い温度で安定した出力
     'top_p': 0.8,             # 高品質な候補のみを考慮
     'top_k': 20,              # 上位20個の候補のみ
     'max_output_tokens': 8192, # 最大出力トークン数
     'candidate_count': 1       # 候補数は1つに限定
 }
+# Gemini 3 以降の移行ガイドで削除するよう案内されているパラメータ
+GEMINI_3_UNSUPPORTED_PARAMS = ('temperature', 'top_p', 'top_k', 'candidate_count')
 
 # Gemini API 安全性フィルター設定（文字起こし用に緩和）
 # 参考: https://ai.google.dev/gemini-api/docs/safety-settings

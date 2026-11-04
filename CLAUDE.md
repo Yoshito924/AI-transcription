@@ -48,7 +48,7 @@ python -m pytest tests/ -q
 ### Configuration & Utilities
 - **Constants**: `src/constants.py` - All application constants, default engine/model values
 - **Exceptions**: `src/exceptions.py` - Custom exception classes (`error_code` / `user_message` / `solution`)
-- **Configuration**: `src/config.py` - Settings persistence. API keys are stored in the OS keystore via `keyring` (Windows Credential Manager), NOT in config.json. `Config.set()` is write-through (auto-saves on change).
+- **Configuration**: `src/config.py` - Settings persistence. API keys are stored in the OS keystore via `keyring` (Windows Credential Manager), NOT in config.json. If migration to the keystore fails, the original value stays in config.json until a later retry succeeds (`pending_secret_keys`). `Config.set()` is write-through (auto-saves on change) and returns False when a value could not be persisted.
 - **Utilities**: `src/utils.py` - Common utility functions (engine value helpers, usage metadata)
 - **UI**: `src/ui.py` - User interface setup and layout (Tkinter)
 
@@ -62,4 +62,4 @@ python -m pytest tests/ -q
 - **One-shot maintenance scripts** live in `scripts/` (not part of the app).
 
 ### AI Generation Configuration
-- Defined in `constants.py` (`AI_GENERATION_CONFIG`): temperature 0.1, top_p 0.8, top_k 20, max 8192 tokens, 1 candidate. Built into a `GenerateContentConfig` by `api_utils.build_generation_config()`, optionally with relaxed safety settings for transcription.
+- Defined in `constants.py` (`AI_GENERATION_CONFIG`): temperature 0.1, top_p 0.8, top_k 20, max 8192 tokens, 1 candidate. Built into a `GenerateContentConfig` by `api_utils.build_generation_config(model_name)`, which drops the sampling params and `candidate_count` for Gemini 3+, optionally with relaxed safety settings for transcription.

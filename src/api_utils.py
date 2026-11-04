@@ -1,9 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import re
 import time
 
-from .constants import PREFERRED_MODELS, AI_GENERATION_CONFIG, SAFETY_SETTINGS_TRANSCRIPTION
+from .constants import (
+    PREFERRED_MODELS,
+    AI_GENERATION_CONFIG,
+    DEPRECATED_GEMINI_MODELS,
+    GEMINI_3_UNSUPPORTED_PARAMS,
+    SAFETY_SETTINGS_TRANSCRIPTION,
+)
 from .exceptions import ApiConnectionError
 from .logger import logger
 
@@ -21,10 +28,27 @@ def create_genai_client(api_key):
     return genai.Client(api_key=api_key)
 
 
-def build_generation_config(relax_safety=True, **overrides):
+def _bare_model_name(model_name):
+    return model_name.split('/')[-1]
+
+
+def _is_pre_gemini_3(model_name):
+    """名前からGemini 2.x以前と判定できるモデルか（別名などは現行世代として扱う）"""
+    match = re.search(r'gemini-(\d+)', model_name.lower())
+    return bool(match) and int(match.group(1)) < 3
+
+
+def _without_deprecated_models(models):
+    """他の候補がある限り、非推奨モデルを除外する"""
+    current = [m for m in models if _bare_model_name(m) not in DEPRECATED_GEMINI_MODELS]
+    return current or list(models)
+
+
+def build_generation_config(model_name, relax_safety=True, **overrides):
     """生成設定（GenerateContentConfig）を構築する
 
     Args:
+        model_name: 送信先モデル名。対応していない生成パラメータの除外に使う
         relax_safety: Trueなら文字起こし用に安全性フィルターを緩和する
         overrides: AI_GENERATION_CONFIG を上書きする生成パラメータ
     """
@@ -32,6 +56,9 @@ def build_generation_config(relax_safety=True, **overrides):
 
     params = dict(AI_GENERATION_CONFIG)
     params.update(overrides)
+    if not _is_pre_gemini_3(model_name):
+        for param in GEMINI_3_UNSUPPORTED_PARAMS:
+            params.pop(param, None)
 
     safety_settings = None
     if relax_safety:
@@ -61,10 +88,10 @@ class ApiUtils:
             return self._model_list_cache
 
         client = create_genai_client(api_key)
-        available = [
+        available = _without_deprecated_models([
             m.name for m in client.models.list()
             if 'gemini' in m.name.lower() and 'generateContent' in (m.supported_actions or [])
-        ]
+        ])
 
         self._model_list_cache = available
         self._model_list_cache_time = now
@@ -106,7 +133,7 @@ class ApiUtils:
             response = client.models.generate_content(
                 model=model_name,
                 contents="こんにちは",
-                config=build_generation_config(relax_safety=False)
+                config=build_generation_config(model_name, relax_safety=False)
             )
 
             # 応答がある場合は成功（モデル名を返す）
@@ -174,6 +201,10 @@ class ApiUtils:
 
         # 手動選択されたモデルを優先
         if preferred_model:
+            # 非推奨モデルの指定は自動転送に任せず、移行先を明示する
+            preferred_model = DEPRECATED_GEMINI_MODELS.get(
+                _bare_model_name(preferred_model), preferred_model
+            )
             for available in all_models:
                 if preferred_model in available:
                     model_name = available

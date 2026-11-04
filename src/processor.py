@@ -1145,7 +1145,7 @@ class FileProcessor:
         update_status(f"音声ファイルから文字起こし中...")
 
         # 生成設定（文字起こし用に安全性フィルターを緩和）
-        generation_config = build_generation_config()
+        generation_config = build_generation_config(model_name)
 
         prompt = """この音声の文字起こしを日本語でお願いします。以下の点を守って正確に書き起こしてください：
 
@@ -1222,7 +1222,7 @@ class FileProcessor:
             update_status(f"{len(segment_files)}個のセグメントに分割しました")
 
         # 生成設定を一度だけ構築（全セグメントで共有）
-        generation_config = build_generation_config()
+        generation_config = build_generation_config(model_name)
 
         segment_transcriptions = []
         segment_info = []
@@ -1337,7 +1337,7 @@ class FileProcessor:
             if client is None:
                 client = create_genai_client(api_key)
             if generation_config is None:
-                generation_config = build_generation_config()
+                generation_config = build_generation_config(model_name)
 
             with open(segment_file, 'rb') as audio_file:
                 audio_data = audio_file.read()
@@ -1770,7 +1770,7 @@ class FileProcessor:
         response = client.models.generate_content(
             model=model_name,
             contents=prompt,
-            config=build_generation_config()
+            config=build_generation_config(model_name)
         )
         if not response.text:
             raise TranscriptionError(f"{process_name}の生成に失敗しました")
@@ -1891,10 +1891,9 @@ class FileProcessor:
                 model=model_name,
                 contents=prompt,
                 config=build_generation_config(
+                    model_name,
                     relax_safety=False,
-                    temperature=0.1,
-                    max_output_tokens=TITLE_GENERATION_MAX_TOKENS,
-                    candidate_count=1
+                    max_output_tokens=TITLE_GENERATION_MAX_TOKENS
                 )
             )
 
@@ -2165,7 +2164,7 @@ class FileProcessor:
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt,
-                    config=build_generation_config(relax_safety=False)
+                    config=build_generation_config(model_name, relax_safety=False)
                 )
                 if not response.text:
                     raise TranscriptionError(f"{process_name}の生成に失敗しました")
