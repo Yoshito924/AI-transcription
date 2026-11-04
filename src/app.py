@@ -54,6 +54,8 @@ class TranscriptionApp:
         
         # 設定の管理
         self.config = Config(self.app_dir)
+        if self.config.pending_secret_keys:
+            self.root.after(500, self._warn_pending_secret_migration)
         
         # 使用量追跡
         self.usage_tracker = UsageTracker(self.app_dir)
@@ -690,6 +692,24 @@ class TranscriptionApp:
         if self._playback_poll_job is None:
             self._playback_poll_job = self.root.after(120, self._poll_playback_state)
 
+    def _warn_pending_secret_migration(self):
+        """APIキーをOSキーストアへ移行できなかったことを通知する"""
+        messagebox.showwarning(
+            "APIキーの移行",
+            "APIキーをOSの資格情報ストアへ移行できませんでした。\n"
+            "キーは消さずに config.json へ平文のまま残しており、次回起動時に再試行します。\n"
+            "資格情報マネージャーが使える状態か確認してください。"
+        )
+
+    def _warn_secret_not_saved(self):
+        """APIキーを保存できなかったことを通知する"""
+        messagebox.showwarning(
+            "APIキーの保存",
+            "APIキーをOSの資格情報ストアへ保存できませんでした。\n"
+            "今回の変更は再起動すると失われます。\n"
+            "資格情報マネージャーが使える状態か確認してください。"
+        )
+
     def _stop_playback_poll_loop(self):
         """波形プレビュー再生状態のポーリングを停止する"""
         if self._playback_poll_job is not None:
@@ -835,8 +855,10 @@ class TranscriptionApp:
         self.config.save_window_geometry(self.root)
         
         # 設定を保存
-        self.config.set("api_key", self.api_key.get())
-        self.config.set("openai_api_key", self.openai_api_key.get())
+        api_key_saved = self.config.set("api_key", self.api_key.get())
+        openai_key_saved = self.config.set("openai_api_key", self.openai_api_key.get())
+        if not (api_key_saved and openai_key_saved):
+            self._warn_secret_not_saved()
         
         # エンジン選択とWhisperモデル選択を保存
         if self._startup_complete:
@@ -953,7 +975,8 @@ class TranscriptionApp:
                     self.ui_elements['model_label'].config(text=result)
                 
                 # 設定を保存
-                self.config.set("api_key", api_key)
+                if not self.config.set("api_key", api_key):
+                    self._warn_secret_not_saved()
                 # エンジン設定も同時に保存
                 self._save_engine_settings()
                 self.config.save()

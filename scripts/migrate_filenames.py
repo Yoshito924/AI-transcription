@@ -17,7 +17,7 @@ import time
 # プロジェクトルートをパスに追加
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.api_utils import create_genai_client, build_generation_config
+from src.api_utils import create_genai_client, build_generation_config, _without_deprecated_models
 from src.constants import SUMMARY_TITLE_MAX_LENGTH, TITLE_GENERATION_MODELS
 from src.utils import sanitize_filename
 
@@ -52,10 +52,10 @@ def get_api_key():
 
 def select_model(client):
     """タイトル生成用の軽量モデルを選択"""
-    available_names = [
+    available_names = _without_deprecated_models([
         m.name for m in client.models.list()
         if 'gemini' in m.name.lower() and 'generateContent' in (m.supported_actions or [])
-    ]
+    ])
 
     for preferred in TITLE_GENERATION_MODELS:
         for available in available_names:
@@ -80,10 +80,9 @@ def generate_title(client, model_name, text):
         model=model_name,
         contents=prompt,
         config=build_generation_config(
+            model_name,
             relax_safety=False,
-            temperature=0.1,
-            max_output_tokens=100,
-            candidate_count=1
+            max_output_tokens=100
         )
     )
 
