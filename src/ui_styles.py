@@ -104,15 +104,15 @@ class ModernTheme:
 
         if system == "Windows":
             return {
-                'default': ('Segoe UI', 9),
+                'default': ('Yu Gothic UI', 10),
                 'app_title': ('Segoe UI Semibold', 18),
                 'heading': ('Segoe UI Semibold', 13),
                 'subheading': ('Segoe UI Semibold', 10),
-                'body': ('Segoe UI', 9),
-                'body_bold': ('Segoe UI Semibold', 9),
-                'caption': ('Segoe UI', 8),
-                'caption_bold': ('Segoe UI Semibold', 8),
-                'button': ('Segoe UI Semibold', 9),
+                'body': ('Yu Gothic UI', 10),
+                'body_bold': ('Yu Gothic UI', 10, 'bold'),
+                'caption': ('Yu Gothic UI', 9),
+                'caption_bold': ('Yu Gothic UI', 9, 'bold'),
+                'button': ('Yu Gothic UI', 10, 'bold'),
                 'button_large': ('Segoe UI Semibold', 11),
                 'monospace': ('Consolas', 9),
             }
@@ -206,8 +206,10 @@ class ModernTheme:
                        padding=(20, 10))
 
         style.map('Large.Primary.TButton',
-                 background=[('active', self.colors['primary_light']),
-                           ('pressed', self.colors['primary_dark'])])
+                 background=[('disabled', self.colors['surface_emphasis']),
+                           ('pressed', self.colors['primary_dark']),
+                           ('active', self.colors['primary_light'])],
+                 foreground=[('disabled', self.colors['text_disabled'])])
 
         style.configure('Secondary.TButton',
                        background=self.colors['surface'],
@@ -290,16 +292,25 @@ class ModernTheme:
                        foreground=self.colors['text_primary'],
                        font=self.fonts['body'],
                        fieldbackground=self.colors['surface'],
+                       bordercolor=self.colors['card_border'],
+                       lightcolor=self.colors['surface'],
+                       darkcolor=self.colors['surface'],
                        borderwidth=1,
-                       relief='solid',
-                       rowheight=26)
+                       relief='flat',
+                       rowheight=28)
 
         style.configure('Modern.Treeview.Heading',
                        background=self.colors['surface_variant'],
-                       foreground=self.colors['text_primary'],
+                       foreground=self.colors['text_secondary'],
                        font=self.fonts['caption_bold'],
+                       bordercolor=self.colors['divider'],
+                       lightcolor=self.colors['surface_variant'],
+                       darkcolor=self.colors['surface_variant'],
+                       padding=(8, 6),
                        relief='flat',
                        borderwidth=1)
+        style.map('Modern.Treeview.Heading',
+                 background=[('active', self.colors['surface_emphasis'])])
 
         style.map('Modern.Treeview',
                  background=[('selected', self.colors['table_selected'])],
@@ -310,7 +321,9 @@ class ModernTheme:
         style.configure('Modern.Horizontal.TProgressbar',
                        background=self.colors['primary'],
                        troughcolor=self.colors['surface_emphasis'],
+                       bordercolor=self.colors['surface_emphasis'],
                        borderwidth=0,
+                       thickness=8,
                        lightcolor=self.colors['primary'],
                        darkcolor=self.colors['primary'])
 
@@ -333,20 +346,31 @@ class ModernTheme:
         """ノートブックスタイルの設定"""
         style.configure('Modern.TNotebook',
                        background=self.colors['background'],
-                       borderwidth=0,
+                       borderwidth=1,
+                       bordercolor=self.colors['card_border'],
+                       lightcolor=self.colors['surface'],
+                       darkcolor=self.colors['surface'],
+                       tabmargins=(0, 0, 0, 0),
                        relief='flat')
 
         style.configure('Modern.TNotebook.Tab',
-                       background=self.colors['surface_variant'],
+                       background=self.colors['background'],
                        foreground=self.colors['text_secondary'],
                        font=self.fonts['body_bold'],
                        padding=[18, 10],
                        borderwidth=0,
+                       bordercolor=self.colors['background'],
+                       lightcolor=self.colors['background'],
+                       darkcolor=self.colors['background'],
+                       focuscolor=self.colors['surface'],
                        relief='flat')
 
         style.map('Modern.TNotebook.Tab',
                  background=[('selected', self.colors['surface']),
-                           ('active', self.colors['button_hover'])],
+                           ('active', self.colors['surface_emphasis'])],
+                 bordercolor=[('selected', self.colors['card_border'])],
+                 lightcolor=[('selected', self.colors['primary'])],
+                 darkcolor=[('selected', self.colors['surface'])],
                  foreground=[('selected', self.colors['primary']),
                            ('active', self.colors['text_primary'])],
                  padding=[('selected', [18, 10]),
@@ -379,26 +403,68 @@ class ModernTheme:
                            ('active', self.colors['primary'])])
 
     def _configure_scrollbar_styles(self, style):
-        """スクロールバースタイルの設定"""
-        style.configure('Modern.Vertical.TScrollbar',
-                       gripcount=0,
-                       background=self.colors['surface_emphasis'],
-                       darkcolor=self.colors['surface_emphasis'],
-                       lightcolor=self.colors['surface_emphasis'],
-                       troughcolor=self.colors['surface_variant'],
-                       bordercolor=self.colors['surface_variant'],
-                       arrowcolor=self.colors['text_secondary'],
-                       relief='flat')
+        """スクロールバースタイルの設定（矢印なしの細いフラットバー）"""
+        for orient, sticky in (('Vertical', 'ns'), ('Horizontal', 'we')):
+            layout = [(f'{orient}.Scrollbar.trough', {'sticky': sticky, 'children': [
+                (f'{orient}.Scrollbar.thumb', {'expand': '1', 'sticky': 'nswe'})]})]
+            style.layout(f'{orient}.TScrollbar', layout)
+            style.layout(f'Modern.{orient}.TScrollbar', layout)
 
-        style.configure('Modern.Horizontal.TScrollbar',
-                       gripcount=0,
-                       background=self.colors['surface_emphasis'],
-                       darkcolor=self.colors['surface_emphasis'],
-                       lightcolor=self.colors['surface_emphasis'],
-                       troughcolor=self.colors['surface_variant'],
-                       bordercolor=self.colors['surface_variant'],
-                       arrowcolor=self.colors['text_secondary'],
-                       relief='flat')
+        thumb = self.colors['outline']
+        hover = self.colors['text_disabled']
+        pressed = self.colors['text_secondary']
+        state_map = [('pressed', pressed), ('active', hover)]
+        for name in ('Vertical.TScrollbar', 'Horizontal.TScrollbar',
+                     'Modern.Vertical.TScrollbar', 'Modern.Horizontal.TScrollbar'):
+            style.configure(name,
+                           gripcount=0,
+                           background=thumb,
+                           darkcolor=thumb,
+                           lightcolor=thumb,
+                           troughcolor=self.colors['surface'],
+                           bordercolor=self.colors['surface'],
+                           arrowsize=10,
+                           relief='flat')
+            style.map(name, background=state_map,
+                      lightcolor=state_map, darkcolor=state_map)
+
+
+class ActionButton(tk.Button):
+    """状態（normal/disabled）に応じて配色が切り替わる大きなアクションボタン"""
+
+    def __init__(self, parent, theme, **kwargs):
+        self._colors = theme.colors
+        super().__init__(parent,
+                         font=theme.fonts['button_large'],
+                         fg=theme.colors['text_on_primary'],
+                         activebackground=theme.colors['primary_dark'],
+                         activeforeground=theme.colors['text_on_primary'],
+                         disabledforeground=theme.colors['text_disabled'],
+                         relief='flat', bd=0, padx=20, pady=10,
+                         **kwargs)
+        self._hover = False
+        self._apply_state()
+        self.bind('<Enter>', lambda e: self._set_hover(True))
+        self.bind('<Leave>', lambda e: self._set_hover(False))
+
+    def _set_hover(self, value):
+        self._hover = value
+        self._apply_state()
+
+    def _apply_state(self):
+        if str(self.cget('state')) == 'disabled':
+            tk.Button.configure(self, bg=self._colors['surface_emphasis'], cursor='arrow')
+        else:
+            bg = self._colors['primary_light'] if self._hover else self._colors['primary']
+            tk.Button.configure(self, bg=bg, cursor='hand2')
+
+    def configure(self, cnf=None, **kwargs):
+        result = super().configure(cnf, **kwargs)
+        if (cnf and 'state' in cnf) or 'state' in kwargs:
+            self._apply_state()
+        return result
+
+    config = configure
 
 
 class ModernWidgets:
@@ -860,30 +926,7 @@ class ModernWidgets:
 
     def create_action_button(self, parent, text, command=None):
         """大きなアクションボタン（tk.Button + ホバー効果）"""
-        btn = tk.Button(parent,
-                       text=text,
-                       font=self.theme.fonts['button_large'],
-                       bg=self.theme.colors['primary'],
-                       fg=self.theme.colors['text_on_primary'],
-                       activebackground=self.theme.colors['primary_light'],
-                       activeforeground=self.theme.colors['text_on_primary'],
-                       relief='flat',
-                       bd=0,
-                       padx=20,
-                       pady=10,
-                       cursor='hand2',
-                       command=command)
-
-        def on_enter(event):
-            btn.configure(bg=self.theme.colors['primary_light'])
-
-        def on_leave(event):
-            btn.configure(bg=self.theme.colors['primary'])
-
-        btn.bind('<Enter>', on_enter)
-        btn.bind('<Leave>', on_leave)
-
-        return btn
+        return ActionButton(parent, self.theme, text=text, command=command)
 
     def create_button(self, parent, text, style='Primary', **kwargs):
         """通常のボタンを作成"""

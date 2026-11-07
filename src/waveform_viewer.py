@@ -191,6 +191,7 @@ class WaveformViewer(tk.Frame):
         playhead_swatch.create_line(
             6, 1, 6, 11,
             fill=self._colors['playhead'],
+            tags=('playhead',),
             width=2
         )
         playhead_swatch.pack(side=tk.LEFT)
@@ -366,6 +367,7 @@ class WaveformViewer(tk.Frame):
 
     def set_playback_state(self, current_time, is_playing=False, current_db=None):
         """再生位置と再生中フラグを更新する"""
+        previous_offset = self._scroll_offset
         if self._duration <= 0:
             self._playhead_sec = 0.0
             self._is_playing = False
@@ -381,7 +383,10 @@ class WaveformViewer(tk.Frame):
         self._update_db_meter()
         self._update_info_label()
         if self._samples is not None:
-            self._redraw()
+            if self._scroll_offset != previous_offset:
+                self._redraw()
+            else:
+                self._refresh_playhead()
 
     def get_current_time(self):
         """現在の再生ヘッド位置を返す"""
@@ -610,6 +615,15 @@ class WaveformViewer(tk.Frame):
                 smooth=False
             )
 
+    def _refresh_playhead(self):
+        """背景を保持し、再生ヘッドだけ更新する。"""
+        self._canvas.delete('playhead')
+        self._timeline.delete('playhead')
+        w = self._canvas.winfo_width()
+        h = self._canvas.winfo_height()
+        if w > 1 and h > 1:
+            self._draw_playhead(w, h, max(1, int(w * self._zoom)), self._scroll_offset)
+
     def _draw_playhead(self, w, h, total_width, offset):
         """再生ヘッドを描画"""
         if self._duration <= 0:
@@ -622,11 +636,13 @@ class WaveformViewer(tk.Frame):
         self._canvas.create_line(
             x, 0, x, h,
             fill=self._colors['playhead'],
+            tags=('playhead',),
             width=2
         )
         self._canvas.create_line(
             x + 1, 0, x + 1, h,
             fill=self._colors['playhead_soft'],
+            tags=('playhead',),
             width=1
         )
 
@@ -635,6 +651,7 @@ class WaveformViewer(tk.Frame):
             x - 5, 6,
             x + 5, 6,
             fill=self._colors['playhead'],
+            tags=('playhead',),
             outline=''
         )
 

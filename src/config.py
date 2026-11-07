@@ -91,7 +91,7 @@ class Config:
             "recording_input_hostapi": None,
             "recording_input_channels": [1],
             "recording_sample_rate": RECORDING_SAMPLE_RATE_AUTO,
-            "recording_settings_expanded": False,
+            "recording_settings_expanded": True,
         }
         self.defaults.update(DEFAULT_PANE_FRACTIONS)
 

@@ -45,14 +45,14 @@ def create_recording_section(parent, app, theme, widgets, pane_persisters=None):
 
     intro_label = tk.Label(
         frame,
-        text="大きなボタンか Space で開始・停止。止めると保存され、設定どおりキューへ回せます。",
+        text="Space で開始・停止。停止すると音声を保存します。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface'],
         justify='left',
         anchor='w'
     )
-    intro_label.pack(fill=tk.X, padx=pad, pady=(0, 8))
+    # ショートカットは操作の横にまとめ、説明の常設は省く。
     _bind_dynamic_wraplength(intro_label, pad)
 
     recording_widgets = _create_recording_card(frame, app, theme, widgets, pad)
@@ -71,29 +71,31 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     card.pack(fill=tk.X, padx=pad, pady=(0, 8))
 
     inner = tk.Frame(card, bg=colors['surface'])
-    inner.pack(fill=tk.X, padx=14, pady=14)
+    inner.pack(fill=tk.X, padx=12, pady=10)
 
     stage = tk.Frame(inner, bg=colors['surface'])
     stage.pack(fill=tk.X)
 
+    status_row = tk.Frame(stage, bg=colors['surface'])
+    status_row.pack(fill=tk.X)
     recording_status_label = tk.Label(
-        stage,
+        status_row,
         textvariable=app.recording_status_var,
-        font=theme.fonts['heading'],
+        font=theme.fonts['body'],
         fg=colors['text_primary'],
         bg=colors['surface'],
         anchor='w'
     )
-    recording_status_label.pack(anchor='w')
+    recording_status_label.pack(side=tk.LEFT)
 
     recording_timer_label = tk.Label(
-        stage,
+        status_row,
         textvariable=app.recording_elapsed_var,
-        font=(theme.fonts['app_title'][0], 36),
+        font=(theme.fonts['app_title'][0], 20),
         fg=colors['text_primary'],
         bg=colors['surface']
     )
-    recording_timer_label.pack(anchor='w', pady=(4, 4))
+    recording_timer_label.pack(side=tk.RIGHT)
 
     recording_device_label = tk.Label(
         stage,
@@ -120,9 +122,9 @@ def _create_recording_card(parent, app, theme, widgets, pad):
         visual_shell,
         bg=colors['log_bg'],
         highlightthickness=0,
-        height=148
+        height=64
     )
-    recording_visual_canvas.pack(fill=tk.X, padx=8, pady=8)
+    recording_visual_canvas.pack(fill=tk.X, padx=4, pady=4)
     recording_visual_canvas.draw_visual = _make_visual_drawer(recording_visual_canvas, theme)
 
     def _on_visual_configure(_event=None):
@@ -147,9 +149,10 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     _bind_dynamic_wraplength(recording_hint_label, 8)
 
     record_button = widgets.create_record_toggle_button(
-        stage, command=app.toggle_recording
+        status_row, command=app.toggle_recording
     )
-    record_button.pack(fill=tk.X)
+    record_button.configure(font=theme.fonts['button'], padx=18, pady=8)
+    record_button.pack(side=tk.LEFT, before=recording_status_label, padx=(0, 12))
 
     shortcut_label = tk.Label(
         stage,
@@ -158,7 +161,7 @@ def _create_recording_card(parent, app, theme, widgets, pad):
         fg=colors['text_disabled'],
         bg=colors['surface']
     )
-    shortcut_label.pack(anchor='w', pady=(6, 0))
+    # 操作説明は recording_hint_label に集約する。
 
     recent_shell = tk.Frame(
         inner,
@@ -167,7 +170,10 @@ def _create_recording_card(parent, app, theme, widgets, pad):
         highlightthickness=1,
         bd=0
     )
-    recent_shell.pack(fill=tk.X, pady=(14, 0))
+    tools_row = tk.Frame(inner, bg=colors['surface'])
+    tools_row.pack(fill=tk.X, pady=(8, 0))
+    recent_toggle = ttk.Button(tools_row, text='▸ 最近の録音', style='Secondary.TButton')
+    recent_toggle.pack(side=tk.LEFT)
 
     recent_inner = tk.Frame(recent_shell, bg=colors['surface_variant'])
     recent_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -193,7 +199,7 @@ def _create_recording_card(parent, app, theme, widgets, pad):
 
     recent_listbox = tk.Listbox(
         recent_inner,
-        height=5,
+        height=3,
         font=theme.fonts['caption'],
         bg=colors['surface'],
         fg=colors['text_primary'],
@@ -231,8 +237,8 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     open_recording_folder_button.grid(row=0, column=1, sticky='ew', padx=4)
     queue_recordings_button.grid(row=0, column=2, sticky='ew', padx=(4, 0))
 
-    settings_toggle = tk.Frame(inner, bg=colors['surface'], cursor='hand2')
-    settings_toggle.pack(fill=tk.X, pady=(14, 0))
+    settings_toggle = tk.Frame(tools_row, bg=colors['surface'], cursor='hand2')
+    settings_toggle.pack(side=tk.LEFT, padx=(12, 0))
 
     settings_toggle_label = tk.Label(
         settings_toggle,
@@ -243,6 +249,15 @@ def _create_recording_card(parent, app, theme, widgets, pad):
         cursor='hand2'
     )
     settings_toggle_label.pack(side=tk.LEFT)
+
+    def toggle_recent():
+        if recent_shell.winfo_manager():
+            recent_shell.pack_forget()
+            recent_toggle.config(text='▸ 最近の録音')
+        else:
+            recent_shell.pack(fill=tk.X, pady=(8, 0), after=tools_row)
+            recent_toggle.config(text='▾ 最近の録音')
+    recent_toggle.config(command=toggle_recent)
 
     settings_body = tk.Frame(
         inner,
@@ -427,7 +442,7 @@ def _create_recording_card(parent, app, theme, widgets, pad):
     _bind_dynamic_wraplength(gain_note, 4)
 
     settings_state = {
-        'expanded': bool(app.config.get('recording_settings_expanded', False))
+        'expanded': bool(app.config.get('recording_settings_expanded', True))
     }
 
     def _apply_settings_visibility():
@@ -558,35 +573,36 @@ def _make_visual_drawer(canvas, theme):
             width=2
         )
 
-        bins = list(spectrum_bins or [])
-        if len(bins) < 8:
-            bins = [0.0] * 28
-        bar_top = meter_y1 + 16
-        bar_bottom = height - 28
-        max_bar_h = max(12, bar_bottom - bar_top)
-        gap = 3
-        bar_width = max(3, (usable_width - gap * (len(bins) - 1)) / len(bins))
+        if height >= 100:
+            bins = list(spectrum_bins or [])
+            if len(bins) < 8:
+                bins = [0.0] * 28
+            bar_top = meter_y1 + 16
+            bar_bottom = height - 28
+            max_bar_h = max(12, bar_bottom - bar_top)
+            gap = 3
+            bar_width = max(3, (usable_width - gap * (len(bins) - 1)) / len(bins))
 
-        for index, value in enumerate(bins):
-            magnitude = max(0.0, min(1.0, float(value or 0.0)))
-            if not is_live:
-                magnitude *= 0.18
-            x1 = left_pad + index * (bar_width + gap)
-            x2 = x1 + bar_width
-            bar_h = max(3, magnitude * max_bar_h)
-            if magnitude >= 0.88:
-                fill = '#D97761'
-            elif magnitude >= 0.68:
-                fill = '#E8A55B'
-            elif is_active:
-                fill = '#E07A72'
-            else:
-                fill = '#7FB3C4'
-            canvas.create_rectangle(
-                x1, bar_bottom - bar_h, x2, bar_bottom,
-                fill=fill,
-                outline=''
-            )
+            for index, value in enumerate(bins):
+                magnitude = max(0.0, min(1.0, float(value or 0.0)))
+                if not is_live:
+                    magnitude *= 0.18
+                x1 = left_pad + index * (bar_width + gap)
+                x2 = x1 + bar_width
+                bar_h = max(3, magnitude * max_bar_h)
+                if magnitude >= 0.88:
+                    fill = '#D97761'
+                elif magnitude >= 0.68:
+                    fill = '#E8A55B'
+                elif is_active:
+                    fill = '#E07A72'
+                else:
+                    fill = '#7FB3C4'
+                canvas.create_rectangle(
+                    x1, bar_bottom - bar_h, x2, bar_bottom,
+                    fill=fill,
+                    outline=''
+                )
 
         canvas.create_text(
             left_pad, height - 8,

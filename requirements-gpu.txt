@@ -1,0 +1,4 @@
+# Optional Windows CUDA 12 runtime for faster-whisper (PyTorch is not required).
+# Install with: python -m pip install -r requirements-gpu.txt
+nvidia-cublas-cu12>=12.8,<13; sys_platform == "win32"
+nvidia-cudnn-cu12>=9.8,<10; sys_platform == "win32"

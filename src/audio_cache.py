@@ -167,7 +167,7 @@ class AudioCacheManager:
             cache_path.mkdir(parents=True, exist_ok=True)
 
             # 処理済み音声をコピー
-            processed_cache_path = cache_path / "processed.mp3"
+            processed_cache_path = cache_path / ("processed" + Path(processed_audio).suffix.lower())
             shutil.copy2(processed_audio, processed_cache_path)
 
             # セグメントをコピー
@@ -177,7 +177,7 @@ class AudioCacheManager:
                 segments_dir.mkdir(exist_ok=True)
 
                 for i, segment_file in enumerate(segments):
-                    segment_cache_path = segments_dir / f"segment_{i:03d}.mp3"
+                    segment_cache_path = segments_dir / f"segment_{i:03d}{Path(segment_file).suffix.lower()}"
                     shutil.copy2(segment_file, segment_cache_path)
                     segment_paths.append(str(segment_cache_path))
 

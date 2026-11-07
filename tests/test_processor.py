@@ -385,6 +385,7 @@ class FileProcessorTests(unittest.TestCase):
         processor = FileProcessor(temp_dir, enable_cache=False)
         long_transcription = "文字起こし本文。" * 20
         processor._prepare_audio_file = MagicMock(return_value=("prepared.mp3", None, False))
+        processor.get_whisper_service = MagicMock()
         processor._perform_whisper_transcription = MagicMock(return_value=long_transcription)
         processor._save_result = MagicMock(return_value="output.txt")
         processor.generate_summary_title_ollama = MagicMock(return_value="会議メモ")
@@ -411,6 +412,7 @@ class FileProcessorTests(unittest.TestCase):
         long_transcription = "文字起こし本文。" * 20
         statuses = []
         processor._prepare_audio_file = MagicMock(return_value=("prepared.mp3", None, False))
+        processor.get_whisper_service = MagicMock()
         processor._perform_whisper_transcription = MagicMock(return_value=long_transcription)
         processor._save_result = MagicMock(return_value="output.txt")
         processor._rename_source_file = MagicMock(return_value="renamed.mp3")
@@ -442,6 +444,7 @@ class FileProcessorTests(unittest.TestCase):
         long_transcription = "文字起こし本文。" * 20
         statuses = []
         processor._prepare_audio_file = MagicMock(return_value=("prepared.mp3", None, False))
+        processor.get_whisper_service = MagicMock()
         processor._perform_whisper_transcription = MagicMock(return_value=long_transcription)
         processor._save_result = MagicMock(return_value="output.txt")
         processor._rename_source_file = MagicMock(return_value="renamed.mp3")
@@ -472,6 +475,7 @@ class FileProcessorTests(unittest.TestCase):
         long_transcription = "文字起こし本文。" * 20
         statuses = []
         processor._prepare_audio_file = MagicMock(return_value=("prepared.mp3", None, False))
+        processor.get_whisper_service = MagicMock()
         processor._perform_whisper_transcription = MagicMock(return_value=long_transcription)
         processor._save_result = MagicMock(return_value="output.txt")
         processor._rename_source_file = MagicMock(side_effect=AssertionError("rename should not run"))

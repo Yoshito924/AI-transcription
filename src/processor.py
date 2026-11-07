@@ -297,6 +297,8 @@ class FileProcessor:
         self.last_warning = None
         self.last_audio_duration_sec = None
         self.last_processing_sec = None
+        self.last_whisper_inference_sec = None
+        self.last_whisper_profile = None
 
         def update_status(message):
             logger.info(message)
@@ -327,10 +329,16 @@ class FileProcessor:
                 )
             update_progress(10)
 
+            if engine == 'whisper':
+                update_status(f"Whisperモデルを準備中: {whisper_model}（初回はダウンロードが必要な場合があります）")
+                service = self.get_whisper_service()
+                service.load_model(whisper_model)
+                self.last_whisper_profile = service.get_processing_profile()
+
             # ETA予測を表示
             if time_tracker and self.last_audio_duration_sec:
                 if engine == 'whisper':
-                    model_for_eta = whisper_model
+                    model_for_eta = self.last_whisper_profile
                 elif engine == 'whisper-api':
                     model_for_eta = whisper_api_model or DEFAULT_WHISPER_API_MODEL
                 else:
@@ -338,8 +346,9 @@ class FileProcessor:
                 estimate = time_tracker.estimate(engine, model_for_eta, self.last_audio_duration_sec)
                 eta_msg = time_tracker.format_estimate(estimate)
                 if eta_msg:
-                    update_status(eta_msg)
+                    update_status(eta_msg.replace("予想処理時間", "予想文字起こし時間（後処理を除く）") if engine == 'whisper' else eta_msg)
 
+            transcription_started = time.perf_counter()
             # 文字起こし実行（エンジンに応じてディスパッチ）
             # キャッシュからセグメントを取得した場合は、それを使用
             try:
@@ -372,6 +381,9 @@ class FileProcessor:
                     )
                 else:
                     raise
+            if engine == 'whisper':
+                self.last_whisper_inference_sec = time.perf_counter() - transcription_started
+                self.last_whisper_profile = service.get_processing_profile()
             update_progress(85)
 
             # 追加処理（必要な場合）
@@ -652,6 +664,9 @@ class FileProcessor:
                 ),
             }
 
+        if engine == 'whisper':
+            cache_profile['audio_format'] = 'pcm16-wav'
+
         # キャッシュをチェック
         if self.enable_cache and self.cache_manager:
             cache_entry = self.cache_manager.get_cache_entry(input_file, cache_profile=cache_profile)
@@ -672,7 +687,8 @@ class FileProcessor:
         # キャッシュがない場合は通常処理
         step_start = time.time()
         update_status("音声ファイルを変換中...")
-        audio_path = self.audio_processor.convert_audio(input_file, trim_long_silence=False)
+        conversion_options = {'output_format': 'wav', 'sample_rate': 16000, 'channels': 1} if engine == 'whisper' else {}
+        audio_path = self.audio_processor.convert_audio(input_file, trim_long_silence=False, **conversion_options)
         convert_elapsed = time.time() - step_start
         logger.info(f"音声変換完了: {convert_elapsed:.1f}秒")
 
