@@ -113,6 +113,9 @@ class ProcessingTimeTracker:
         key = self._model_key(engine, model)
         records = self.data.get(key, [])
 
+        if not records and engine == 'whisper' and '@' in model:
+            return None
+
         if not records:
             # 同じエンジンの別モデルから推定を試みる
             records = self._fallback_records(engine)

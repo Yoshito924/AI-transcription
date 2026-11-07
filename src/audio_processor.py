@@ -760,7 +760,8 @@ class AudioProcessor:
         if duration is None or duration <= 0:
             raise AudioProcessingError("音声ファイルの長さを取得できませんでした")
 
-        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+        pcm = os.path.splitext(input_file_path)[1].lower() == '.wav'
+        with tempfile.NamedTemporaryFile(suffix='.wav' if pcm else '.mp3', delete=False) as temp_file:
             output_path = temp_file.name
 
         try:
@@ -795,8 +796,7 @@ class AudioProcessor:
                 '-i', input_file_path,
                 '-y',
                 '-af', filter_text,
-                '-c:a', 'libmp3lame',
-                '-b:a', DEFAULT_AUDIO_BITRATE,
+                *(['-c:a', 'pcm_s16le'] if pcm else ['-c:a', 'libmp3lame', '-b:a', DEFAULT_AUDIO_BITRATE]),
                 output_path
             ]
 
@@ -858,6 +858,8 @@ class AudioProcessor:
         update_status(f"音声ファイルを {num_segments} 個のセグメントに分割します（各 {segment_duration_sec // 60} 分、オーバーラップ {overlap_sec} 秒）")
         
         # 分割ファイルのリスト
+        pcm = os.path.splitext(input_file_path)[1].lower() == '.wav'
+        extension = 'wav' if pcm else 'mp3'
         segment_files = []
         
         try:
@@ -887,22 +889,24 @@ class AudioProcessor:
                                 segment_length = audio_duration_sec - start_time
                     
                     # 出力ファイル名
-                    output_path = os.path.join(temp_dir, f"segment_{i:03d}.mp3")
+                    output_path = os.path.join(temp_dir, f"segment_{i:03d}.{extension}")
                     segment_files.append(output_path)
                     
                     # セグメント長に基づくタイムアウト（最低60秒、セグメント長の3倍）
                     segment_timeout = max(60, int(segment_length * 3))
 
+                    # MP3のデコーダ状態を復元するため、1秒手前から読み込む。
+                    seek_start = max(0, start_time - 1)
                     # FFmpegコマンドを構築
                     command = [
                         'ffmpeg',
                         '-y',  # 既存ファイルを上書き
                         '-nostdin',
+                        '-ss', str(seek_start),  # 入力側で高速シーク
                         '-i', input_file_path,
-                        '-ss', str(start_time),  # 開始時間
+                        '-ss', str(start_time - seek_start),  # 助走部分を除去
                         '-t', str(segment_length),  # セグメント長さ
-                        '-c:a', 'libmp3lame',  # MP3エンコーダを使用
-                        '-b:a', '128k',  # ビットレート
+                        *(['-c:a', 'pcm_s16le'] if pcm else ['-c:a', 'libmp3lame', '-b:a', '128k']),
                         output_path
                     ]
 
@@ -932,7 +936,7 @@ class AudioProcessor:
                         perm_path = None
                         try:
                             # 新しい一時ファイルを作成
-                            with tempfile.NamedTemporaryFile(suffix=f'_segment_{i:03d}.mp3', delete=False) as temp_file:
+                            with tempfile.NamedTemporaryFile(suffix=f'_segment_{i:03d}.{extension}', delete=False) as temp_file:
                                 perm_path = temp_file.name
 
                             # perm_pathが正しく作成されたことを確認

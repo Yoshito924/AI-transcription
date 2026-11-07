@@ -3,6 +3,7 @@
 
 import os
 import tempfile
+import time
 import numpy as np
 from typing import Optional, Dict, Any, Tuple
 
@@ -14,6 +15,25 @@ from .utils import format_duration
 # ローカル文字起こしバックエンド（faster-whisper のみサポート）
 FASTER_WHISPER_AVAILABLE = None
 WhisperModel = None
+_CUDA_DLL_DIRECTORIES = {}
+
+
+def _setup_cuda_libraries():
+    """Windowsでpip版NVIDIAライブラリを現在のプロセスから参照する。"""
+    if os.name != 'nt':
+        return
+    from importlib.metadata import distribution, PackageNotFoundError
+    for package in ('nvidia-cublas-cu12', 'nvidia-cudnn-cu12', 'nvidia-cuda-nvrtc-cu12'):
+        try:
+            dist = distribution(package)
+        except PackageNotFoundError:
+            continue
+        for file in dist.files or []:
+            if str(file).lower().endswith('.dll'):
+                directory = str(dist.locate_file(file).parent.resolve())
+                if directory not in _CUDA_DLL_DIRECTORIES:
+                    _CUDA_DLL_DIRECTORIES[directory] = os.add_dll_directory(directory)
+                    os.environ['PATH'] = directory + os.pathsep + os.environ.get('PATH', '')
 
 
 def _ensure_faster_whisper():
@@ -22,6 +42,7 @@ def _ensure_faster_whisper():
     if FASTER_WHISPER_AVAILABLE is not None:
         return FASTER_WHISPER_AVAILABLE
     try:
+        _setup_cuda_libraries()
         from faster_whisper import WhisperModel as loaded_model
         WhisperModel = loaded_model
         FASTER_WHISPER_AVAILABLE = True
@@ -58,18 +79,22 @@ class WhisperService:
 
         self.model = None
         self.current_model_name = None
+        try:
+            self.batch_size = max(1, min(16, int(os.environ.get('AI_TRANSCRIPTION_WHISPER_BATCH_SIZE', '4'))))
+        except ValueError:
+            self.batch_size = 4
+            logger.warning("バッチ数の設定が不正なため、既定値4を使用します")
 
         # Whisperキャッシュディレクトリを設定（書き込み可能な場所を確保）
         self._setup_cache_directory()
 
-        # デバイス検出（torchはCUDA検出にのみ使用）
+        # 実際の推論バックエンドで判定する（PyTorchは不要）。
         try:
-            import torch
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        except ImportError:
-            # torchが利用できない場合はCPUにフォールバック
+            import ctranslate2
+            self.device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+        except Exception as e:
             self.device = "cpu"
-            logger.warning("PyTorchが見つからないため、CPUモードで動作します")
+            logger.warning(f"CTranslate2のGPU検出に失敗したため、CPUモードで動作します: {e}")
 
         logger.info(f"WhisperService初期化: デバイス={self.device}")
 
@@ -140,7 +165,28 @@ class WhisperService:
     def _run_transcription(self, model, audio_path: str,
                            options: Dict[str, Any]) -> Dict[str, Any]:
         """faster-whisperのレスポンスを共通形式に正規化"""
-        segments_iter, info = model.transcribe(audio_path, **options)
+        batch_size = self.batch_size if self.device == 'cuda' else 1
+        while True:
+            try:
+                if batch_size > 1:
+                    from faster_whisper import BatchedInferencePipeline
+                    runner = BatchedInferencePipeline(model)
+                    batch_options = dict(options)
+                    # 長い区間で後半の発話が欠落するケースを避けるため短く区切る。
+                    batch_options.setdefault('chunk_length', 15)
+                    segments_iter, info = runner.transcribe(audio_path, batch_size=batch_size, **batch_options)
+                else:
+                    segments_iter, info = model.transcribe(audio_path, **options)
+                # CUDA errors can occur while consuming the lazy iterator.
+                segments_iter = list(segments_iter)
+                break
+            except RuntimeError as exc:
+                message = str(exc).lower()
+                if batch_size <= 1 or not any(token in message for token in ('out of memory', 'cuda_error_out_of_memory')):
+                    raise
+                batch_size = max(1, batch_size // 2)
+                self.batch_size = batch_size
+                logger.warning(f"GPUメモリ不足: バッチ数を{batch_size}に減らして再試行します")
         segments = []
         text_parts = []
 
@@ -169,57 +215,30 @@ class WhisperService:
         - large, large-v2, large-v3: Largeシリーズ
         - large-v3-turbo, turbo: 高速版（推奨）
         """
-        # エイリアス解決: MODEL_INFOにalias_ofが定義されている場合、実際のモデル名に変換
-        if model_name in self.MODEL_INFO:
-            actual_name = self.MODEL_INFO[model_name].get('alias_of')
-            if actual_name:
-                logger.info(f"モデルエイリアス解決: {model_name} -> {actual_name}")
-                model_name = actual_name
+        model_name = {'turbo': 'large-v3-turbo', 'large': 'large-v3'}.get(model_name, model_name)
+        if self.model is not None and self.current_model_name == model_name and not force_reload:
+            return self.model
 
-        if self.model is None or self.current_model_name != model_name or force_reload:
-            logger.info(f"Whisperモデルをロード中: {model_name}")
-            try:
-                device = "cuda" if self.device == "cuda" else "cpu"
-                # int8_float16: 重みをint8量子化し演算はfloat16で行う
-                # float16とほぼ同精度で高速化・VRAM節約
-                compute_type = "int8_float16" if device == "cuda" else "int8"
-
-                # faster-whisperでのモデル名マッピング
-                # faster-whisperはlarge-v3, large-v3-turboを直接サポート
-                fw_model_map = {
-                    'turbo': 'large-v3-turbo',
-                    'large': 'large-v3',  # largeは最新のlarge-v3を使用
-                }
-                fw_model_name = fw_model_map.get(model_name, model_name)
-
-                try:
-                    self.model = WhisperModel(fw_model_name, device=device, compute_type=compute_type)
-                    model_name = fw_model_name
-                except Exception as e:
-                    logger.warning(f"{fw_model_name}のロードに失敗: {str(e)}")
-                    # フォールバック: turbo → large-v3 → large-v2 → large
-                    for fallback in ['large-v3-turbo', 'large-v3', 'large-v2', 'large']:
-                        if fallback == fw_model_name:
-                            continue
-                        try:
-                            self.model = WhisperModel(fallback, device=device, compute_type=compute_type)
-                            model_name = fallback
-                            logger.info(f"フォールバックモデル（{fallback}）のロードに成功")
-                            break
-                        except Exception:
-                            continue
-
-                self.current_model_name = model_name
-                logger.info(f"モデルロード完了: {model_name} (デバイス: {self.device})")
-            except Exception as e:
-                logger.error(f"モデルロードエラー: {str(e)}", exc_info=True)
-                # より詳細なエラー情報を提供
-                if "RuntimeError" in str(type(e)):
-                    raise AudioProcessingError(f"Whisperモデルのロードに失敗しました。メモリ不足の可能性があります: {str(e)}")
-                else:
-                    raise AudioProcessingError(f"Whisperモデルのロードに失敗しました: {str(e)}")
+        # Free the previous model before allocating a new one; never report stale success.
+        self.model = None
+        self.current_model_name = None
+        compute_type = 'int8_float16' if self.device == 'cuda' else 'int8'
+        logger.info(f"Whisperモデルをロード中: {model_name}")
+        started = time.perf_counter()
+        try:
+            model = WhisperModel(model_name, device=self.device, compute_type=compute_type)
+        except Exception as exc:
+            raise AudioProcessingError(f"Whisperモデル {model_name} のロードに失敗しました: {exc}") from exc
+        self.model = model
+        self.current_model_name = model_name
+        logger.info(f"モデルロード完了: {model_name} ({time.perf_counter() - started:.1f}秒 / {self.device} / バッチ数={self.batch_size if self.device == 'cuda' else 1})")
         return self.model
-    
+
+    def get_processing_profile(self):
+        """Keep CPU/GPU and batch execution histories separate."""
+        batch_size = self.batch_size if self.device == 'cuda' else 1
+        return f"{self.current_model_name}@{self.device}-batch{batch_size}-v2"
+
     def transcribe(self, audio_path: str, model_name: str = DEFAULT_WHISPER_MODEL,
                   language: Optional[str] = 'ja', **kwargs) -> Tuple[str, Dict[str, Any]]:
         """音声ファイルを文字起こし"""
@@ -431,8 +450,8 @@ class WhisperService:
                 gpu_name = torch.cuda.get_device_name(0)
                 gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 return f"GPU: {gpu_name} (メモリ: {gpu_memory:.1f}GB)"
-            except (NameError, ImportError):
-                return "GPU (詳細不明)"
+            except Exception:
+                return "GPU (CUDA / CTranslate2)"
         else:
             return "CPU"
     

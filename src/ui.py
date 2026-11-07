@@ -266,55 +266,8 @@ def setup_ui(app):
 
     pane_persisters = []
 
-    # === 全体: 左右をドラッグで調整できる横PanedWindow ===
-    main_paned = _create_split_paned(main_container, theme, orient=tk.HORIZONTAL)
-    main_paned.pack(fill=tk.BOTH, expand=True)
-
-    work_pane = tk.Frame(main_paned, bg=theme.colors['background'])
-    side_pane = tk.Frame(main_paned, bg=theme.colors['background'])
-
-    main_paned.add(work_pane, minsize=480, stretch='always')
-    main_paned.add(side_pane, minsize=280, stretch='never')
-    pane_persisters.append(_bind_pane_fraction(
-        app, main_paned, 'pane_main_fraction',
-        DEFAULT_PANE_FRACTIONS['pane_main_fraction']
-    ))
-
-    # === 左側: 作業タブ（折りたたみ可能） ===
-    accordion_state = {'expanded': True}
-
-    # アコーディオンのトグルバー
-    toggle_bar = tk.Frame(
-        work_pane,
-        bg=theme.colors['surface_variant'],
-        cursor='hand2'
-    )
-    toggle_bar.pack(fill=tk.X, pady=(0, 2))
-
-    toggle_inner = tk.Frame(toggle_bar, bg=theme.colors['surface_variant'])
-    toggle_inner.pack(fill=tk.X, padx=10, pady=4)
-
-    toggle_arrow = tk.Label(
-        toggle_inner,
-        text='\u25bc',
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface_variant']
-    )
-    toggle_arrow.pack(side=tk.LEFT, padx=(0, 8))
-
-    toggle_label = tk.Label(
-        toggle_inner,
-        text='作業パネルを閉じる',
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface_variant']
-    )
-    toggle_label.pack(side=tk.LEFT)
-
-    # 上部コンテンツ（折りたたみ対象）
-    upper_frame = tk.Frame(work_pane, bg=theme.colors['background'])
-    upper_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+    upper_frame = tk.Frame(main_container, bg=theme.colors['background'])
+    upper_frame.pack(fill=tk.BOTH, expand=True)
 
     # タブ（文字起こし / 録音 / 設定）
     notebook = ttk.Notebook(upper_frame, style='Modern.TNotebook')
@@ -332,6 +285,14 @@ def setup_ui(app):
     settings_tab = tk.Frame(notebook, bg=theme.colors['surface'])
     notebook.add(settings_tab, text='設定')
     tab_keys.append('settings')
+
+    history_tab = tk.Frame(notebook, bg=theme.colors['surface'])
+    notebook.add(history_tab, text='履歴')
+    tab_keys.append('history')
+    log_tab = tk.Frame(notebook, bg=theme.colors['surface'])
+    notebook.add(log_tab, text='処理の詳細')
+    tab_keys.append('logs')
+    side_pane = history_tab
 
     def open_settings_tab(_event=None):
         notebook.select(tab_keys.index('settings'))
@@ -366,38 +327,9 @@ def setup_ui(app):
             if tab_keys[current_index] == 'recording':
                 app.refresh_recent_recordings()
 
-    # 起動直後は録音を前面に。他タブは後から埋めて last_open_tab へ戻す
-    notebook.select(tab_keys.index('recording'))
+    saved_tab_key = app.config.get('last_open_tab', 'file')
+    notebook.select(tab_keys.index(saved_tab_key) if saved_tab_key in tab_keys else 0)
     notebook.bind('<<NotebookTabChanged>>', _save_current_tab)
-
-    # アコーディオンのトグル処理
-    def _toggle_accordion(event=None):
-        if accordion_state['expanded']:
-            upper_frame.pack_forget()
-            toggle_arrow.config(text='\u25b6')
-            toggle_label.config(text='作業パネルを開く')
-            accordion_state['expanded'] = False
-        else:
-            # toggle_bar の直後に upper_frame を挿入
-            upper_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 6), after=toggle_bar)
-            toggle_arrow.config(text='\u25bc')
-            toggle_label.config(text='作業パネルを閉じる')
-            accordion_state['expanded'] = True
-
-    # バー全体をクリック可能に
-    for w in (toggle_bar, toggle_inner, toggle_arrow, toggle_label):
-        w.bind('<Button-1>', _toggle_accordion)
-
-    # ホバー効果
-    def _toggle_enter(event=None):
-        for w in (toggle_bar, toggle_inner, toggle_arrow, toggle_label):
-            w.config(bg=theme.colors['surface_emphasis'])
-    def _toggle_leave(event=None):
-        for w in (toggle_bar, toggle_inner, toggle_arrow, toggle_label):
-            w.config(bg=theme.colors['surface_variant'])
-
-    toggle_bar.bind('<Enter>', _toggle_enter)
-    toggle_bar.bind('<Leave>', _toggle_leave)
 
     ui_elements = {
         'notebook': notebook,
@@ -429,6 +361,7 @@ def setup_ui(app):
             'file_tab': file_tab,
             'settings_tab': settings_tab,
             'side_pane': side_pane,
+            'log_tab': log_tab,
             'file_placeholder': file_placeholder,
             'settings_placeholder': settings_placeholder,
             'side_placeholder': side_placeholder,
@@ -437,7 +370,7 @@ def setup_ui(app):
             'notebook': notebook,
             'tab_keys': tab_keys,
             'open_settings_tab': open_settings_tab,
-            'saved_tab_key': app.config.get("last_open_tab", "file"),
+            'saved_tab_key': saved_tab_key,
         },
     }
     return ui_elements
@@ -477,33 +410,25 @@ def complete_deferred_ui(app, ui_elements):
     usage_section = create_usage_section(settings_content, app, theme, widgets)
     usage_section.pack(fill=tk.X)
 
-    file_scroll_outer, file_scroll_inner = _create_scrollable_frame(
-        ctx['file_tab'], theme.colors['surface']
-    )
-    file_scroll_outer.pack(fill=tk.BOTH, expand=True)
     file_section = create_file_section(
-        file_scroll_inner, app, theme, widgets,
+        ctx['file_tab'], app, theme, widgets,
         processing_settings, open_settings_tab
     )
-    file_section.pack(fill=tk.X)
-
-    paned = _create_split_paned(ctx['side_pane'], theme, orient=tk.VERTICAL)
-    paned.pack(fill=tk.BOTH, expand=True)
-    history_section = create_history_section(paned, app, theme, widgets)
-    paned.add(history_section, stretch='always', minsize=220)
-    log_section = create_log_section(paned, app, theme, widgets)
-    paned.add(log_section, stretch='never', minsize=180)
-    pane_persisters.append(_bind_pane_fraction(
-        app, paned, 'pane_side_fraction',
-        DEFAULT_PANE_FRACTIONS['pane_side_fraction'],
-        orient=tk.VERTICAL
-    ))
+    file_section.pack(fill=tk.BOTH, expand=True)
+    history_section = create_history_section(ctx['side_pane'], app, theme, widgets)
+    history_section.pack(fill=tk.BOTH, expand=True)
+    log_section = create_log_section(ctx['log_tab'], app, theme, widgets)
+    log_section.pack(fill=tk.BOTH, expand=True)
 
     filled = collect_ui_elements(
         api_section, file_section, ctx['recording_section'], usage_section,
         history_section, log_section, processing_settings
     )
     ui_elements.update(filled)
+    ui_elements['workspace_queue'] = True
+    ui_elements['result_editor'] = file_section.result_editor
+    ui_elements['detail_tabs'] = file_section.detail_tabs
+    ui_elements['start_button'] = file_section.start_button
     ui_elements['notebook'] = notebook
     ui_elements['tab_keys'] = tab_keys
     ui_elements['persist_pane_fractions'] = lambda: [
@@ -669,291 +594,8 @@ def create_api_section(parent, app, theme, widgets):
 
 
 def create_file_section(parent, app, theme, widgets, processing_settings, on_open_settings=None):
-    """ファイル入力セクション（作業用。設定は設定タブ）"""
-    from .waveform_viewer import WaveformViewer
-    frame = widgets.create_card_frame(parent)
-    pad = 12
-
-    header_frame = tk.Frame(frame, bg=theme.colors['surface'])
-    header_frame.pack(fill=tk.X, padx=pad, pady=(pad, 8))
-
-    widgets.create_section_header(header_frame, "文字起こし").pack(
-        side=tk.LEFT, fill=tk.X, expand=True
-    )
-    if on_open_settings:
-        settings_btn = widgets.create_icon_button(
-            header_frame, "設定", ICONS['settings'], 'Secondary',
-            command=on_open_settings
-        )
-        settings_btn.pack(side=tk.RIGHT)
-
-    intro_label = tk.Label(
-        frame,
-        text="音声や動画を追加して文字起こしします。エンジンやモデルは「設定」タブで変えます。",
-        font=theme.fonts['caption'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface'],
-        justify='left',
-        anchor='w'
-    )
-    intro_label.pack(fill=tk.X, padx=pad, pady=(0, 8))
-    _bind_dynamic_wraplength(intro_label, pad)
-
-    summary_grid = tk.Frame(frame, bg=theme.colors['surface'])
-    summary_grid.pack(fill=tk.X, padx=pad, pady=(0, 8))
-    summary_grid.grid_columnconfigure(0, weight=1)
-    summary_grid.grid_columnconfigure(1, weight=1)
-    summary_grid.grid_columnconfigure(2, weight=1)
-
-    saved_engine = processing_settings.engine_var.get()
-    engine_tile = widgets.create_metric_tile(
-        summary_grid, "エンジン",
-        get_engine_spec(saved_engine).label,
-        tone='primary'
-    )
-    engine_tile.grid(row=0, column=0, sticky='ew', padx=(0, 6))
-
-    model_tile = widgets.create_metric_tile(
-        summary_grid, "モデル",
-        processing_settings.summary_model_text(),
-        tone='info'
-    )
-    model_tile.grid(row=0, column=1, sticky='ew', padx=6)
-
-    save_tile = widgets.create_metric_tile(
-        summary_grid, "保存先", processing_settings.summary_save_text(), tone='warning'
-    )
-    save_tile.grid(row=0, column=2, sticky='ew', padx=(6, 0))
-
-    def _refresh_summary():
-        spec = get_engine_spec(processing_settings.engine_var.get())
-        engine_tile.value_label.config(text=spec.label)
-        model_tile.value_label.config(text=processing_settings.summary_model_text())
-        save_tile.value_label.config(text=processing_settings.summary_save_text())
-
-    processing_settings.notify_summary.append(_refresh_summary)
-
-    def _bind_open_settings(widget):
-        if not on_open_settings:
-            return
-        try:
-            widget.configure(cursor='hand2')
-        except tk.TclError:
-            pass
-        widget.bind('<Button-1>', lambda _e: on_open_settings())
-        for child in widget.winfo_children():
-            _bind_open_settings(child)
-
-    for tile in (engine_tile, model_tile, save_tile):
-        _bind_open_settings(tile)
-
-    drop_wrapper = tk.Frame(
-        frame,
-        bg=theme.colors['surface_variant'],
-        highlightbackground=theme.colors['card_border'],
-        highlightthickness=1,
-        bd=0
-    )
-    drop_wrapper.pack(fill=tk.X, padx=pad, pady=(0, 8))
-
-    drop_inner = tk.Frame(drop_wrapper, bg=theme.colors['surface_variant'])
-    drop_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-    drop_header = tk.Frame(drop_inner, bg=theme.colors['surface_variant'])
-    drop_header.pack(fill=tk.X, pady=(0, 6))
-
-    tk.Label(
-        drop_header,
-        text="既存ファイルを追加",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface_variant']
-    ).pack(side=tk.LEFT)
-
-    widgets.create_pill_label(
-        drop_header,
-        "クリックまたはドラッグ",
-        tone='info',
-        bg=theme.colors['surface'],
-        fg=theme.colors['primary']
-    ).pack(side=tk.RIGHT)
-
-    drop_container = widgets.create_drag_drop_canvas(
-        drop_inner,
-        title="クリックしてファイルを選択",
-        subtitle="またはこの欄にドラッグ&ドロップ",
-        height=128
-    )
-    drop_container.pack(fill=tk.X)
-
-    drop_canvas = drop_container.canvas
-    drop_canvas.bind("<Button-1>", app.browse_file)
-    setup_drag_drop(drop_canvas, drop_canvas, app)
-
-    queue_frame = widgets.create_card_frame(frame)
-
-    queue_header = tk.Frame(queue_frame, bg=theme.colors['surface'])
-    queue_header.pack(fill=tk.X, padx=10, pady=(8, 4))
-
-    queue_count_label = tk.Label(
-        queue_header,
-        text="現在のキュー: 0件",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface']
-    )
-    queue_count_label.pack(side=tk.LEFT)
-
-    queue_clear_btn = widgets.create_icon_button(
-        queue_header, "クリア", ICONS['delete'], 'Secondary',
-        command=lambda: app.clear_queue()
-    )
-    queue_clear_btn.pack(side=tk.RIGHT, padx=(6, 0))
-
-    queue_remove_btn = widgets.create_icon_button(
-        queue_header, "選択削除", ICONS['minus'], 'Secondary',
-        command=lambda: app.remove_from_queue()
-    )
-    queue_remove_btn.pack(side=tk.RIGHT)
-
-    queue_tree_shell = tk.Frame(queue_frame, bg=theme.colors['surface'])
-    queue_tree_shell.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-    queue_tree = ttk.Treeview(
-        queue_tree_shell,
-        columns=('order', 'name', 'location', 'state'),
-        show='headings',
-        height=QUEUE_LISTBOX_HEIGHT,
-        style='Modern.Treeview',
-        selectmode='extended'
-    )
-    queue_tree.heading('order', text='#')
-    queue_tree.heading('name', text='ファイル')
-    queue_tree.heading('location', text='場所')
-    queue_tree.heading('state', text='状態')
-    queue_tree.column('order', width=42, minwidth=42, stretch=False, anchor='center')
-    queue_tree.column('name', width=240, minwidth=140, stretch=True)
-    queue_tree.column('location', width=280, minwidth=140, stretch=True)
-    queue_tree.column('state', width=132, minwidth=110, stretch=False)
-    queue_tree.tag_configure('queue_ready', background=theme.colors['surface'])
-    queue_tree.tag_configure(
-        'queue_missing',
-        background=theme.colors['error_soft'],
-        foreground=theme.colors['error']
-    )
-    queue_tree.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-    queue_scrollbar = ttk.Scrollbar(
-        queue_tree_shell,
-        orient=tk.VERTICAL,
-        command=queue_tree.yview,
-        style='Modern.Vertical.TScrollbar'
-    )
-    queue_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-    queue_tree.configure(yscrollcommand=queue_scrollbar.set)
-    queue_tree.bind('<Delete>', lambda _event: app.remove_from_queue())
-
-    status_card = tk.Frame(
-        frame,
-        bg=theme.colors['surface_variant'],
-        highlightbackground=theme.colors['card_border'],
-        highlightthickness=1,
-        bd=0
-    )
-    status_card.pack(fill=tk.X, padx=pad, pady=(0, 8))
-
-    status_inner = tk.Frame(status_card, bg=theme.colors['surface_variant'])
-    status_inner.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
-
-    top_info = tk.Frame(status_inner, bg=theme.colors['surface_variant'])
-    top_info.pack(fill=tk.X)
-
-    file_label = tk.Label(
-        top_info,
-        text="選択ファイル: なし",
-        font=theme.fonts['body_bold'],
-        fg=theme.colors['text_primary'],
-        bg=theme.colors['surface_variant']
-    )
-    file_label.pack(side=tk.LEFT)
-
-    status_group = tk.Frame(top_info, bg=theme.colors['surface_variant'])
-    status_group.pack(side=tk.RIGHT)
-
-    status_dot = tk.Label(
-        status_group,
-        text="\u25cf",
-        font=(theme.fonts['default'][0], 8),
-        fg=theme.colors['text_disabled'],
-        bg=theme.colors['surface_variant']
-    )
-    status_dot.pack(side=tk.LEFT, padx=(0, 4))
-
-    status_label = tk.Label(
-        status_group,
-        text="開始待ち",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface_variant']
-    )
-    status_label.pack(side=tk.LEFT)
-
-    # ウェーブフォームビューア（プログレスバーの上に配置）
-    waveform_viewer = WaveformViewer(status_inner, theme)
-    # show() 呼び出しまで非表示
-
-    progress_caption = tk.Frame(status_inner, bg=theme.colors['surface_variant'])
-    progress_caption.pack(fill=tk.X, pady=(8, 4))
-
-    tk.Label(
-        progress_caption,
-        text="実行状況",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['text_secondary'],
-        bg=theme.colors['surface_variant']
-    ).pack(side=tk.LEFT)
-
-    progress_label = tk.Label(
-        progress_caption, text="",
-        font=theme.fonts['caption_bold'],
-        fg=theme.colors['primary'],
-        bg=theme.colors['surface_variant'],
-        width=5, anchor='e'
-    )
-    progress_label.pack(side=tk.RIGHT)
-
-    progress = ttk.Progressbar(
-        status_inner, orient=tk.HORIZONTAL,
-        mode='determinate', maximum=100, value=0,
-        style='Modern.Horizontal.TProgressbar'
-    )
-    progress.pack(fill=tk.X)
-
-    transcribe_btn = widgets.create_action_button(
-        frame, f"{ICONS['play']} 文字起こしを開始",
-        command=lambda: app.start_process("transcription")
-    )
-    transcribe_btn.pack(fill=tk.X, padx=pad, pady=(0, pad))
-
-    waveform_viewer.set_callbacks(
-        play_toggle_callback=app.toggle_waveform_playback,
-        stop_callback=lambda: app.stop_waveform_playback(reset_position=True, silent=True),
-        seek_callback=app.seek_waveform_playback
-    )
-    _refresh_summary()
-
-    frame.drop_area = drop_canvas
-    frame.file_label = file_label
-    frame.status_label = status_label
-    frame.status_dot = status_dot
-    frame.progress = progress
-    frame.progress_label = progress_label
-    frame.waveform_viewer = waveform_viewer
-    frame.queue_frame = queue_frame
-    frame.queue_tree = queue_tree
-    frame.queue_count_label = queue_count_label
-
-    return frame
+    from .ui_workspace import create_workspace
+    return create_workspace(parent, app, theme, widgets, processing_settings, on_open_settings)
 
 
 def create_history_section(parent, app, theme, widgets):
@@ -980,7 +622,7 @@ def create_history_section(parent, app, theme, widgets):
 
     history_desc = tk.Label(
         card,
-        text="出力済みテキストの一覧です。ダブルクリックで開けます。",
+        text="ダブルクリックで結果を確認・修正できます。外部エディターでも開けます。",
         font=theme.fonts['caption'],
         fg=theme.colors['text_secondary'],
         bg=theme.colors['surface'],
@@ -1033,7 +675,8 @@ def create_history_section(parent, app, theme, widgets):
     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     history_tree.configure(yscrollcommand=scrollbar.set)
 
-    history_tree.bind('<Double-1>', app.open_output_file)
+    history_tree.bind('<Double-1>', app.preview_output_file)
+    history_tree.bind('<Return>', app.preview_output_file)
 
     # 操作ボタン
     button_frame = tk.Frame(card, bg=theme.colors['surface'])
@@ -1043,8 +686,8 @@ def create_history_section(parent, app, theme, widgets):
         button_frame.grid_columnconfigure(col, weight=1, uniform='history_actions')
 
     open_btn = widgets.create_icon_button(
-        button_frame, "開く", ICONS['document'], 'Secondary',
-        command=app.open_output_file
+        button_frame, "結果を確認", ICONS['document'], 'Secondary',
+        command=app.preview_output_file
     )
     open_btn.grid(row=0, column=0, sticky='ew', padx=(0, 4), pady=(0, 6))
 
@@ -1061,8 +704,8 @@ def create_history_section(parent, app, theme, widgets):
     source_folder_btn.grid(row=0, column=2, sticky='ew', padx=(4, 0), pady=(0, 6))
 
     history_folder_btn = widgets.create_icon_button(
-        button_frame, "履歴データ", ICONS['folder'], 'Secondary',
-        command=app.open_history_directory
+        button_frame, "外部で開く", ICONS['folder'], 'Secondary',
+        command=app.open_output_file
     )
     history_folder_btn.grid(row=1, column=0, sticky='ew', padx=(0, 4), pady=(0, 0))
 

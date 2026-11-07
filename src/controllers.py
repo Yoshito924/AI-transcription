@@ -69,6 +69,7 @@ class TranscriptionController:
         self.current_queue_index = 0
         self.total_queue_files = 0
         self.queue_errors = []
+        self.session_jobs = {}
         self.history_metadata = None
         self.update_queue_callback = None
         self._waveform_request_id = 0
@@ -80,6 +81,12 @@ class TranscriptionController:
         self._prep_cancel = threading.Event()
         self._prep_file_list = []
     
+    def _set_job_state(self, path, state, output=None):
+        if path:
+            self.session_jobs[path] = {'state': state, 'output': output}
+        if self.update_queue_callback:
+            self.update_queue_callback()
+
     def update_status(self, message):
         """ステータスを更新"""
         # ステータスメッセージは短くする
@@ -479,6 +486,7 @@ class TranscriptionController:
         if 'progress_label' in self.ui_elements:
             self.ui_elements['progress_label'].config(text="")
         self.is_processing = False
+        self._set_job_state(self.current_file, '失敗')
         # ログに詳細を記録
         if hasattr(exception, 'error_code'):
             self.add_log(f"エラーコード: {exception.error_code}")
@@ -580,7 +588,10 @@ class TranscriptionController:
         try:
             engine_value = getattr(self.processor, 'last_engine_used', None) or get_engine_value(self.ui_elements)
             if engine_value == 'whisper':
-                model_name = self.processor.last_transcription_model_name or get_whisper_model_value(self.ui_elements)
+                model_name = getattr(self.processor, 'last_whisper_profile', None)
+                proc_sec = getattr(self.processor, 'last_whisper_inference_sec', None)
+                if not model_name or not proc_sec:
+                    return
             elif engine_value == 'whisper-api':
                 model_name = self.processor.last_transcription_model_name or 'whisper-1'
             else:
@@ -616,6 +627,8 @@ class TranscriptionController:
         """処理完了時の処理"""
         self._update_progress_bar(100)
         self.is_processing = False
+
+        self._set_job_state(self.current_file, '完了' if output_file else '保存なし', output_file)
 
         # キュー進捗プレフィックス
         queue_prefix = ""
@@ -795,7 +808,7 @@ class TranscriptionController:
 
     def start_queue_processing(self):
         """キュー処理を開始。キューが空なら単一ファイル処理にフォールバック"""
-        if self.is_processing:
+        if self.is_processing or self.queue_processing:
             messagebox.showinfo("情報", "すでに処理中です。完了までお待ちください。")
             return
 
@@ -808,7 +821,10 @@ class TranscriptionController:
 
             # キューをスナップショットして前処理ワーカーを起動
             self._prep_file_list = list(self.file_queue)
+            self.session_jobs = {path: {'state': '待機中', 'output': None} for path in self._prep_file_list}
             self.file_queue.clear()
+            if self.update_queue_callback:
+                self.update_queue_callback()
             self._prep_cancel.clear()
             self._prep_queue = queue.Queue(maxsize=1)
 
@@ -887,6 +903,7 @@ class TranscriptionController:
             display_name = "unknown"
 
         if error:
+            self._set_job_state(file_path, '失敗')
             self.queue_errors.append((filename, error))
             self.add_log(
                 f"[{self.current_queue_index}/{self.total_queue_files}] "
@@ -896,6 +913,7 @@ class TranscriptionController:
             return
 
         self.current_file = file_path
+        self._set_job_state(file_path, '処理中')
 
         # UI更新
         self.ui_elements['file_label'].config(
@@ -987,7 +1005,8 @@ class TranscriptionController:
             wv.clear()
         self._waveform_cache = {}
 
-        messagebox.showinfo("キュー処理完了", summary)
+        if not self.ui_elements.get("workspace_queue") or self.queue_errors:
+            messagebox.showinfo("キュー処理完了", summary)
 
         if self.update_queue_callback:
             self.update_queue_callback()

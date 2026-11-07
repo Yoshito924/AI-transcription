@@ -851,6 +851,10 @@ class TranscriptionApp:
                 messagebox.showerror("録音エラー", str(e))
                 return
         
+        editor = self.ui_elements.get('result_editor')
+        if editor is not None and not editor.confirm_discard():
+            return
+
         # ウィンドウのジオメトリを保存
         self.config.save_window_geometry(self.root)
         
@@ -994,14 +998,11 @@ class TranscriptionApp:
         file_paths = filedialog.askopenfilenames(filetypes=SUPPORTED_MEDIA_FILE_TYPES)
         if file_paths:
             paths = list(file_paths)
-            # キューに既にファイルがある or 複数選択 → キューに追加
-            if len(paths) > 1 or self.controller.file_queue:
-                self._add_files_to_queue(paths)
-                preview_path = self._find_previewable_path(paths)
-                if preview_path:
-                    self.load_file(preview_path)
-            else:
-                self.load_file(paths[0])
+            self._add_files_to_queue(paths)
+            preview_path = self._find_previewable_path(paths)
+            if preview_path and not (self.controller.is_processing or self.controller.queue_processing):
+                self.load_file(preview_path)
+
 
     def choose_recording_folder(self):
         """録音保存先フォルダを選択する"""
@@ -1262,18 +1263,17 @@ class TranscriptionApp:
         self.controller.load_file(file_path)
 
     def load_files(self, raw_data):
-        """D&Dデータから複数ファイルを解析してキューに追加"""
+        """追加したファイルを一覧にそろえ、最初の音声をプレビューする。"""
         paths = self._parse_dnd_paths(raw_data)
         if not paths:
             return
-        # キューに既にファイルがある or 複数ドロップ → キューに追加
-        if len(paths) > 1 or self.controller.file_queue:
-            self._add_files_to_queue(paths)
-            preview_path = self._find_previewable_path(paths)
-            if preview_path:
-                self.load_file(preview_path)
-        else:
-            self.load_file(paths[0])
+        self._add_files_to_queue(paths)
+        preview_path = self._find_previewable_path(paths)
+        if preview_path and not (self.controller.is_processing or self.controller.queue_processing):
+            self.load_file(preview_path)
+        notebook = self.ui_elements.get('notebook')
+        if notebook:
+            notebook.select(self.ui_elements['tab_keys'].index('file'))
 
     def _find_previewable_path(self, file_paths):
         """波形プレビュー対象に使える最初のファイルを返す"""
@@ -1461,6 +1461,8 @@ class TranscriptionApp:
 
         indices = []
         for item_id in queue_tree.selection():
+            if not str(item_id).startswith('queue:'):
+                continue
             try:
                 indices.append(int(str(item_id).split(':', 1)[1]))
             except (IndexError, ValueError):
@@ -1529,7 +1531,7 @@ class TranscriptionApp:
                 summary_parts.append(f"見つからない {missing_count}件")
             queue_count_label.config(text=" | ".join(summary_parts))
             # pack の前に親フレーム内の正しい位置に挿入
-            if not queue_frame.winfo_ismapped():
+            if not self.ui_elements.get('workspace_queue') and not queue_frame.winfo_ismapped():
                 # D&Dエリアの後に挿入
                 drop_area = self.ui_elements.get('drop_area')
                 if drop_area:
@@ -1539,8 +1541,18 @@ class TranscriptionApp:
                     queue_frame.pack(fill=tk.X, padx=16, pady=(0, 6))
         else:
             queue_count_label.config(text="現在のキュー: 0件")
-            if queue_frame.winfo_ismapped():
+            if not self.ui_elements.get('workspace_queue') and queue_frame.winfo_ismapped():
                 queue_frame.pack_forget()
+
+        if self.ui_elements.get('workspace_queue'):
+            jobs = getattr(self.controller, 'session_jobs', {})
+            self._workspace_jobs = list(jobs.items())
+            for index, (path, job) in enumerate(self._workspace_jobs):
+                queue_tree.insert('', index, iid=f'job:{index}', values=(index + 1, os.path.basename(path), path, job['state']))
+            if jobs:
+                queue_count_label.config(text=f"今回の処理: {len(jobs)}件 / 追加待ち: {len(queue)}件")
+            busy = self.controller.is_processing or self.controller.queue_processing
+            self.ui_elements['start_button'].config(state='disabled' if busy or not (queue or self.controller.current_file) else 'normal')
 
         self._persist_queue_state()
 
@@ -1605,6 +1617,17 @@ class TranscriptionApp:
     def _cleanup_queue(self):
         """キュー内ファイルの状態表示を更新"""
         self._update_queue_display()
+
+    def preview_output_file(self, event=None):
+        tree = self.ui_elements['history_tree']
+        selection = tree.selection()
+        if not selection:
+            return
+        filename = tree.item(selection[0])['values'][0]
+        editor = self.ui_elements.get('result_editor')
+        if editor and editor.load(os.path.join(self.output_dir, filename)):
+            self.ui_elements['detail_tabs'].select(editor)
+            self.ui_elements['notebook'].select(self.ui_elements['tab_keys'].index('file'))
 
     def open_output_file(self, event=None):
         """選択された出力ファイルを開く"""
@@ -1734,6 +1757,9 @@ class TranscriptionApp:
                 # コントローラーの参照も更新
                 self.controller.history_metadata = self.history_metadata
         self.update_history()
+        editor = self.ui_elements.get('result_editor')
+        if output_file and editor and editor.load(output_file, automatic=True):
+            self.ui_elements['detail_tabs'].select(editor)
 
     def _load_history_metadata(self):
         """処理履歴メタデータを読み込む"""
