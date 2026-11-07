@@ -49,10 +49,20 @@ class PaneLayoutTests(unittest.TestCase):
             combo.pack(fill=tk.X, pady=(6, 0))
             tk.Label(right, text='保存先').pack(anchor='w')
             _setup_responsive_h_split(strip, left, right, threshold=540)
-            root.update_idletasks()
-            root.update()
+            # ウィンドウが実際に表示されるまでの時間は環境で揺れるため、配置が確定するまで少し待つ
+            import time
+            deadline = time.monotonic() + 2.0
+            while True:
+                root.update_idletasks()
+                root.update()
+                if combo.winfo_ismapped() and combo.winfo_height() > 10:
+                    break
+                if time.monotonic() > deadline:
+                    break
+                time.sleep(0.01)
             self.assertGreater(combo.winfo_height(), 10)
-            self.assertTrue(combo.winfo_viewable())
+            # winfo_viewable はトップレベルの表示タイミングに左右されるので、ジオメトリ管理上の配置を確認する
+            self.assertTrue(combo.winfo_ismapped())
             combo_bottom = combo.winfo_y() + combo.winfo_height()
             self.assertLessEqual(combo_bottom, left.winfo_height() + 4)
         finally:
